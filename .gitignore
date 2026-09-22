@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+
+# Secrets & data
+.env
+data/
+*.db
+*.sqlite
+
+# Output pengukuran
+delay_report_*.json
+delay_report_*.csv
+out.txt
+
+# Project meta
+.freebuff/
+
+# State alert Telegram
+.signal_state.json

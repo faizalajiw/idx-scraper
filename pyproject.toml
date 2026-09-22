@@ -1,0 +1,44 @@
+[project]
+name = "idx-scraper"
+version = "0.1.0"
+description = "Near-real-time IDX (Indonesia Stock Exchange) data scraper for algorithmic research"
+requires-python = ">=3.11"
+dependencies = [
+    "curl_cffi>=0.11",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "apscheduler>=3.10",
+    "yfinance>=0.2.40",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+supabase = [
+    "psycopg[binary]>=3.1",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+idx = "idx_scraper.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/idx_scraper"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+# Streamlit scripts: module-level st.* calls & plotly styling patterns are intentional
+"dashboard/*.py" = ["E402", "B008", "C408", "BLE001"]
+# CLI loads dotenv before imports on purpose
+"src/idx_scraper/cli.py" = ["E402"]
+# Broad exception catches are deliberate: scraping must survive per-item failures
+"src/idx_scraper/*.py" = ["BLE001", "S110"]

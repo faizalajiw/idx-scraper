@@ -1,0 +1,13 @@
+{
+  "name": "idx-scraper-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for IDX (Indonesia Stock Exchange) scraper",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.0",
+    "better-sqlite3": "^13.0.3"
+  }
+}
