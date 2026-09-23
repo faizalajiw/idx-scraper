@@ -8,19 +8,12 @@ env/
 .pytest_cache/
 .ruff_cache/
 
-# Node
-node_modules/
-
 # Secrets & data
 .env
+.env.local
 data/
 *.db
 *.sqlite
-
-# Output pengukuran
-delay_report_*.json
-delay_report_*.csv
-out.txt
 
 # Project meta
 .freebuff/

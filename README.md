@@ -53,7 +53,6 @@ Polling hanya aktif Senin–Jumat 09:00–16:00 WIB (jam bursa).
 | **Near-real-time per-emiten** | `GetTradingInfoDaily` | ~5–15 menit delay, polling tiap 30s |
 | **EOD semua emiten** | `GetStockSummary?date=YYYYMMDD` | End-of-day, sekali hari |
 | **Historis & backup** | Yahoo Finance (`.JK`) | ~15 menit delay, free tier |
-| **Crypto real-time** | Binance/OKX API | Free, tanpa API key |
 
 **Catatan penting:** IDX **tidak punya API real-time publik gratis**. Semua data IDX gratis itu **delayed** (~5–15 menit). Untuk trading frekuensi tinggi (HFT), kamu butuh lisensi berbayar. Untuk riset algoritmik/positional, ini cukup.
 
@@ -114,10 +113,19 @@ python -m idx_scraper.cli serve           # alert otomatis jalan selama jam burs
 Sinyal terakhir disimpan di `.signal_state.json` — alert hanya dikirim saat sinyal flip
 (mis. HOLD→BUY, BUY→SELL), jadi tidak spam berulang.
 
-## Dashboard
+## Frontend Dashboard
+
+Frontend Next.js ada di repo terpisah `idx-web`:
+
 ```bash
-python -m streamlit run dashboard/app_pro.py     # full dashboard (charts, signals, movers)
-python -m streamlit run dashboard/app.py         # simple dashboard
+cd ../idx-web
+npm install && npm run dev   # http://localhost:3000
+```
+
+API backend yang dikonsumsi frontend:
+
+```bash
+uvicorn idx_scraper.api.app:app --port 8000
 ```
 
 Untuk chart & sinyal teknikal, seed dulu data historis:
@@ -135,9 +143,10 @@ src/idx_scraper/
 ├── storage.py       # SQLite / Supabase storage layer
 ├── analysis.py      # Technical indicators (MA, RSI, Bollinger, MACD) + signals
 ├── cli.py           # CLI entry point + scheduler
+├── api/             # FastAPI read-only API untuk frontend idx-web
 └── __init__.py
-dashboard/           # Streamlit dashboards (app.py simple, app_pro.py full)
-mcp/                 # MCP server untuk query DB dari AI assistant
+scripts/             # utilitas DB (create/migrate/validate Postgres)
+sql/                 # schema Postgres
 ```
 
 **Key features:**

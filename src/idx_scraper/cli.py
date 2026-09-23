@@ -130,6 +130,25 @@ def show_signals(storage, codes: list[str]) -> None:
         print("No signals (all HOLD)")
     print()
 
+def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
+    """Return the top-N most liquid tickers ranked by daily trading value."""
+    raw = client._get_json(
+        "/primary/TradingSummary/GetStockSummary?length=9999&start=0"
+    )
+    if not raw or not isinstance(raw.get("data"), list):
+        return []
+
+    def _value(d: dict) -> float:
+        try:
+            return float(d.get("Value") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = sorted(raw["data"], key=_value, reverse=True)
+    codes = [d["StockCode"] for d in ranked if d.get("StockCode")]
+    return codes[:top_n]
+
+
 def _job_eod_full(client: IDXClient, storage) -> None:
     """Full market EOD snapshot at market close."""
     from datetime import datetime
@@ -150,8 +169,13 @@ def cmd_snapshot(args) -> None:
     storage = get_storage_from_env()
     try:
         n_idx = fetch_and_store_indices(client, storage)
-        watchlist = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
-        n_stock = fetch_and_store_watchlist(client, storage, watchlist)
+        top_n = getattr(args, "top", None)
+        if top_n:
+            codes = liquid_codes(client, top_n)
+            print(f"scanning {len(codes)} most liquid tickers...")
+        else:
+            codes = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
+        n_stock = fetch_and_store_watchlist(client, storage, codes)
         print(f"snapshot done — index={n_idx}, stocks={n_stock}")
     finally:
         client.close()
@@ -271,14 +295,20 @@ def cmd_serve(args) -> None:
             args=[client, storage, watchlist],
             id="wl",
         )
-    # EOD full market snapshot at market close (16:00 WIB)
+    # EOD full market snapshot, 5 menit setelah tiap penutupan sesi (WIB, hari bursa)
+    # Sesi I close: Sen-Kam 12:00 -> fetch 12:05 ; Jum 11:30 -> fetch 11:35
     scheduler.add_job(
-        _job_eod_full,
-        "cron",
-        hour=16,
-        minute=10,
-        args=[client, storage],
-        id="eod",
+        _job_eod_full, "cron", day_of_week="mon-thu", hour=12, minute=5,
+        args=[client, storage], id="eod_s1",
+    )
+    scheduler.add_job(
+        _job_eod_full, "cron", day_of_week="fri", hour=11, minute=35,
+        args=[client, storage], id="eod_s1_fri",
+    )
+    # Sesi II close: 15:49:59 semua hari -> fetch 15:55
+    scheduler.add_job(
+        _job_eod_full, "cron", day_of_week="mon-fri", hour=15, minute=55,
+        args=[client, storage], id="eod_s2",
     )
     # Telegram alert loop (hanya kalau env Telegram diisi)
     alert_interval = int(os.getenv("IDX_ALERT_INTERVAL", "300"))
@@ -296,7 +326,7 @@ def cmd_serve(args) -> None:
 
     print(f"serving — index every {idx_interval}s, watchlist every {wl_interval}s")
     print(f"watchlist: {watchlist[:10]}...")
-    print("EOD full market at 16:10 WIB")
+    print("EOD full market — Sesi I: Sen-Kam 12:05 / Jum 11:35 WIB, Sesi II: 15:55 WIB")
     try:
         scheduler.start()
     except KeyboardInterrupt:
@@ -311,7 +341,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="idx")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("snapshot", help="one-off fetch index + watchlist")
+    p_snap = sub.add_parser("snapshot", help="one-off fetch index + watchlist")
+    p_snap.add_argument("--top", type=int, metavar="N",
+                        help="scan N most liquid tickers instead of .env watchlist (e.g. --top 200)")
     p_eod = sub.add_parser("eod", help="fetch entire market EOD data (optional: specify YYYYMMDD)")
     p_eod.add_argument("date", nargs="?", help="YYYYMMDD (optional, defaults to today)")
     p_seed = sub.add_parser("seed", help="seed historical data (yfinance) for watchlist tickers")

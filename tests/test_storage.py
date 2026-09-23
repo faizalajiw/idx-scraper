@@ -46,17 +46,47 @@ def test_insert_and_load_price_history(tmp_path):
         storage.close()
 
 
-def test_eod_duplicate_insert_is_ignored(tmp_path):
+def test_eod_duplicate_insert_upserts_latest(tmp_path):
     storage = make_storage(tmp_path)
     try:
         storage.insert_eod_stock(make_row(date="20260915", close=8800))
         storage.insert_eod_stock(make_row(date="20260915", close=9999))
         rows = storage.load_price_history("BBCA")
         assert len(rows) == 1
-        assert rows[0]["close"] == 8800  # first insert wins
+        assert rows[0]["close"] == 9999  # latest fetch wins (EOD runs twice/day)
     finally:
         storage.close()
 
+
+def test_eod_derives_previous_and_percent_when_missing(tmp_path):
+    """IDX EOD summary omits PreviousPrice; storage derives it from close - change."""
+    storage = make_storage(tmp_path)
+    try:
+        row = EodStockRow(
+            source="IDX",
+            date="20260921",
+            code="BBRI",
+            previous=None,  # missing from IDX summary
+            open=4900.0,
+            high=5100.0,
+            low=4850.0,
+            close=5000.0,
+            change=200.0,
+            volume=2_000_000,
+            value=10_000_000_000,
+            captured_at=NOW,
+        )
+        storage.insert_eod_stock(row)
+        got = storage._conn.execute(
+            "select previous, percent from stock_summary_daily where code=? and date=?",
+            ("BBRI", "2026-09-21"),
+        ).fetchone()
+        assert got is not None
+        previous, percent = got
+        assert previous == 4800.0  # 5000 - 200
+        assert abs(percent - (200.0 / 4800.0 * 100)) < 1e-6
+    finally:
+        storage.close()
 
 def test_eod_legacy_yyyymmdd_dates_migrated(tmp_path):
     storage = make_storage(tmp_path)

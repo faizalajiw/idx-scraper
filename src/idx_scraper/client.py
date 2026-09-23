@@ -161,7 +161,16 @@ class IDXClient:
 def _parse_float(val: Any) -> float | None:
     if val is None:
         return None
-    s = str(val).replace(".", "").replace(",", ".").strip()
+    # JSON numbers arrive as int/float already — never strip their decimal point.
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    # Indonesian locale string ("6.384,726"): '.' = ribuan, ',' = desimal.
+    # Plain string ("6200.0"): '.' is already the decimal separator.
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
     try:
         return float(s)
     except ValueError:
@@ -171,7 +180,13 @@ def _parse_float(val: Any) -> float | None:
 def _parse_pct(val: Any) -> float | None:
     if val is None:
         return None
-    s = str(val).replace("%", "").replace(",", ".").strip()
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace("%", "").strip()
+    if not s:
+        return None
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
     try:
         return float(s)
     except ValueError:

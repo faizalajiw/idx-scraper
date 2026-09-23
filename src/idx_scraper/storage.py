@@ -78,6 +78,18 @@ def _norm_date(value: str) -> str:
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return s
 
+def _normalize_eod(row: EodStockRow) -> tuple[float | None, float | None]:
+    """Derive (previous, percent) for an EOD row.
+
+    IDX EOD omits PreviousPrice; recover it from close - change so percent is computable.
+    Shared by every storage backend to keep semantics identical.
+    """
+    previous = row.previous
+    if previous is None and row.close is not None and row.change is not None:
+        previous = row.close - row.change
+    percent = (row.change / previous * 100) if (previous and row.change is not None) else None
+    return previous, percent
+
 
 class Storage(ABC):
     """Abstract storage backend."""
@@ -161,8 +173,8 @@ class SQLiteStorage(Storage):
         );
         create index if not exists idx_stock_summary_daily_date
           on stock_summary_daily(date desc);
-        create index if not exists idx_stock_summary_daily_code_date
-          on stock_summary_daily(code, date desc);
+        create unique index if not exists uq_stock_summary_daily_code_date
+          on stock_summary_daily(code, date);
         create table if not exists stock_daily (
           id integer primary key autoincrement,
           ticker text not null,
@@ -228,12 +240,16 @@ class SQLiteStorage(Storage):
         self._conn.commit()
 
     def insert_eod_stock(self, row: EodStockRow) -> None:
-        percent = (row.change / row.previous * 100) if (row.previous and row.change is not None) else None
+        previous, percent = _normalize_eod(row)
         self._conn.execute(
-            """insert or ignore into stock_summary_daily (code, close, open, high, low, previous, change, percent,
+            """insert into stock_summary_daily (code, close, open, high, low, previous, change, percent,
                volume, value, date, captured_at)
-               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (row.code, row.close, row.open, row.high, row.low, row.previous, row.change,
+               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               on conflict(code, date) do update set
+                 close=excluded.close, open=excluded.open, high=excluded.high, low=excluded.low,
+                 previous=excluded.previous, change=excluded.change, percent=excluded.percent,
+                 volume=excluded.volume, value=excluded.value, captured_at=excluded.captured_at""",
+            (row.code, row.close, row.open, row.high, row.low, previous, row.change,
              percent, row.volume, row.value, _norm_date(row.date), self._ts(row.captured_at)),
         )
         self._conn.commit()
@@ -288,9 +304,10 @@ class SupabaseStorage(Storage):
 
     def __init__(self, dsn: str) -> None:
         if psycopg is None:
-            raise RuntimeError("psycopg[binary] not installed. Run: pip install 'idx-scraper[supabase]'")
+            raise RuntimeError("psycopg[binary] not installed. Run: pip install 'idx-scraper[postgres]'")
         # Use autocommit for simple inserts; connection pooling handled by Supabase pooler
         self._conn = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
+        self._conn.execute("set time zone 'Asia/Jakarta'")  # keep session dates/times in WIB
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -301,45 +318,54 @@ class SupabaseStorage(Storage):
               id uuid primary key default uuid_generate_v4(),
               source text not null check (source in ('IDX','Yahoo')),
               code text not null,
-              close numeric(15,3),
-              change numeric(15,3),
-              percent numeric(10,4),
-              current numeric(15,3),
+              close numeric(18,4),
+              change numeric(18,4),
+              percent numeric(12,6),
+              current numeric(18,4),
               captured_at timestamptz not null default now(),
               metadata jsonb default '{}'::jsonb
             );
             create index if not exists idx_index_quotes_code_capture on index_quotes(code, captured_at desc);
+            create unique index if not exists ux_index_quotes_natural
+              on index_quotes(source, code, captured_at);
             """)
             cur.execute("""
             create table if not exists stock_quotes (
               id uuid primary key default uuid_generate_v4(),
               source text not null check (source in ('IDX','Yahoo')),
               code text not null,
-              price numeric(15,2),
-              previous_price numeric(15,2),
-              change numeric(15,2),
-              percent numeric(10,4),
+              board text,
+              previous numeric(18,4),
+              open numeric(18,4),
+              high numeric(18,4),
+              low numeric(18,4),
+              close numeric(18,4),
+              change numeric(18,4),
               volume bigint,
-              value numeric(15,2),
-              bid numeric(15,2),
+              value numeric(24,4),
+              frequency bigint,
+              bid numeric(18,4),
               bid_volume bigint,
-              offer numeric(15,2),
+              offer numeric(18,4),
               offer_volume bigint,
+              foreign_net numeric(24,4),
               captured_at timestamptz not null default now(),
               metadata jsonb default '{}'::jsonb
             );
             create index if not exists idx_stock_quotes_code_capture on stock_quotes(code, captured_at desc);
+            create unique index if not exists ux_stock_quotes_natural
+              on stock_quotes(source, code, captured_at);
             """)
             cur.execute("""
             create table if not exists index_summary_daily (
               id uuid primary key default uuid_generate_v4(),
               code text not null,
-              close numeric(15,3),
-              open numeric(15,3),
-              high numeric(15,3),
-              low numeric(15,3),
+              close numeric(18,4),
+              open numeric(18,4),
+              high numeric(18,4),
+              low numeric(18,4),
               volume bigint,
-              value numeric(15,2),
+              value numeric(24,4),
               date date not null,
               captured_at timestamptz not null default now()
             );
@@ -349,15 +375,15 @@ class SupabaseStorage(Storage):
             create table if not exists stock_summary_daily (
               id uuid primary key default uuid_generate_v4(),
               code text not null,
-              close numeric(15,2),
-              open numeric(15,2),
-              high numeric(15,2),
-              low numeric(15,2),
-              previous numeric(15,2),
-              change numeric(15,2),
-              percent numeric(10,4),
+              close numeric(18,4),
+              open numeric(18,4),
+              high numeric(18,4),
+              low numeric(18,4),
+              previous numeric(18,4),
+              change numeric(18,4),
+              percent numeric(12,6),
               volume bigint,
-              value numeric(15,2),
+              value numeric(24,4),
               date date not null,
               captured_at timestamptz not null default now()
             );
@@ -369,12 +395,12 @@ class SupabaseStorage(Storage):
               id uuid primary key default uuid_generate_v4(),
               ticker text not null,
               date date not null,
-              open numeric(15,2) not null,
-              high numeric(15,2) not null,
-              low numeric(15,2) not null,
-              close numeric(15,2) not null,
+              open numeric(18,4) not null,
+              high numeric(18,4) not null,
+              low numeric(18,4) not null,
+              close numeric(18,4) not null,
               volume bigint not null,
-              adjusted_close numeric(15,2),
+              adjusted_close numeric(18,4),
               unique(ticker, date)
             );
             create index if not exists idx_stock_daily_ticker_date on stock_daily(ticker, date desc);
@@ -400,17 +426,19 @@ class SupabaseStorage(Storage):
             )
 
     def insert_index_quote(self, q: IndexQuote) -> None:
+        import json
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into index_quotes (source, code, close, change, percent, current, captured_at, metadata)
                    values (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (q.source, q.code, q.close, q.change, q.percent, q.current, self._ts(q.captured_at), str(q.metadata or {})),
+                (q.source, q.code, q.close, q.change, q.percent, q.current, self._ts(q.captured_at), json.dumps(q.metadata or {})),
             )
 
     def _ts(self, dt: datetime) -> str:
         return dt.isoformat()
 
     def insert_stock_quote(self, q: StockQuote) -> None:
+        import json
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into stock_quotes (source, code, board, previous, open, high, low, close, change,
@@ -418,7 +446,7 @@ class SupabaseStorage(Storage):
                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (q.source, q.code, q.board, q.previous, q.open, q.high, q.low, q.close, q.change,
                  q.volume, q.value, q.frequency, q.bid, q.bid_volume, q.offer, q.offer_volume, q.foreign_net,
-                 self._ts(q.captured_at), str(q.metadata or {})),
+                 self._ts(q.captured_at), json.dumps(q.metadata or {})),
             )
 
     def insert_index_summary(self, s: IndexSummaryDaily) -> None:
@@ -441,14 +469,17 @@ class SupabaseStorage(Storage):
             )
 
     def insert_eod_stock(self, row: EodStockRow) -> None:
-        percent = (row.change / row.previous * 100) if (row.previous and row.change is not None) else None
+        previous, percent = _normalize_eod(row)
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into stock_summary_daily (code, close, open, high, low, previous, change, percent,
                    volume, value, date, captured_at)
                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   on conflict (code, date) do nothing""",
-                (row.code, row.close, row.open, row.high, row.low, row.previous, row.change,
+                   on conflict (code, date) do update set
+                     close=excluded.close, open=excluded.open, high=excluded.high, low=excluded.low,
+                     previous=excluded.previous, change=excluded.change, percent=excluded.percent,
+                     volume=excluded.volume, value=excluded.value, captured_at=excluded.captured_at""",
+                (row.code, row.close, row.open, row.high, row.low, previous, row.change,
                  percent, row.volume, row.value, _norm_date(row.date), self._ts(row.captured_at)),
             )
 
@@ -481,10 +512,10 @@ class SupabaseStorage(Storage):
 def get_storage_from_env() -> Storage:
     """Factory: pick backend from env vars."""
     backend = os.getenv("IDX_STORAGE", "sqlite").lower()
-    if backend == "supabase":
-        dsn = os.getenv("SUPABASE_DB_URL")
+    if backend in ("supabase", "postgres"):
+        dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
         if not dsn:
-            raise RuntimeError("IDX_STORAGE=supabase but SUPABASE_DB_URL not set")
+            raise RuntimeError(f"IDX_STORAGE={backend} but DATABASE_URL/SUPABASE_DB_URL not set")
         return SupabaseStorage(dsn)
     # default sqlite
     sqlite_path = os.getenv("IDX_SQLITE_PATH", "./data/idx.db")
