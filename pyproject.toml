@@ -28,6 +28,7 @@ api = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "numpy>=1.26",
 ]
 
 [project.scripts]
