@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from dotenv import load_dotenv
+
 
 def _parse_watchlist(raw: str | None) -> list[str]:
     if not raw:
@@ -20,6 +22,9 @@ class Settings:
     """
 
     def __init__(self) -> None:
+        # Auto-load the project .env so `uvicorn idx_scraper.api.app:app` works
+        # without manual sourcing (same behavior as the CLI entrypoint).
+        load_dotenv()
         self.database_url: str | None = (
             os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
         )

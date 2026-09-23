@@ -1,6 +1,6 @@
 """Create the target database if it doesn't exist, then run schema init.
 
-Reads DATABASE_URL from the environment (loaded from .env.local by the caller).
+Reads DATABASE_URL from the environment (loaded from .env by the caller).
 Connects to the maintenance 'postgres' database to issue CREATE DATABASE,
 then SupabaseStorage builds the schema on first connection to the target DB.
 Safe to re-run: skips creation if the database already exists.
@@ -29,7 +29,7 @@ def _maintenance_dsn(dsn: str) -> str:
 def main() -> None:
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
     if not dsn:
-        raise SystemExit("DATABASE_URL not set (put it in .env.local)")
+        raise SystemExit("DATABASE_URL not set (put it in .env)")
 
     dbname = _target_db(dsn)
     with psycopg.connect(_maintenance_dsn(dsn), autocommit=True, connect_timeout=10) as conn:
@@ -39,7 +39,7 @@ def main() -> None:
         if exists:
             print(f"database '{dbname}' already exists")
         else:
-            # identifier can't be parameterized; dbname comes from local .env.local, not user input
+            # identifier can't be parameterized; dbname comes from local .env, not user input
             conn.execute(f'create database "{dbname}"')
             print(f"created database '{dbname}'")
 
