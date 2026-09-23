@@ -16,6 +16,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from idx_scraper import watchlist_store
+
 from . import services
 from .config import get_settings
 from .database import close_pool, init_pool
@@ -25,6 +27,7 @@ from .schemas import (
     Signal,
     TechnicalChart,
     WatchlistRow,
+    WatchlistUpdate,
 )
 
 
@@ -47,7 +50,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -76,6 +79,45 @@ def session_movers() -> dict:
 @app.get("/api/watchlist", response_model=list[WatchlistRow])
 def watchlist(codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST")) -> list[dict]:
     return services.get_watchlist(_resolve_codes(codes))
+
+
+@app.post("/api/watchlist", response_model=list[WatchlistRow])
+def add_to_watchlist(payload: WatchlistUpdate) -> list[dict]:
+    """Add tickers to the .env-backed watchlist and return the updated rows."""
+    try:
+        codes = watchlist_store.update_watchlist(add=payload.codes, remove=[])
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+    settings.watchlist = codes  # keep the cached settings in sync
+    return services.get_watchlist(codes)
+
+
+@app.put("/api/watchlist", response_model=list[WatchlistRow])
+def replace_watchlist(payload: WatchlistUpdate) -> list[dict]:
+    """Replace the whole watchlist (persisted to IDX_WATCHLIST in .env)."""
+    codes = list(dict.fromkeys(c.strip().upper() for c in payload.codes if c.strip()))
+    if not codes:
+        raise HTTPException(status_code=422, detail="codes must not be empty")
+    try:
+        codes = watchlist_store.write_watchlist(codes)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+    settings.watchlist = codes
+    return services.get_watchlist(codes)
+
+
+@app.delete("/api/watchlist/{code}", response_model=list[WatchlistRow])
+def remove_from_watchlist(code: str) -> list[dict]:
+    """Remove one ticker from the .env-backed watchlist."""
+    symbol = code.strip().upper()
+    if symbol not in watchlist_store.read_watchlist():
+        raise HTTPException(status_code=404, detail=f"{symbol} is not in the watchlist")
+    try:
+        codes = watchlist_store.update_watchlist(add=[], remove=[symbol])
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+    settings.watchlist = codes
+    return services.get_watchlist(codes)
 
 
 @app.get("/api/signals", response_model=list[Signal])

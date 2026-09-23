@@ -50,6 +50,12 @@ class WatchlistRow(BaseModel):
     hist_days: int = 0
 
 
+class WatchlistUpdate(BaseModel):
+    """Full replacement list for the .env-backed watchlist."""
+
+    codes: list[str]
+
+
 class Signal(BaseModel):
     code: str
     signal: str

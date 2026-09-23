@@ -7,6 +7,8 @@ from functools import lru_cache
 
 from dotenv import load_dotenv
 
+from idx_scraper.watchlist_store import read_watchlist
+
 
 def _parse_watchlist(raw: str | None) -> list[str]:
     if not raw:
@@ -28,7 +30,11 @@ class Settings:
         self.database_url: str | None = (
             os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
         )
-        self.watchlist: list[str] = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
+        # Env var wins; otherwise read the .env file directly so watchlist
+        # edits made through the API survive restarts (and are seen fresh).
+        self.watchlist: list[str] = _parse_watchlist(
+            os.getenv("IDX_WATCHLIST")
+        ) or read_watchlist()
         # Comma-separated list of allowed CORS origins for the Next.js frontend.
         self.cors_origins: list[str] = [
             o.strip()
