@@ -114,6 +114,11 @@ class IDXClient:
         now = datetime.now(WIB)
         results: list[EodStockRow] = []
         for item in raw["data"]:
+            # IDX ForeignBuy/ForeignSell are in SHARES (lembar), not IDR; there
+            # is no ForeignNet field, so derive it in the same unit.
+            fbuy = _pf(item.get("ForeignBuy"))
+            fsell = _pf(item.get("ForeignSell"))
+            fnet = (fbuy - fsell) if (fbuy is not None and fsell is not None) else (fbuy if fsell is None else (None if fbuy is None else -fsell))
             results.append(EodStockRow(
                 source="IDX",
                 date=date,
@@ -133,9 +138,9 @@ class IDXClient:
                 bid_volume=_pi(item.get("BestBidVolume")),
                 offer=_pf(item.get("BestOfferPrice")),
                 offer_volume=_pi(item.get("BestOfferVolume")),
-                foreign_buy=_pf(item.get("ForeignBuy")),
-                foreign_sell=_pf(item.get("ForeignSell")),
-                foreign_net=_pf(item.get("ForeignNet")),
+                foreign_buy=fbuy,
+                foreign_sell=fsell,
+                foreign_net=fnet,
                 individual_index=_pf(item.get("IndividualIndex")),
                 captured_at=now,
             ))

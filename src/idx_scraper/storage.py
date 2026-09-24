@@ -305,10 +305,29 @@ class SupabaseStorage(Storage):
     def __init__(self, dsn: str) -> None:
         if psycopg is None:
             raise RuntimeError("psycopg[binary] not installed. Run: pip install 'idx-scraper[postgres]'")
+        self._dsn = dsn
         # Use autocommit for simple inserts; connection pooling handled by Supabase pooler
         self._conn = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
         self._conn.execute("set time zone 'Asia/Jakarta'")  # keep session dates/times in WIB
         self._init_schema()
+
+    def _ensure_conn(self) -> None:
+        """Reconnect if the long-lived connection was dropped.
+
+        Polling only runs during market hours, so this connection sits idle
+        overnight; poolers commonly kill idle sessions. Without a probe, every
+        insert would fail silently until the process is restarted.
+        """
+        try:
+            self._conn.execute("select 1")
+            return
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        self._conn = psycopg.connect(self._dsn, autocommit=True, connect_timeout=10)
+        self._conn.execute("set time zone 'Asia/Jakarta'")
 
     def _init_schema(self) -> None:
         with self._conn.cursor() as cur:
@@ -427,6 +446,7 @@ class SupabaseStorage(Storage):
 
     def insert_index_quote(self, q: IndexQuote) -> None:
         import json
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into index_quotes (source, code, close, change, percent, current, captured_at, metadata)
@@ -439,6 +459,7 @@ class SupabaseStorage(Storage):
 
     def insert_stock_quote(self, q: StockQuote) -> None:
         import json
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into stock_quotes (source, code, board, previous, open, high, low, close, change,
@@ -450,6 +471,7 @@ class SupabaseStorage(Storage):
             )
 
     def insert_index_summary(self, s: IndexSummaryDaily) -> None:
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into index_summary_daily (code, close, open, high, low, volume, value, date, captured_at)
@@ -459,6 +481,7 @@ class SupabaseStorage(Storage):
             )
 
     def insert_stock_summary(self, s: StockSummaryDaily) -> None:
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
                 """insert into stock_summary_daily (code, close, open, high, low, previous, change, percent,
@@ -470,22 +493,28 @@ class SupabaseStorage(Storage):
 
     def insert_eod_stock(self, row: EodStockRow) -> None:
         previous, percent = _normalize_eod(row)
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
-                """insert into stock_summary_daily (code, close, open, high, low, previous, change, percent,
-                   volume, value, date, captured_at)
-                   values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """insert into stock_summary_daily (code, name, close, open, high, low, previous, change, percent,
+                   volume, value, frequency, foreign_buy, foreign_sell, foreign_net, date, captured_at)
+                   values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    on conflict (code, date) do update set
                      close=excluded.close, open=excluded.open, high=excluded.high, low=excluded.low,
                      previous=excluded.previous, change=excluded.change, percent=excluded.percent,
-                     volume=excluded.volume, value=excluded.value, captured_at=excluded.captured_at""",
-                (row.code, row.close, row.open, row.high, row.low, previous, row.change,
-                 percent, row.volume, row.value, _norm_date(row.date), self._ts(row.captured_at)),
+                     volume=excluded.volume, value=excluded.value, frequency=excluded.frequency,
+                     name=coalesce(excluded.name, stock_summary_daily.name),
+                     foreign_buy=excluded.foreign_buy, foreign_sell=excluded.foreign_sell,
+                     foreign_net=excluded.foreign_net, captured_at=excluded.captured_at""",
+                (row.code, row.name, row.close, row.open, row.high, row.low, previous, row.change,
+                 percent, row.volume, row.value, row.frequency, row.foreign_buy, row.foreign_sell,
+                 row.foreign_net, _norm_date(row.date), self._ts(row.captured_at)),
             )
 
     def load_price_history(self, code: str, limit: int = 60) -> list[dict[str, Any]]:
         """Daily OHLCV history: prefer IDX EOD rows, fill gaps with Yahoo (stock_daily)."""
         rows: dict[str, dict[str, Any]] = {}
+        self._ensure_conn()
         with self._conn.cursor() as cur:
             cur.execute(
                 """select date::text, open, high, low, close, volume from stock_summary_daily

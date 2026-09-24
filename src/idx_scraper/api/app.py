@@ -20,15 +20,24 @@ from idx_scraper import watchlist_store
 
 from . import services
 from .config import get_settings
-from .database import close_pool, init_pool
+from .database import close_pool, get_cursor, init_pool
 from .schemas import (
+    ForeignFlow,
+    HoldCheckResponse,
+    MarketNarration,
     MarketOverview,
+    ScreenerRow,
+    SectorAnalysis,
+    SectorRRG,
     SessionMovers,
     Signal,
+    StockBrokerSummary,
     TechnicalChart,
+    ValuationResponse,
     WatchlistRow,
     WatchlistUpdate,
 )
+from . import analytics
 
 
 @asynccontextmanager
@@ -120,6 +129,21 @@ def remove_from_watchlist(code: str) -> list[dict]:
     return services.get_watchlist(codes)
 
 
+@app.get("/api/hold-check", response_model=HoldCheckResponse)
+def hold_check(
+    codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"),
+    min_days: int = Query(default=40, ge=1, le=500),
+) -> dict:
+    """Combined technical + valuation "still worth holding" verdict per ticker."""
+    resolved = _resolve_codes(codes)
+    items = services.get_hold_check(resolved, min_days=min_days)
+    from . import analytics
+
+    with get_cursor() as cur:
+        date = analytics._latest_eod_date(cur)
+    return {"date": date, "items": items}
+
+
 @app.get("/api/signals", response_model=list[Signal])
 def signals(
     codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"),
@@ -147,3 +171,68 @@ def technical_chart(code: str) -> dict:
     if not result["bars"]:
         raise HTTPException(status_code=404, detail=f"No chart data for {code.upper()}")
     return result
+
+
+# --------------------------------------------------------------- analytics v2
+
+
+@app.get("/api/stocks/{code}/brokers", response_model=StockBrokerSummary)
+def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
+    return analytics.get_broker_summary(code.upper(), date=date)
+
+
+@app.get("/api/foreign-flow", response_model=ForeignFlow)
+def foreign_flow(days: int = Query(default=20, ge=1, le=120)) -> dict:
+    return analytics.get_foreign_flow(days=days)
+
+
+@app.get("/api/sectors/rrg", response_model=SectorRRG)
+def sectors_rrg(
+    benchmark: str = Query(default="COMPOSITE", description="Benchmark index code from index_quotes"),
+    window: int = Query(default=21, ge=10, le=120, description="Trailing weekly window for normalization"),
+    tail_weeks: int = Query(default=8, ge=1, le=52, description="Weekly trail points per sector"),
+) -> dict:
+    """RRG (Relative Rotation Graph) positions per sector vs the benchmark."""
+    return analytics.get_sector_rrg(benchmark=benchmark, window=window, tail_weeks=tail_weeks)
+
+
+@app.get("/api/sectors", response_model=SectorAnalysis)
+def sectors(date: str | None = Query(default=None)) -> dict:
+    return analytics.get_sector_analysis(date=date)
+
+
+@app.get("/api/market/narration", response_model=MarketNarration)
+def market_narration() -> dict:
+    return analytics.get_market_narration()
+
+
+@app.get("/api/valuation", response_model=ValuationResponse)
+def valuation() -> dict:
+    return analytics.get_valuation()
+
+
+@app.get("/api/screener", response_model=list[ScreenerRow])
+def screener(
+    signal: str | None = Query(default=None, pattern="^(BUY|SELL|HOLD)$"),
+    rsi_min: float | None = Query(default=None, ge=0, le=100),
+    rsi_max: float | None = Query(default=None, ge=0, le=100),
+    min_momentum: float | None = Query(default=None),
+    max_momentum: float | None = Query(default=None),
+    min_value: float | None = Query(default=None, ge=0),
+    foreign_in_only: bool = Query(default=False),
+    min_vol_ratio: float | None = Query(default=None, ge=0),
+    min_days: int = Query(default=30, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    return analytics.get_screener(
+        signal=signal,
+        rsi_min=rsi_min,
+        rsi_max=rsi_max,
+        min_momentum=min_momentum,
+        max_momentum=max_momentum,
+        min_value=min_value,
+        foreign_in_only=foreign_in_only,
+        min_vol_ratio=min_vol_ratio,
+        min_days=min_days,
+        limit=limit,
+    )

@@ -322,6 +322,182 @@ def _build_frame(cur: Any, code: str) -> tuple[pd.DataFrame, bool]:
     return df, is_live
 
 
+def _zscore_context(df: pd.DataFrame) -> dict[str, Any]:
+    """60-day mean-reversion context: z-score of last close vs 60d mean/std.
+
+    Mirrors the definition used by analytics.get_valuation so both screens
+    agree on what "stretched vs own band" means.
+    """
+    close = df["close"]
+    window = close.tail(60)
+    mean = window.mean()
+    std = window.std()
+    if not std or pd.isna(std) or mean <= 0:
+        return {"z": None, "mean": None}
+    z = float((close.iloc[-1] - mean) / std)
+    return {"z": round(z, 2), "mean": round(float(mean), 2)}
+
+
+def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]:
+    """"Hold Check" verdicts: is each watched stock still worth holding?
+
+    Combines the technical signal (SMA20/50 + RSI rule) with the mean-reversion
+    valuation context from get_valuation into one 0-100 score and a verdict:
+
+    - STRONG HOLD (>=75): technicals intact and valuation not stretched.
+    - HOLD (55-74): mostly intact, some caution.
+    - TRIM (35-54): warning signs — overextended above band, weakening trend,
+      or momentum loss with stretched price.
+    - EXIT (<35): technical breakdown (SELL signal) and/or deep weakness.
+
+    This is a research aid, not a recommendation to buy/sell.
+    """
+    out: list[dict[str, Any]] = []
+    with get_cursor() as cur:
+        names: dict[str, str | None] = {}
+        cur.execute(
+            """select distinct on (code) code, name from stock_summary_daily
+               order by code, date desc, captured_at desc"""
+        )
+        for r in cur.fetchall():
+            names[r["code"]] = r["name"]
+
+        for code in codes:
+            df, _ = _build_frame(cur, code)
+            if df.empty or len(df) < min_days:
+                continue
+            df = calculate_indicators(df)
+            signal = generate_signal(df)
+            last = df.iloc[-1]
+            close = float(last["close"])
+            rsi = _f(last.get("RSI"))
+            ma_s = _f(last.get("MA_Short"))
+            ma_l = _f(last.get("MA_Long"))
+            trend_up = bool(ma_s is not None and ma_l is not None and ma_s > ma_l)
+            macd = _f(last.get("MACD"))
+            macd_sig = _f(last.get("MACD_Signal"))
+            macd_bullish = bool(macd is not None and macd_sig is not None and macd > macd_sig)
+
+            bb_u = _f(last.get("BB_Upper"))
+            bb_l = _f(last.get("BB_Lower"))
+            if bb_u is not None and bb_l is not None and bb_u > bb_l:
+                bb_pos = "above" if close > bb_u else "below" if close < bb_l else "inside"
+            else:
+                bb_pos = None
+
+            zc = _zscore_context(df)
+            z = zc["z"]
+            mean = zc["mean"]
+            below_target = (
+                round((mean - close) / mean * 100, 1) if mean is not None and mean > 0 else None
+            )
+
+            reasons: list[str] = []
+            score = 50.0
+
+            # --- technical signal (dominant factor)
+            if signal == "BUY":
+                score += 20
+                reasons.append("Sinyal teknikal BUY (SMA20 > SMA50, RSI sehat)")
+            elif signal == "SELL":
+                score -= 25
+                reasons.append("Sinyal teknikal SELL (tren jangka pendek menembus ke bawah)")
+            else:
+                reasons.append("Sinyal teknikal HOLD (tidak ada konfirmasi kuat)")
+
+            if trend_up:
+                score += 10
+                reasons.append("Tren menengah masih naik (SMA20 di atas SMA50)")
+            else:
+                score -= 5
+                reasons.append("Tren menengah melemah (SMA20 di bawah SMA50)")
+
+            if macd_bullish:
+                score += 5
+                reasons.append("MACD masih bullish (di atas garis sinyal)")
+            else:
+                score -= 5
+                reasons.append("MACD melemah (di bawah garis sinyal)")
+
+            # --- RSI extremes
+            if rsi is not None:
+                if rsi >= 75:
+                    score -= 10
+                    reasons.append(f"RSI {rsi:.0f} overbought — rentan koreksi")
+                elif rsi <= 25:
+                    score -= 10
+                    reasons.append(f"RSI {rsi:.0f} oversold — tekanan jual kuat")
+                elif rsi >= 65:
+                    score -= 3
+                    reasons.append(f"RSI {rsi:.0f} mendekati overbought")
+
+            # --- valuation context (z-score vs own 60d band)
+            if z is not None:
+                if z >= 2.0:
+                    score -= 15
+                    reasons.append(f"Harga jauh di atas band 60-hari (z {z:+.1f}) — overextended")
+                elif z >= 1.5:
+                    score -= 8
+                    reasons.append(f"Harga di atas band 60-hari (z {z:+.1f}) — waspada")
+                elif z <= -1.0:
+                    # A dip only counts as healthy if the trend is still up.
+                    if trend_up:
+                        score += 5
+                        reasons.append(f"Harga di bawah band 60-hari (z {z:+.1f}) tapi tren masih naik — kualitas dip")
+                    else:
+                        score -= 5
+                        reasons.append(f"Harga di bawah band 60-hari (z {z:+.1f}) dengan tren melemah")
+                else:
+                    reasons.append("Harga masih dalam band wajar 60-hari")
+
+            if bb_pos == "above":
+                score -= 5
+                reasons.append("Harga menembus Bollinger atas — ekstensi jangka pendek")
+            elif bb_pos == "below":
+                score -= 10
+                reasons.append("Harga di bawah Bollinger bawah — tekanan jual")
+
+            score = max(0.0, min(100.0, score))
+            if score >= 75:
+                verdict = "STRONG HOLD"
+            elif score >= 55:
+                verdict = "HOLD"
+            elif score >= 35:
+                verdict = "TRIM"
+            else:
+                verdict = "EXIT"
+
+            out.append({
+                "code": code,
+                "name": names.get(code),
+                "signal": signal,
+                "trend_up": trend_up,
+                "rsi": rsi,
+                "macd_bullish": macd_bullish,
+                "bb_position": bb_pos,
+                "z_score": z,
+                "below_target_pct": below_target,
+                "foreign_net": None,
+                "score": int(round(score)),  # type: ignore[arg-type]
+                "verdict": verdict,
+                "reasons": reasons,
+            })
+
+    # EOD foreign net for context (separate pass, keeps the main loop simple).
+    with get_cursor() as cur:
+        for row in out:
+            cur.execute(
+                """select foreign_net from stock_summary_daily
+                   where code = %s order by date desc limit 1""",
+                (row["code"],),
+            )
+            r = cur.fetchone()
+            row["foreign_net"] = _f(r["foreign_net"]) if r else None
+
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
 def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with get_cursor() as cur:

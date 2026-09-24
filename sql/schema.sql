@@ -59,6 +59,7 @@ create index if not exists idx_index_summary_daily_date on index_summary_daily(d
 create table if not exists stock_summary_daily (
   id uuid primary key default uuid_generate_v4(),
   code text not null,
+  name text,
   close numeric(15,2),
   open numeric(15,2),
   high numeric(15,2),
@@ -68,6 +69,10 @@ create table if not exists stock_summary_daily (
   percent numeric(10,4),
   volume bigint,
   value numeric(15,2),
+  frequency bigint,
+  foreign_buy numeric(18,2),
+  foreign_sell numeric(18,2),
+  foreign_net numeric(18,2),
   date date not null,
   captured_at timestamp with time zone not null default now()
 );

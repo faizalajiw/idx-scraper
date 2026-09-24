@@ -87,7 +87,158 @@ class IndicatorBar(PriceBar):
     macd_signal: float | None = None
 
 
+class BrokerRow(BaseModel):
+    broker: str
+    code: str | None = None
+    buy_value: float = 0.0
+    sell_value: float = 0.0
+    net: float = 0.0
+    buy_rank: int | None = None
+    sell_rank: int | None = None
+
+
+class StockBrokerSummary(BaseModel):
+    code: str
+    name: str | None = None
+    date: str | None = None
+    top_buyers: list[BrokerRow]
+    top_sellers: list[BrokerRow]
+
+
+class ForeignFlowDay(BaseModel):
+    date: str
+    buy: float | None = None
+    sell: float | None = None
+    net: float | None = None
+
+
+class ForeignMover(BaseModel):
+    code: str
+    name: str | None = None
+    net: float | None = None
+    percent: float | None = None
+
+
+class ForeignFlow(BaseModel):
+    date: str | None = None
+    total_buy: float | None = None
+    total_sell: float | None = None
+    total_net: float | None = None
+    days: list[ForeignFlowDay]
+    top_net_in: list[ForeignMover]
+    top_net_out: list[ForeignMover]
+
+
+class SectorTopStock(BaseModel):
+    code: str
+    percent: float | None = None
+
+
+class SectorRow(BaseModel):
+    sector: str
+    stock_count: int
+    avg_percent: float | None = None
+    total_value: float | None = None
+    total_foreign_net: float | None = None
+    gainers: int
+    losers: int
+    top_stock: SectorTopStock | None = None
+
+
+class SectorAnalysis(BaseModel):
+    date: str | None = None
+    sectors: list[SectorRow]
+
+
+class RRGPoint(BaseModel):
+    """One weekly RRG position of a sector vs the benchmark index."""
+
+    sector: str
+    date: str
+    rs_ratio: float
+    rs_momentum: float
+
+
+class SectorRRG(BaseModel):
+    benchmark: str
+    window: int
+    date: str | None = None
+    points: list[RRGPoint]
+
+
+class NarrationSection(BaseModel):
+    title: str
+    icon: str
+    tone: str
+    text: str
+
+
+class MarketNarration(BaseModel):
+    date: str | None = None
+    generated_at: str | None = None
+    sections: list[NarrationSection]
+
+
+class ValuationRow(BaseModel):
+    code: str
+    name: str | None = None
+    close: float | None = None
+    z_score: float | None = None
+    momentum_pct: float | None = None
+    rsi: float | None = None
+    trend_up: bool = False
+    target_price: float | None = None
+
+
+class ValuationResponse(BaseModel):
+    undervalued: list[ValuationRow]
+    overvalued: list[ValuationRow]
+
+
+class ScreenerRow(BaseModel):
+    code: str
+    name: str | None = None
+    close: float | None = None
+    percent: float | None = None
+    rsi: float | None = None
+    signal: str
+    trend_up: bool
+    momentum_20d: float | None = None
+    vol_ratio: float | None = None
+    foreign_net: float | None = None
+    value: float | None = None
+    hist_days: int
+
+
 class TechnicalChart(BaseModel):
     code: str
     signal: str
     bars: list[IndicatorBar]
+
+
+class HoldCheckItem(BaseModel):
+    """One ticker's combined technical + valuation "still worth holding" verdict.
+
+    score is 0-100 (higher = healthier hold); verdict is one of
+    STRONG HOLD / HOLD / TRIM / EXIT. reasons carries the human-readable
+    bullets shown in the UI.
+    """
+
+    code: str
+    name: str | None = None
+    signal: str
+    trend_up: bool
+    rsi: float | None = None
+    macd_bullish: bool = False
+    bb_position: str | None = None  # "above" | "inside" | "below"
+    z_score: float | None = None
+    below_target_pct: float | None = None
+    foreign_net: float | None = None
+    score: int
+    verdict: str
+    reasons: list[str]
+
+
+class HoldCheckResponse(BaseModel):
+    date: str | None = None
+    items: list[HoldCheckItem]
