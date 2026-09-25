@@ -35,7 +35,7 @@ def _today() -> str:
 
 
 def _latest_eod_date(cur: Any) -> str | None:
-    cur.execute("select max(date) as d from stock_summary_daily")
+    cur.execute("select max(trade_date) as d from research.latest_pit")
     row = cur.fetchone()
     return str(row["d"]) if row and row["d"] else None
 
@@ -85,7 +85,7 @@ def get_broker_summary(code: str, date: str | None = None) -> dict[str, Any]:
 
         cur.execute(
             """select name, foreign_buy, foreign_sell, close, volume, value
-               from stock_summary_daily where code = %s and date = %s limit 1""",
+               from research.latest_pit where code = %s and trade_date = %s limit 1""",
             (code, d),
         )
         eod = cur.fetchone()
@@ -157,14 +157,14 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
     """
     with get_cursor() as cur:
         cur.execute(
-            """select date,
+            """select trade_date as date,
                       sum(foreign_buy * close) as buy,
                       sum(foreign_sell * close) as sell,
                       sum(foreign_net * close) as net
-               from stock_summary_daily
-               where date >= (select max(date) from stock_summary_daily) - %s::int
+               from research.latest_pit
+               where trade_date >= (select max(trade_date) from research.latest_pit) - %s::int
                  and foreign_net is not null and close is not null
-               group by date order by date""",
+               group by trade_date order by trade_date""",
             (days,),
         )
         by_day = cur.fetchall()
@@ -172,8 +172,9 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
         cur.execute(
             """select code, name, foreign_net * close as net_idr,
                       percent
-               from stock_summary_daily
-               where date = (select max(date) from stock_summary_daily)
+               from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit
+                                    where foreign_net is not null)
                  and foreign_net is not null and foreign_net <> 0 and close is not null
                order by net_idr desc limit 10"""
         )
@@ -182,8 +183,9 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
         cur.execute(
             """select code, name, foreign_net * close as net_idr,
                       percent
-               from stock_summary_daily
-               where date = (select max(date) from stock_summary_daily)
+               from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit
+                                    where foreign_net is not null)
                  and foreign_net is not null and foreign_net <> 0 and close is not null
                order by net_idr asc limit 10"""
         )
@@ -238,35 +240,35 @@ def get_sector_rrg(
     import numpy as np
 
     with get_cursor() as cur:
-        cur.execute("select max(date) as d from stock_summary_daily")
+        cur.execute("select max(trade_date) as d from research.latest_pit")
         d = cur.fetchone()["d"]
         if not d:
             return {"benchmark": benchmark, "window": window, "date": None, "points": []}
 
         cur.execute(
-            """select date, percent from stock_summary_daily
-               where date >= %s - (%s * 3)::int and percent is not null
-               order by date""",
+            """select code, trade_date as date, percent from research.latest_pit
+               where trade_date >= %s - (%s * 3)::int and percent is not null
+               order by trade_date""",
             (d, window + tail_weeks * 5),
         )
         rows = cur.fetchall()
 
         cur.execute(
-            """select date, close from index_quotes
-               where code = %s and date is not null
-               order by date""",
+            """select distinct on (captured_at::date) captured_at::date as date, close
+               from index_quotes
+               where code = %s and close is not null
+               order by captured_at::date, captured_at desc""",
             (benchmark,),
         )
         idx_rows = cur.fetchall()
 
-    if not idx_rows:
-        # Fall back to the composite from stock_summary_daily itself: an
-        # equal-weighted average of all stocks approximates the index well
-        # enough for quadrant classification.
+    # index_quotes only carries a few days of live captures; RRG needs weeks,
+    # so fall back to a synthetic composite whenever the real benchmark is short.
+    if len(idx_rows) < window + 5:
         with get_cursor() as cur:
             cur.execute(
-                """select date, avg(percent) as pct from stock_summary_daily
-                   where percent is not null group by date order by date"""
+                """select trade_date as date, avg(percent) as pct from research.latest_pit
+                   where percent is not null group by trade_date order by trade_date"""
             )
             idx_rows = [
                 {"date": r["date"], "close": None, "pct": _f(r["pct"])}
@@ -383,7 +385,7 @@ def get_sector_analysis(date: str | None = None) -> dict[str, Any]:
             return {"date": None, "sectors": []}
         cur.execute(
             """select code, name, percent, value, foreign_net
-               from stock_summary_daily where date = %s""",
+               from research.latest_pit where trade_date = %s""",
             (d,),
         )
         rows = cur.fetchall()
@@ -446,36 +448,36 @@ def get_market_narration() -> dict[str, Any]:
                    count(*) filter (where percent < 0) as down,
                    count(*) filter (where percent = 0) as flat,
                    count(*) as total
-               from stock_summary_daily where date = %s""",
+               from research.latest_pit where trade_date = %s""",
             (d,),
         )
         breadth = cur.fetchone()
 
         # Total market value of the day.
         cur.execute(
-            "select sum(value) as v, sum(volume) as vol from stock_summary_daily where date = %s",
+            "select sum(value) as v, sum(volume) as vol from research.latest_pit where trade_date = %s",
             (d,),
         )
         totals = cur.fetchone()
 
         # Foreign flow of the day.
         cur.execute(
-            "select sum(foreign_net) as net from stock_summary_daily where date = %s",
+            "select sum(foreign_net) as net from research.latest_pit where trade_date = %s",
             (d,),
         )
         fnet = cur.fetchone()
 
         # Sector leader & laggard (only sectors with >= 5 stocks to avoid noise).
         cur.execute(
-            """select code, name, percent from stock_summary_daily
-               where date = %s and percent is not null and value > 1e9
+            """select code, name, percent from research.latest_pit
+               where trade_date = %s and percent is not null and value > 1e9
                order by percent desc limit 3""",
             (d,),
         )
         gainers = cur.fetchall()
         cur.execute(
-            """select code, name, percent from stock_summary_daily
-               where date = %s and percent is not null and value > 1e9
+            """select code, name, percent from research.latest_pit
+               where trade_date = %s and percent is not null and value > 1e9
                order by percent asc limit 3""",
             (d,),
         )
@@ -570,8 +572,8 @@ def get_market_narration() -> dict[str, Any]:
 
 def _valuation_frame(cur: Any, code: str) -> pd.DataFrame | None:
     cur.execute(
-        """select date, close, volume from stock_summary_daily
-           where code = %s order by date""",
+        """select trade_date as date, close, volume from research.latest_pit
+           where code = %s order by trade_date""",
         (code,),
     )
     rows = cur.fetchall()
@@ -595,7 +597,7 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
     This is a mean-reversion *screen*, not a fairness opinion.
     """
     with get_cursor() as cur:
-        cur.execute("select distinct code from stock_quotes order by code")
+        cur.execute("select distinct code from research.latest_pit order by code")
         codes = [r["code"] for r in cur.fetchall()]
 
     undervalued: list[dict[str, Any]] = []
@@ -640,8 +642,9 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
 
     with get_cursor() as cur:
         cur.execute(
-            """select distinct on (code) code, name from stock_summary_daily
-               where date = (select max(date) from stock_summary_daily) order by code, captured_at desc"""
+            """select distinct on (code) code, name from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit)
+               order by code, knowledge_date desc"""
         )
         names = {r["code"]: r["name"] for r in cur.fetchall()}
     for lst in (undervalued, overvalued):
@@ -674,12 +677,12 @@ def get_screener(
     them is the "strategy".
     """
     with get_cursor() as cur:
-        cur.execute("select distinct code from stock_quotes order by code")
+        cur.execute("select distinct code from research.latest_pit order by code")
         codes = [r["code"] for r in cur.fetchall()]
         names: dict[str, str | None] = {}
         cur.execute(
-            """select distinct on (code) code, name from stock_summary_daily
-               order by code, date desc, captured_at desc"""
+            """select distinct on (code) code, name from research.latest_pit
+               order by code, trade_date desc"""
         )
         for r in cur.fetchall():
             names[r["code"]] = r["name"]
@@ -702,8 +705,8 @@ def get_screener(
 
             # Latest day liquidity + foreign net from EOD table
             cur.execute(
-                """select value, foreign_net, close from stock_summary_daily
-                   where code = %s order by date desc limit 1""",
+                """select value, foreign_net, close from research.latest_pit
+                   where code = %s order by trade_date desc limit 1""",
                 (code,),
             )
             eod = cur.fetchone()

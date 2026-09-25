@@ -15,6 +15,7 @@ import yfinance as yf
 from curl_cffi import requests as cf_requests
 from pydantic import BaseModel
 
+from .cf_transport import BrowserTransport
 from .models import EodStockRow, IndexQuote, StockQuote
 
 WIB = timezone(timedelta(hours=7))
@@ -23,25 +24,29 @@ IDX_BASE = "https://www.idx.co.id"
 
 class IDXClient:
     def __init__(self) -> None:
-        self.session = cf_requests.Session(impersonate="chrome", timeout=25.0)
+        # Transport is created lazily — in Yahoo-only / cooldown mode we never
+        # want to launch Chrome or touch IDX at all.
+        self.session: BrowserTransport | None = None
         self._warmed = False
+
+    def _ensure_session(self) -> BrowserTransport:
+        if self.session is None:
+            self.session = BrowserTransport()
+        return self.session
 
     def warmup(self) -> None:
         if self._warmed:
             return
-        self.session.get(f"{IDX_BASE}/id")
-        time.sleep(1.0)
-        self.session.get(f"{IDX_BASE}/primary/home/GetIndexList")
+        self._ensure_session().ensure_open()
         self._warmed = True
 
     def _get_json(self, path: str) -> Any | None:
         self.warmup()
         try:
-            r = self.session.get(f"{IDX_BASE}{path}")
-            if r.status_code != 200:
-                print(f"[warn] IDX {path} status {r.status_code}", file=sys.stderr)
+            r = self._ensure_session().get(path)
+            if r is None:
                 return None
-            return r.json()
+            return r
         except Exception as e:
             print(f"[warn] IDX {path} gagal: {e}", file=sys.stderr)
             return None
@@ -160,7 +165,8 @@ class IDXClient:
         return raw["data"]
 
     def close(self) -> None:
-        self.session.close()
+        if self.session is not None:
+            self.session.close()
 
 
 def _parse_float(val: Any) -> float | None:
@@ -256,3 +262,179 @@ def fetch_stock_historical(
         except (KeyError, ValueError, TypeError):
             continue
     return rows
+
+
+# --- Yahoo Finance live quotes (fallback while IDX is behind Cloudflare) ---
+
+# IDX index code -> Yahoo ticker. COMPOSITE (IHSG) is the one the dashboard reads.
+YAHOO_INDEX_MAP = {
+    "COMPOSITE": "^JKSE",
+}
+
+
+def _to_jk(code: str) -> str:
+    code = code.strip().upper()
+    return code if code.endswith(".JK") else f"{code}.JK"
+
+
+def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
+    """Live-ish StockQuote per emiten via Yahoo Finance (delayed ~15m).
+
+    Uses one batched 1m intraday download for the last price and one batched
+    daily download for previous close / OHLC / volume. No IDX contact.
+    """
+    codes = [c.strip().upper() for c in codes if c.strip()]
+    if not codes:
+        return []
+    tickers = [_to_jk(c) for c in codes]
+    now = datetime.now(WIB)
+
+    intr = None
+    try:
+        intr = yf.download(
+            tickers=" ".join(tickers), period="1d", interval="1m",
+            group_by="ticker", progress=False, threads=True, auto_adjust=False,
+        )
+    except Exception as e:
+        print(f"[warn] yahoo intraday gagal: {e}", file=sys.stderr)
+    try:
+        day = yf.download(
+            tickers=" ".join(tickers), period="5d", interval="1d",
+            group_by="ticker", progress=False, threads=True, auto_adjust=False,
+        )
+    except Exception as e:
+        print(f"[warn] yahoo daily gagal: {e}", file=sys.stderr)
+        return []
+
+    single = len(tickers) == 1
+
+    def _frame(src, tk):
+        if src is None:
+            return None
+        try:
+            return src if single else src[tk]
+        except Exception:
+            return None
+
+    results: list[StockQuote] = []
+    for code, tk in zip(codes, tickers):
+        d = _frame(day, tk)
+        if d is None:
+            continue
+        d = d.dropna(how="all")
+        if len(d) == 0:
+            continue
+        today = d.iloc[-1]
+        prev = float(d.iloc[-2]["Close"]) if len(d) >= 2 else None
+
+        # last price: prefer intraday 1m close, else today's daily close
+        last = None
+        i = _frame(intr, tk)
+        if i is not None:
+            i = i.dropna(how="all")
+            if len(i):
+                try:
+                    last = float(i.iloc[-1]["Close"])
+                except (KeyError, ValueError, TypeError):
+                    last = None
+        if last is None:
+            try:
+                last = float(today["Close"])
+            except (KeyError, ValueError, TypeError):
+                last = None
+        if last is None:
+            continue
+
+        def _f(key):
+            try:
+                v = float(today[key])
+                return v if v == v else None  # NaN guard
+            except (KeyError, ValueError, TypeError):
+                return None
+
+        def _i(key):
+            v = _f(key)
+            return int(v) if v is not None else None
+
+        change = (last - prev) if prev is not None else None
+        results.append(StockQuote(
+            source="Yahoo",
+            code=code,
+            board=None,
+            previous=prev,
+            open=_f("Open"),
+            high=_f("High"),
+            low=_f("Low"),
+            close=last,
+            change=change,
+            volume=_i("Volume"),
+            value=None,
+            frequency=None,
+            captured_at=now,
+            metadata={"src": "yahoo", "ticker": tk},
+        ))
+    return results
+
+
+def fetch_yahoo_indices(index_codes: list[str] | None = None) -> list[IndexQuote]:
+    """Live-ish IndexQuote via Yahoo. Defaults to COMPOSITE (^JKSE / IHSG)."""
+    codes = index_codes or list(YAHOO_INDEX_MAP.keys())
+    now = datetime.now(WIB)
+    results: list[IndexQuote] = []
+    for code in codes:
+        yt = YAHOO_INDEX_MAP.get(code.upper())
+        if not yt:
+            continue
+        try:
+            df = yf.Ticker(yt).history(period="5d")
+        except Exception as e:
+            print(f"[warn] yahoo index {code} gagal: {e}", file=sys.stderr)
+            continue
+        df = df.dropna(how="all")
+        if len(df) == 0:
+            continue
+        last = float(df.iloc[-1]["Close"])
+        prev = float(df.iloc[-2]["Close"]) if len(df) >= 2 else None
+        change = (last - prev) if prev is not None else None
+        percent = (change / prev * 100) if (prev and change is not None) else None
+        results.append(IndexQuote(
+            source="Yahoo",
+            code=code.upper(),
+            close=last,
+            change=change,
+            percent=percent,
+            current=last,
+            captured_at=now,
+            metadata={"src": "yahoo", "ticker": yt},
+        ))
+    return results
+
+
+def idx_reachable(timeout: float = 12.0) -> bool:
+    """Cheap, throttled probe: is IDX reachable again (Cloudflare cleared)?
+
+    Uses a single plain curl_cffi request to a lightweight IDX JSON endpoint.
+    Returns True only on HTTP 200 with a JSON body (list/dict). Never launches
+    a browser — this is the auto-switch signal for going Yahoo -> IDX.
+    """
+    url = f"{IDX_BASE}/primary/home/GetIndexList"
+    try:
+        r = cf_requests.get(
+            url,
+            impersonate="chrome124",
+            timeout=timeout,
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": f"{IDX_BASE}/",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+    except Exception:
+        return False
+    if r.status_code != 200:
+        return False
+    try:
+        body = r.json()
+    except Exception:
+        return False
+    return isinstance(body, (list, dict)) and bool(body)

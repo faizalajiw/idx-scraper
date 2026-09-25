@@ -50,44 +50,30 @@ def get_market_overview() -> dict[str, Any]:
         )
         idx = cur.fetchone()
 
-        # Latest snapshot per code (anti double-count across snapshots).
+        # Full-market EOD totals from the research superset (latest trade_date).
         cur.execute(
-            """with latest as (
-                   select distinct on (code) *
-                   from stock_quotes
-                   order by code, captured_at desc
-               )
-               select sum(volume) as total_volume,
+            """select sum(volume) as total_volume,
                       sum(value)  as total_value,
                       count(distinct code) as stock_count
-               from latest"""
+               from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit)"""
         )
         totals = cur.fetchone()
 
         cur.execute(
-            """with latest as (
-                   select distinct on (code) code, close, change, previous
-                   from stock_quotes
-                   order by code, captured_at desc
-               )
-               select code, close,
-                      round(change * 100.0 / nullif(previous, 0), 2) as percent
-               from latest
-               where change is not null and previous > 0 and change > 0
+            """select code, close, percent
+               from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit)
+                 and percent is not null and volume > 0 and percent > 0
                order by percent desc limit 5"""
         )
         gainers = cur.fetchall()
 
         cur.execute(
-            """with latest as (
-                   select distinct on (code) code, close, change, previous
-                   from stock_quotes
-                   order by code, captured_at desc
-               )
-               select code, close,
-                      round(change * 100.0 / nullif(previous, 0), 2) as percent
-               from latest
-               where change is not null and previous > 0 and change < 0
+            """select code, close, percent
+               from research.latest_pit
+               where trade_date = (select max(trade_date) from research.latest_pit)
+                 and percent is not null and volume > 0 and percent < 0
                order by percent asc limit 5"""
         )
         losers = cur.fetchall()
@@ -124,31 +110,31 @@ def get_market_overview() -> dict[str, Any]:
 
 
 def get_session_movers() -> dict[str, Any]:
-    """Full-market top movers from EOD summary (per session close)."""
+    """Full-market top movers from the research EOD superset (per session close)."""
     with get_cursor() as cur:
-        cur.execute("select max(date) as d from stock_summary_daily")
+        cur.execute("select max(trade_date) as d from research.latest_pit")
         latest = cur.fetchone()
         if not latest or not latest["d"]:
             return {"date": None, "captured_at": None, "top_gainers": [], "top_losers": []}
         date = latest["d"]
 
         cur.execute(
-            "select max(captured_at) as c from stock_summary_daily where date = %s",
+            "select max(knowledge_date) as c from research.latest_pit where trade_date = %s",
             (date,),
         )
         captured = cur.fetchone()["c"]
 
         cur.execute(
-            """select code, close, percent from stock_summary_daily
-               where date = %s and percent is not null and volume > 0
+            """select code, close, percent from research.latest_pit
+               where trade_date = %s and percent is not null and volume > 0
                order by percent desc limit 10""",
             (date,),
         )
         gainers = cur.fetchall()
 
         cur.execute(
-            """select code, close, percent from stock_summary_daily
-               where date = %s and percent is not null and volume > 0
+            """select code, close, percent from research.latest_pit
+               where trade_date = %s and percent is not null and volume > 0
                order by percent asc limit 10""",
             (date,),
         )
@@ -177,17 +163,16 @@ def get_watchlist(codes: list[str]) -> list[dict[str, Any]]:
     with get_cursor() as cur:
         cur.execute(
             """with latest as (
-                   select distinct on (code) code, close, change, previous, volume, foreign_net
-                   from stock_quotes
-                   order by code, captured_at desc
+                   select distinct on (code) code, close, change, percent, volume, foreign_net
+                   from research.latest_pit
+                   order by code, trade_date desc
                )
-               select l.code, l.close, l.change,
-                      round(l.change * 100.0 / nullif(l.previous, 0), 2) as percent,
+               select l.code, l.close, l.change, l.percent,
                       l.volume, l.foreign_net,
-                      (select count(*) from stock_summary_daily s where s.code = l.code) as hist_days
+                      (select count(*) from research.latest_pit s where s.code = l.code) as hist_days
                from latest l
                where l.code = any(%s)
-               order by percent desc nulls last""",
+               order by l.percent desc nulls last""",
             (codes,),
         )
         rows = cur.fetchall()
@@ -209,16 +194,17 @@ def get_watchlist(codes: list[str]) -> list[dict[str, Any]]:
 
 
 def _load_ohlc_by_date(cur: Any, code: str) -> dict[str, tuple]:
-    """EOD IDX rows first, fill gaps with Yahoo (stock_daily). Keyed by ISO date."""
+    """EOD IDX rows first (research superset), fill gaps with Yahoo (stock_daily)."""
     by_date: dict[str, tuple] = {}
     cur.execute(
-        """select date, open, high, low, close, volume from stock_summary_daily
-           where code = %s order by date""",
+        """select trade_date, open, high, low, close, volume
+           from research.latest_pit
+           where code = %s order by trade_date""",
         (code,),
     )
     for r in cur.fetchall():
-        by_date[_norm_date(r["date"])] = (
-            r["date"], r["open"], r["high"], r["low"], r["close"], r["volume"]
+        by_date[_norm_date(r["trade_date"])] = (
+            r["trade_date"], r["open"], r["high"], r["low"], r["close"], r["volume"]
         )
     cur.execute(
         """select date, open, high, low, close, volume from stock_daily
@@ -356,8 +342,8 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
     with get_cursor() as cur:
         names: dict[str, str | None] = {}
         cur.execute(
-            """select distinct on (code) code, name from stock_summary_daily
-               order by code, date desc, captured_at desc"""
+            """select distinct on (code) code, name from research.latest_pit
+               order by code, trade_date desc"""
         )
         for r in cur.fetchall():
             names[r["code"]] = r["name"]
@@ -487,8 +473,8 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
     with get_cursor() as cur:
         for row in out:
             cur.execute(
-                """select foreign_net from stock_summary_daily
-                   where code = %s order by date desc limit 1""",
+                """select foreign_net from research.latest_pit
+                   where code = %s order by trade_date desc limit 1""",
                 (row["code"],),
             )
             r = cur.fetchone()

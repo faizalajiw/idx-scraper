@@ -242,3 +242,52 @@ class HoldCheckItem(BaseModel):
 class HoldCheckResponse(BaseModel):
     date: str | None = None
     items: list[HoldCheckItem]
+
+
+# --------------------------------------------------------------- data quality
+
+class QualityOverview(BaseModel):
+    raw_rows: int
+    raw_codes: int
+    trading_days: int
+    first_day: str | None = None
+    last_day: str | None = None
+    pit_rows: int
+    quarantine_rows: int
+    corp_actions: int
+    last_ingest: str | None = None
+    staleness_hours: float | None = None
+
+
+class QuarantineRow(BaseModel):
+    code: str | None = None
+    trade_date: str | None = None
+    reason: str
+    payload: dict | None = None
+    ingested_at: str | None = None
+
+
+class QuarantineReason(BaseModel):
+    reason: str
+    count: int
+
+
+class CoverageWindow(BaseModel):
+    first: str
+    last: str
+
+
+class CoverageGaps(BaseModel):
+    window: CoverageWindow | None = None
+    covered_days: int
+    missing_weekdays: list[str]
+
+
+class ThinDay(BaseModel):
+    trade_date: str
+    codes: int
+
+
+class CorpActionSummary(BaseModel):
+    by_type: dict[str, int]
+    by_source: dict[str, int]

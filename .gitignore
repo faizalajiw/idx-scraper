@@ -21,3 +21,6 @@ data/
 
 # State alert Telegram
 .signal_state.json
+
+# Postgres data directory (relocated here; must never be committed)
+/pgdata/

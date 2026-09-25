@@ -36,8 +36,15 @@ from .schemas import (
     ValuationResponse,
     WatchlistRow,
     WatchlistUpdate,
+    QualityOverview,
+    QuarantineRow,
+    QuarantineReason,
+    CoverageGaps,
+    ThinDay,
+    CorpActionSummary,
 )
 from . import analytics
+from . import quality
 
 
 @asynccontextmanager
@@ -236,3 +243,43 @@ def screener(
         min_days=min_days,
         limit=limit,
     )
+
+# --------------------------------------------------------------- data quality
+
+@app.get("/api/quality/overview", response_model=QualityOverview)
+def quality_overview() -> dict:
+    """Headline health of the research.* layer: coverage, freshness, counts."""
+    return quality.get_quality_overview()
+
+@app.get("/api/quality/quarantine", response_model=list[QuarantineRow])
+def quality_quarantine(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict]:
+    """Most recent rows rejected by the quality gate, with reason + raw payload."""
+    return quality.get_quarantine(limit=limit)
+
+@app.get("/api/quality/quarantine-reasons", response_model=list[QuarantineReason])
+def quality_quarantine_reasons() -> list[dict]:
+    """Quarantine counts grouped by rejection reason."""
+    return quality.get_quarantine_reasons()
+
+@app.get("/api/quality/coverage-gaps", response_model=CoverageGaps)
+def quality_coverage_gaps() -> dict:
+    """Weekdays in the covered window with no EOD rows (holidays or scrape misses)."""
+    return quality.get_coverage_gaps()
+
+@app.get("/api/quality/thin-days", response_model=list[ThinDay])
+def quality_thin_days(
+    min_codes: int = Query(default=100, ge=1, le=2000),
+    limit: int = Query(default=30, ge=1, le=200),
+) -> list[dict]:
+    """Trading days with unusually few emiten reported (possible partial scrape)."""
+    return quality.get_thin_days(min_codes=min_codes, limit=limit)
+
+@app.get("/api/quality/corp-actions", response_model=CorpActionSummary)
+def quality_corp_actions() -> dict:
+    """Corporate-action counts broken down by type and source."""
+    return quality.get_corp_action_summary()
+
+@app.get("/api/quality/duplicates")
+def quality_duplicates() -> dict:
+    """Count of (code, trade_date) bars with more than one knowledge_date."""
+    return quality.get_duplicate_pit()

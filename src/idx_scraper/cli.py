@@ -22,8 +22,20 @@ import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .analysis import calculate_indicators, generate_signal
-from .client import IDXClient, fetch_stock_historical
+from .client import (
+    IDXClient,
+    fetch_stock_historical,
+    fetch_yahoo_indices,
+    fetch_yahoo_quotes,
+    idx_reachable,
+)
 from .notify import SignalState, TelegramNotifier, run_alert_check
+from .source_state import (
+    SOURCE_IDX,
+    SOURCE_YAHOO,
+    current_source,
+    maybe_probe_and_switch,
+)
 from .storage import get_storage_from_env
 
 WIB = timezone(timedelta(hours=7))
@@ -78,6 +90,32 @@ def fetch_and_store_eod(client: IDXClient, storage, date_str: str) -> int:
             count += 1
         except Exception as e:
             print(f"[err] insert eod {r.code}: {e}", file=sys.stderr)
+    return count
+
+
+def fetch_and_store_indices_yahoo(storage) -> int:
+    """Store live-ish index quotes from Yahoo (COMPOSITE/IHSG)."""
+    quotes = fetch_yahoo_indices()
+    count = 0
+    for q in quotes:
+        try:
+            storage.insert_index_quote(q)
+            count += 1
+        except Exception as e:
+            print(f"[err] insert yahoo index {q.code}: {e}", file=sys.stderr)
+    return count
+
+
+def fetch_and_store_watchlist_yahoo(storage, codes: list[str]) -> int:
+    """Store live-ish watchlist quotes from Yahoo (batched, no IDX contact)."""
+    quotes = fetch_yahoo_quotes(codes)
+    count = 0
+    for q in quotes:
+        try:
+            storage.insert_stock_quote(q)
+            count += 1
+        except Exception as e:
+            print(f"[err] insert yahoo stock {q.code}: {e}", file=sys.stderr)
     return count
 
 
@@ -162,6 +200,67 @@ def _job_eod_full(client: IDXClient, storage) -> None:
         except Exception:
             pass
     print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
+    _ingest_eod_research(rows)
+
+
+def _ingest_eod_research(rows) -> None:
+    """Append the same EOD rows into research.raw_eod (append-only) + refresh
+    prices_pit. Keeps the research superset current with name + foreign flow.
+    IDX omits PreviousPrice on EOD, so prev_close is recovered from close-change.
+    """
+    import json
+    import psycopg
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        return
+    inserted = quarantined = 0
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        for r in rows:
+            trade_date = datetime.strptime(r.date, "%Y%m%d").date()
+            prev_close = r.previous
+            if prev_close is None and r.close is not None and r.change is not None:
+                prev_close = r.close - r.change
+
+            reason = cur.execute(
+                "select research.eod_reject_reason("
+                "%s::numeric,%s::numeric,%s::numeric,%s::numeric,%s::bigint)",
+                (r.open, r.high, r.low, r.close, r.volume),
+            ).fetchone()[0]
+            if reason is not None:
+                cur.execute(
+                    """insert into research.quarantine_eod (code, trade_date, payload, reason)
+                       values (%s, %s, %s, %s)""",
+                    (r.code, trade_date, json.dumps(r.model_dump(mode="json")), reason),
+                )
+                quarantined += 1
+                continue
+
+            _ohl = lambda v: v if v else None  # noqa: E731 - null zeroed OHL from non-traded days
+            cur.execute(
+                """insert into research.raw_eod
+                   (code, trade_date, open, high, low, close, prev_close,
+                    volume, value, frequency, source,
+                    name, foreign_buy, foreign_sell, foreign_net)
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (r.code, trade_date, _ohl(r.open), _ohl(r.high), _ohl(r.low),
+                 r.close, prev_close, r.volume, r.value, r.frequency, r.source,
+                 r.name, r.foreign_buy, r.foreign_sell, r.foreign_net),
+            )
+            inserted += 1
+
+        conn.execute(
+            """insert into research.prices_pit
+                   (code, trade_date, knowledge_date, open, high, low, close, volume, value,
+                    name, prev_close, foreign_buy, foreign_sell, foreign_net)
+               select distinct on (code, trade_date)
+                   code, trade_date, ingested_at, open, high, low, close, volume, value,
+                   name, prev_close, foreign_buy, foreign_sell, foreign_net
+               from research.raw_eod
+               order by code, trade_date, ingested_at desc
+               on conflict (code, trade_date, knowledge_date) do nothing"""
+        )
+    print(f"[research] raw_eod +{inserted}, quarantine +{quarantined}, prices_pit refreshed")
 
 
 def cmd_snapshot(args) -> None:
@@ -200,6 +299,7 @@ def cmd_eod(args) -> None:
             except Exception:
                 pass
         print(f"EOD fetch done — {count} stocks stored")
+        _ingest_eod_research(rows)
     finally:
         client.close()
         storage.close()
@@ -262,23 +362,57 @@ def _is_market_hours() -> bool:
 def _job_indices(client: IDXClient, storage) -> None:
     if not _is_market_hours():
         return
-    n = fetch_and_store_indices(client, storage)
-    print(f"[{datetime.now(WIB).isoformat()}] index refreshed: {n}")
+    # Auto-switch check runs on the index tick (throttled internally).
+    probe_interval = int(os.getenv("IDX_PROBE_INTERVAL", "900"))  # 15 min default
+    source = maybe_probe_and_switch(idx_reachable, probe_interval)
+    if source == SOURCE_IDX:
+        n = fetch_and_store_indices(client, storage)
+        tag = "IDX"
+    else:
+        n = fetch_and_store_indices_yahoo(storage)
+        tag = "YAHOO"
+    print(f"[{datetime.now(WIB).isoformat()}] index refreshed ({tag}): {n}")
 
 
 def _job_watchlist(client: IDXClient, storage, codes: list[str]) -> None:
     if not _is_market_hours():
         return
-    n = fetch_and_store_watchlist(client, storage, codes)
-    print(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed: {n}")
+    if current_source() == SOURCE_IDX:
+        n = fetch_and_store_watchlist(client, storage, codes)
+        tag = "IDX"
+    else:
+        n = fetch_and_store_watchlist_yahoo(storage, codes)
+        tag = "YAHOO"
+    print(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed ({tag}): {n}")
+
+
+def _job_intraday(client: IDXClient, top_n: int) -> None:
+    """Snapshot top-N liquid emiten into research.intraday_ticks (market hours only).
+
+    Skipped entirely while on the Yahoo source — this is an IDX-only feature and
+    we must not touch IDX during cooldown.
+    """
+    if not _is_market_hours():
+        return
+    if current_source() != SOURCE_IDX:
+        return
+    import psycopg
+    from scripts.intraday_capture import capture_once
+    try:
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+            n = capture_once(conn, client, top_n)
+        print(f"[{datetime.now(WIB).isoformat()}] intraday captured: {n}")
+    except Exception as e:
+        print(f"[err] intraday capture: {e}", file=sys.stderr)
 
 
 def cmd_serve(args) -> None:
     client = IDXClient()
     storage = get_storage_from_env()
     watchlist = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
-    idx_interval = int(os.getenv("IDX_INDEX_INTERVAL", "15"))
-    wl_interval = int(os.getenv("IDX_WATCHLIST_INTERVAL", "30"))
+    # Yahoo data is ~15m delayed, so gentle default intervals; overridable via env.
+    idx_interval = int(os.getenv("IDX_INDEX_INTERVAL", "60"))
+    wl_interval = int(os.getenv("IDX_WATCHLIST_INTERVAL", "60"))
 
     # Show initial signals
     show_signals(storage, watchlist)
@@ -310,6 +444,17 @@ def cmd_serve(args) -> None:
         _job_eod_full, "cron", day_of_week="mon-fri", hour=15, minute=55,
         args=[client, storage], id="eod_s2",
     )
+    # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
+    # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).
+    intraday_top = int(os.getenv("IDX_INTRADAY_TOP", "200"))
+    intraday_interval = int(os.getenv("IDX_INTRADAY_INTERVAL", "60"))
+    if intraday_top > 0:
+        scheduler.add_job(
+            _job_intraday, "interval", seconds=intraday_interval,
+            args=[client, intraday_top], id="intraday",
+        )
+        print(f"intraday capture — top {intraday_top} liquid every {intraday_interval}s")
+
     # Telegram alert loop (hanya kalau env Telegram diisi)
     alert_interval = int(os.getenv("IDX_ALERT_INTERVAL", "300"))
     if TelegramNotifier().enabled:
@@ -326,6 +471,8 @@ def cmd_serve(args) -> None:
 
     print(f"serving — index every {idx_interval}s, watchlist every {wl_interval}s")
     print(f"watchlist: {watchlist[:10]}...")
+    print(f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
+          f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
     print("EOD full market — Sesi I: Sen-Kam 12:05 / Jum 11:35 WIB, Sesi II: 15:55 WIB")
     try:
         scheduler.start()
@@ -353,6 +500,9 @@ def main() -> None:
     p_alerts.add_argument("--test", action="store_true", help="test koneksi bot (getMe) lalu keluar")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
     sub.add_parser("serve", help="start continuous polling loop")
+    p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
+    p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
+                          help="force source (optional; omit to just show state)")
 
     args = parser.parse_args()
     if args.command == "snapshot":
@@ -377,6 +527,13 @@ def main() -> None:
             storage.close()
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "source":
+        from .source_state import force_source, get_state
+        if getattr(args, "set", None):
+            force_source(args.set)
+            print(f"source di-set ke: {args.set.upper()}")
+        st = get_state()
+        print(f"source={st.source} probe_count={st.probe_count} idx_ok_count={st.idx_ok_count}")
     else:
         parser.print_help()
 
