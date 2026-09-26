@@ -7,6 +7,7 @@ data and performs no calculations of its own.
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -348,6 +349,26 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
         for r in cur.fetchall():
             names[r["code"]] = r["name"]
 
+        # Lapisan faktor (IC-derived): percentile cross-sectional vs SELURUH
+        # pasar — bukan hanya watchlist — supaya ranking bermakna statistik.
+        # Bobot dibaca dari research.factor_ic_history (run `idx ic` terbaru);
+        # fallback konstanta bila tabel kosong. Cache 30 menit di composite.
+        from ..research.composite import (
+            apply_factor_layer,
+            latest_weights,
+            market_factor_ranks,
+        )
+
+        try:
+            market_ranks = market_factor_ranks(cur)
+            weights = latest_weights(cur)
+        except Exception as e:
+            # Faktor lapisan adalah enhancement — DB query gagal tidak boleh
+            # mematikan hold-check teknikal yang sudah jalan.
+            print(f"[warn] composite factor ranks dilewati: {e}", file=sys.stderr)
+            market_ranks = {}
+            weights = None
+
         for code in codes:
             df, _ = _build_frame(cur, code)
             if df.empty or len(df) < min_days:
@@ -444,6 +465,7 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 reasons.append("Harga di bawah Bollinger bawah — tekanan jual")
 
             score = max(0.0, min(100.0, score))
+            base_score = score
             if score >= 75:
                 verdict = "STRONG HOLD"
             elif score >= 55:
@@ -452,6 +474,16 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 verdict = "TRIM"
             else:
                 verdict = "EXIT"
+
+            # --- lapisan faktor IC (vol/likuiditas/jarak 52w) ---
+
+            base = market_ranks.get(code)
+            (
+                score,
+                verdict,
+                reasons,
+                factor_adj,
+            ) = apply_factor_layer(base_score, verdict, reasons, base, weights)
 
             out.append({
                 "code": code,
@@ -464,7 +496,10 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 "z_score": z,
                 "below_target_pct": below_target,
                 "foreign_net": None,
-                "score": int(round(score)),  # type: ignore[arg-type]
+                "score": round(score),  # type: ignore[arg-type]
+                "base_score": round(base_score),  # type: ignore[arg-type]
+                "factor_adj": round(factor_adj, 1),
+                "factor_pct": base if base is not None else None,
                 "verdict": verdict,
                 "reasons": reasons,
             })

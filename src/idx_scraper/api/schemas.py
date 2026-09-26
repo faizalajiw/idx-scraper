@@ -95,6 +95,7 @@ class BrokerRow(BaseModel):
     net: float = 0.0
     buy_rank: int | None = None
     sell_rank: int | None = None
+    estimated: bool = True
 
 
 class StockBrokerSummary(BaseModel):
@@ -173,6 +174,20 @@ class NarrationSection(BaseModel):
     text: str
 
 
+class MarketRegime(BaseModel):
+    """Regime IHSG + volatilitas ter-annualisasi untuk banner konteks."""
+
+    regime: str | None = None  # TRENDING_UP | TRENDING_DOWN | TRANSITION | RANGING | None
+    adx: float | None = None
+    plus_di: float | None = None
+    minus_di: float | None = None
+    realized_vol_annual: float | None = None
+    vol_state: str | None = None  # VOLATILE | NORMAL | QUIET
+    source: str | None = None
+    as_of: str | None = None
+    dir_hint: str | None = None
+
+
 class MarketNarration(BaseModel):
     date: str | None = None
     generated_at: str | None = None
@@ -205,6 +220,9 @@ class ScreenerRow(BaseModel):
     trend_up: bool
     momentum_20d: float | None = None
     vol_ratio: float | None = None
+    atr_pct: float | None = None
+    dist_52w: float | None = None
+    days_since_signal: int | None = None
     foreign_net: float | None = None
     value: float | None = None
     hist_days: int
@@ -222,6 +240,12 @@ class HoldCheckItem(BaseModel):
     score is 0-100 (higher = healthier hold); verdict is one of
     STRONG HOLD / HOLD / TRIM / EXIT. reasons carries the human-readable
     bullets shown in the UI.
+
+    Lapisan faktor IC (volatilitas/likuiditas/jarak 52w, lihat
+    research.composite): ``score`` sudah termasuk ``factor_adj``;
+    ``base_score`` = skor teknikal+valuasi sebelum penyesuaian;
+    ``factor_pct`` = percentile cross-sectional pasar per faktor (None bila
+    emiten tidak punya histori cukup untuk diranking).
     """
 
     code: str
@@ -235,6 +259,9 @@ class HoldCheckItem(BaseModel):
     below_target_pct: float | None = None
     foreign_net: float | None = None
     score: int
+    base_score: int | None = None
+    factor_adj: float | None = None
+    factor_pct: dict[str, float] | None = None
     verdict: str
     reasons: list[str]
 
@@ -291,3 +318,344 @@ class ThinDay(BaseModel):
 class CorpActionSummary(BaseModel):
     by_type: dict[str, int]
     by_source: dict[str, int]
+
+
+# ---------------------------------------------------- dividends & corp actions
+
+
+class DividendTotals(BaseModel):
+    """Dividend activity counts plus the trailing-yield distribution.
+
+    There is deliberately no "total cash distributed" figure: `cash_amount` is
+    a per-share number, so summing it across emiten would be meaningless.
+    """
+
+    events: int
+    codes: int
+    splits: int
+    first_ex_date: str | None = None
+    last_ex_date: str | None = None
+    ttm_events: int
+    ttm_codes: int
+    avg_ttm_yield: float | None = None
+    median_ttm_yield: float | None = None
+    max_ttm_yield: float | None = None
+
+
+class DividendYear(BaseModel):
+    """One calendar year of dividend activity (for the bar chart)."""
+
+    year: int
+    events: int
+    codes: int
+
+
+class DividendRecent(BaseModel):
+    """A cash dividend just paid out (there is no forward calendar)."""
+
+    code: str
+    name: str | None = None
+    ex_date: str | None = None
+    cash_amount: float | None = None
+    close: float | None = None
+
+
+class DividendYielder(BaseModel):
+    """Trailing dividend yield: last 12 months of cash / latest close."""
+
+    code: str
+    name: str | None = None
+    close: float | None = None
+    ttm_cash: float
+    ttm_events: int
+    yield_pct: float | None = None
+
+
+class DividendOverview(BaseModel):
+    as_of: str | None = None
+    generated_at: str | None = None
+    ttm_days: int
+    recent_days: int
+    totals: DividendTotals
+    by_year: list[DividendYear]
+    recent: list[DividendRecent]
+    top_yield: list[DividendYielder]
+    disclaimer: str
+
+
+class DividendStock(DividendYielder):
+    """One row of the all-emiten dividend table."""
+
+    total_events: int
+    # Cash paid per share summed over the emiten's whole history. Only the
+    # internal comparisons make sense; it is not split-adjusted.
+    total_cash_per_share: float
+    first_ex_date: str | None = None
+    last_ex_date: str | None = None
+
+
+class DividendPayment(BaseModel):
+    ex_date: str | None = None
+    cash_amount: float | None = None
+
+
+class DividendAnnual(BaseModel):
+    year: int
+    cash: float
+    events: int
+
+
+class SplitAction(BaseModel):
+    ex_date: str | None = None
+    action_type: str
+    ratio: float | None = None
+
+
+class DividendDetail(BaseModel):
+    """Per-emiten dividend history + split history.
+
+    `total_cash` is per-share cash summed over the whole history and is NOT
+    split-adjusted, so a split inflates it; `splits` is returned alongside so
+    the UI can warn about exactly that.
+    """
+
+    code: str
+    name: str | None = None
+    as_of: str | None = None
+    close: float | None = None
+    ttm_cash: float
+    ttm_events: int
+    yield_pct: float | None = None
+    total_cash: float
+    total_events: int
+    first_ex_date: str | None = None
+    last_ex_date: str | None = None
+    growth_pct: float | None = None
+    history: list[DividendPayment]
+    annual: list[DividendAnnual]
+    splits: list[SplitAction]
+    disclaimer: str
+
+
+class CorpActionRow(BaseModel):
+    """One row of the raw corporate-action ledger."""
+
+    code: str
+    name: str | None = None
+    ex_date: str | None = None
+    action_type: str
+    ratio: float | None = None
+    cash_amount: float | None = None
+    source: str | None = None
+
+
+# --------------------------------------------------------------- backtest
+
+
+class StrategyParam(BaseModel):
+    """One tunable numeric parameter of a backtest strategy."""
+
+    key: str
+    label: str
+    default: float
+    min: float | None = None
+    max: float | None = None
+    step: float = 1
+
+
+class StrategyInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    params: list[StrategyParam]
+
+
+class CostSettings(BaseModel):
+    """Optional cost overrides. ``None`` (the default) uses the realistic IDX
+    default for that knob; ``0`` explicitly disables it."""
+
+    commission_pct: float | None = None
+    sell_tax_pct: float | None = None
+    slippage_pct: float | None = None
+    max_adv_pct: float | None = None
+
+
+class CostModelInfo(BaseModel):
+    """The cost model actually used by a run (all values resolved)."""
+
+    commission_pct: float
+    sell_tax_pct: float
+    slippage_pct: float
+    max_adv_pct: float
+
+
+class RebalanceOption(BaseModel):
+    """One selectable rebalance cadence (daily / weekly / monthly)."""
+
+    id: str
+    label: str
+    description: str
+
+
+class BacktestConfig(BaseModel):
+    """Everything the simulator UI needs to render its form."""
+
+    strategies: list[StrategyInfo]
+    cost_defaults: CostModelInfo
+    rebalance_options: list[RebalanceOption]
+    rebalance_default: str
+    max_codes: int
+    max_days: int
+
+
+class BacktestRequest(BaseModel):
+    """Run request. codes defaults to the .env watchlist; dates to all history."""
+
+    strategy: str
+    codes: list[str] | None = None
+    start: str | None = None  # YYYY-MM-DD
+    end: str | None = None  # YYYY-MM-DD
+    initial_cash: float = 100_000_000
+    params: dict[str, float] = {}
+    costs: CostSettings = CostSettings()
+    # Must match simulation.DEFAULT_REBALANCE; the UI sends it explicitly anyway.
+    rebalance: str = "weekly"
+
+
+class EquityPoint(BaseModel):
+    """One simulated day: strategy equity vs the buy & hold benchmark."""
+
+    date: str
+    equity: float
+    benchmark: float | None = None
+
+
+class BacktestMetrics(BaseModel):
+    final_equity: float
+    total_return: float
+    annualized_return: float | None = None
+    max_drawdown: float
+    volatility: float | None = None
+    sharpe: float | None = None
+
+
+class TradeRow(BaseModel):
+    """One executed fill inside a rebalance."""
+
+    code: str
+    side: str  # "buy" | "sell"
+    shares: float
+    price: float  # execution price, slippage included
+    notional: float
+    fee: float
+    slippage: float
+
+
+class HoldingRow(BaseModel):
+    """A position in the book at the end of a rebalance."""
+
+    code: str
+    shares: float
+    price: float
+    value: float
+
+
+class RebalanceEvent(BaseModel):
+    """What one rebalance traded, and the book it left behind."""
+
+    date: str
+    cash: float
+    turnover: float
+    fees: float
+    trades: list[TradeRow]
+    holdings: list[HoldingRow]
+
+
+class CostImpact(BaseModel):
+    """What trading frictions actually cost over the whole simulation."""
+
+    total_fees: float
+    total_slippage: float
+    total_cost: float
+    turnover: float
+    cost_pct_of_equity: float | None = None
+
+
+# --------------------------------------------------------------- alert rules
+
+
+class AlertRuleType(BaseModel):
+    """One kind of watch condition the user can pick."""
+
+    id: str
+    label: str
+    description: str
+    unit: str
+    default: float
+    min: float | None = None
+    max: float | None = None
+    step: float = 1
+
+
+class AlertRuleCreate(BaseModel):
+    code: str
+    type: str
+    threshold: float
+    note: str | None = None
+
+
+class AlertRuleStatus(BaseModel):
+    """A stored rule plus its live value and current verdict."""
+
+    id: str
+    code: str
+    type: str
+    type_label: str
+    threshold: float
+    unit: str
+    note: str | None = None
+    created_at: str | None = None
+    current: float | None = None
+    close: float | None = None
+    percent: float | None = None
+    rsi: float | None = None
+    vol_ratio: float | None = None
+    signal: str | None = None
+    triggered: bool
+    message: str
+
+
+class AlertStatus(BaseModel):
+    checked_at: str
+    telegram_enabled: bool
+    rule_types: list[AlertRuleType]
+    rules: list[AlertRuleStatus]
+    triggered_count: int
+
+
+class AlertTestResult(BaseModel):
+    sent: bool
+    detail: str
+
+
+class BacktestResult(BaseModel):
+    strategy: str
+    strategy_name: str
+    params: dict[str, float]
+    codes: list[str]
+    start: str
+    end: str
+    days: int
+    initial_cash: float
+    metrics: BacktestMetrics  # after costs (realistic)
+    gross_metrics: BacktestMetrics  # before costs (frictionless)
+    benchmark: BacktestMetrics
+    costs: CostModelInfo
+    rebalance: str
+    rebalance_days: int
+    rebalances: list[RebalanceEvent]  # newest first, capped (see rebalances_truncated)
+    total_rebalances: int
+    rebalances_truncated: bool
+    cost_impact: CostImpact
+    equity_curve: list[EquityPoint]
+    disclaimer: str

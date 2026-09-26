@@ -128,6 +128,21 @@ API backend yang dikonsumsi frontend:
 uvicorn idx_scraper.api.app:app --port 8000
 ```
 
+Endpoint (read-only): `/api/market/*`, `/api/screener`, `/api/hold-check`,
+`/api/valuation`, `/api/stocks/{code}/*`, `/api/foreign-flow`, `/api/sectors[/rrg]`,
+`/api/quality/*`, plus simulator backtest point-in-time:
+`GET /api/backtest/config` dan `POST /api/backtest/run`.
+
+Backtest memakai layer `research.prices_asof_adj` (bitemporal, bebas look-ahead)
+dan memperhitungkan biaya nyata: komisi per sisi, pajak jual, slippage, serta cap
+likuiditas terhadap nilai transaksi harian. Frekuensi rebalance (`daily`,
+`weekly`, `monthly`) bisa dipilih — di antara hari rebalance posisi dibiarkan
+mengikuti pasar, sehingga turnover dan biaya tidak meledak. Hasilnya selalu
+menyertakan perbandingan "sebelum biaya" vs "setelah biaya", benchmark buy & hold,
+serta **ledger rebalance**: daftar trade (emiten, aksi, volume, harga eksekusi,
+fee) dan posisi akhir tiap sesi — sehingga churn bisa ditelusuri, bukan cuma
+terlihat sebagai angka turnover.
+
 Untuk chart & sinyal teknikal, seed dulu data historis:
 ```bash
 python -m idx_scraper.cli eod              # data EOD hari ini

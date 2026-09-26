@@ -12,20 +12,37 @@ service publicly, add authentication/authorization and rate limiting.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import watchlist_store
 
-from . import services
+from . import alerts, analytics, dividends, quality, services, simulation
 from .config import get_settings
 from .database import close_pool, get_cursor, init_pool
 from .schemas import (
+    AlertRuleCreate,
+    AlertStatus,
+    AlertTestResult,
+    BacktestConfig,
+    BacktestRequest,
+    BacktestResult,
+    CorpActionRow,
+    CorpActionSummary,
+    CoverageGaps,
+    DividendDetail,
+    DividendOverview,
+    DividendStock,
     ForeignFlow,
     HoldCheckResponse,
     MarketNarration,
     MarketOverview,
+    MarketRegime,
+    QualityOverview,
+    QuarantineReason,
+    QuarantineRow,
     ScreenerRow,
     SectorAnalysis,
     SectorRRG,
@@ -33,18 +50,11 @@ from .schemas import (
     Signal,
     StockBrokerSummary,
     TechnicalChart,
+    ThinDay,
     ValuationResponse,
     WatchlistRow,
     WatchlistUpdate,
-    QualityOverview,
-    QuarantineRow,
-    QuarantineReason,
-    CoverageGaps,
-    ThinDay,
-    CorpActionSummary,
 )
-from . import analytics
-from . import quality
 
 
 @asynccontextmanager
@@ -77,6 +87,18 @@ def _resolve_codes(codes: str | None) -> list[str]:
     return settings.watchlist
 
 
+def _parse_optional_date(value: str | None, field: str) -> date | None:
+    """Parse a YYYY-MM-DD query/body value, or None when absent."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"{field} harus format YYYY-MM-DD"
+        ) from None
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -85,6 +107,12 @@ def health() -> dict[str, str]:
 @app.get("/api/market/overview", response_model=MarketOverview)
 def market_overview() -> dict:
     return services.get_market_overview()
+
+
+@app.get("/api/market/regime", response_model=MarketRegime)
+def market_regime() -> dict:
+    """Regime IHSG (ADX + realized vol) — konteks untuk semua halaman analisis."""
+    return analytics.get_market_regime()
 
 
 @app.get("/api/market/session-movers", response_model=SessionMovers)
@@ -283,3 +311,120 @@ def quality_corp_actions() -> dict:
 def quality_duplicates() -> dict:
     """Count of (code, trade_date) bars with more than one knowledge_date."""
     return quality.get_duplicate_pit()
+
+
+# ------------------------------------------------ dividends & corp actions
+
+
+@app.get("/api/dividends/overview", response_model=DividendOverview)
+def dividends_overview() -> dict:
+    """Dividend totals, history by year, recent payouts and the top trailing yields."""
+    return dividends.get_overview()
+
+
+@app.get("/api/dividends/stocks", response_model=list[DividendStock])
+def dividends_stocks(
+    min_yield: float | None = Query(default=None, ge=0, description="Yield TTM minimum (%)"),
+    sort: str = Query(default="yield", pattern="^(yield|cash|recent)$"),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[dict]:
+    """Every emiten that has ever paid cash, with its trailing-12-month yield."""
+    return dividends.get_stocks(min_yield=min_yield, sort=sort, limit=limit)
+
+
+@app.get("/api/stocks/{code}/dividends", response_model=DividendDetail)
+def stock_dividends(code: str) -> dict:
+    """One emiten's cash-dividend history, annual totals and split history."""
+    result = dividends.get_stock(code)
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Tidak ada data untuk {code.strip().upper()}"
+        )
+    return result
+
+
+@app.get("/api/corporate-actions", response_model=list[CorpActionRow])
+def corporate_actions(
+    code: str | None = Query(default=None, description="Filter satu emiten"),
+    action_type: str | None = Query(
+        default=None, pattern="^(dividend|split|reverse_split|bonus|rights)$"
+    ),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[dict]:
+    """Raw corporate-action ledger (splits, reverse splits, dividends), newest first."""
+    return dividends.get_corporate_actions(code=code, action_type=action_type, limit=limit)
+
+
+# ------------------------------------------------------ alerts & backtest
+
+
+@app.get("/api/alerts", response_model=AlertStatus)
+def alerts_status() -> dict:
+    """Stored alert rules evaluated against the latest data (no side effects)."""
+    return alerts.status()
+
+
+@app.post("/api/alerts", response_model=AlertStatus)
+def alerts_create(payload: AlertRuleCreate) -> dict:
+    """Add a watch condition and return the refreshed status."""
+    try:
+        alerts.create_rule(payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+    return alerts.status()
+
+
+@app.delete("/api/alerts/{rule_id}", response_model=AlertStatus)
+def alerts_delete(rule_id: str) -> dict:
+    """Remove a watch condition and return the refreshed status."""
+    if not alerts.delete_rule(rule_id):
+        raise HTTPException(status_code=404, detail=f"aturan {rule_id} tidak ditemukan")
+    return alerts.status()
+
+
+@app.post("/api/alerts/test", response_model=AlertTestResult)
+def alerts_test() -> dict:
+    """Send a one-off Telegram message so the user can verify the wiring."""
+    if not alerts.telegram_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID belum diisi di .env",
+        )
+    sent = alerts.send_test_message()
+    return {
+        "sent": sent,
+        "detail": (
+            "Pesan uji terkirim — cek chat Telegram kamu."
+            if sent
+            else "Gagal mengirim pesan uji. Cek token bot dan chat id."
+        ),
+    }
+
+
+@app.get("/api/backtest/config", response_model=BacktestConfig)
+def backtest_config() -> dict:
+    """Strategies, cost defaults, and limits for the simulator UI form."""
+    return simulation.get_config()
+
+
+@app.post("/api/backtest/run", response_model=BacktestResult)
+def backtest_run(payload: BacktestRequest) -> dict:
+    """Run one point-in-time backtest and return its equity curve + metrics.
+
+    Computation only — nothing is written to the database. The response is a
+    simulation over historical data, not a prediction (see `disclaimer`).
+    """
+    codes = payload.codes or settings.watchlist
+    try:
+        return simulation.run_backtest(
+            strategy_id=payload.strategy,
+            codes=codes,
+            start=_parse_optional_date(payload.start, "start"),
+            end=_parse_optional_date(payload.end, "end"),
+            initial_cash=payload.initial_cash,
+            params=payload.params,
+            costs=payload.costs.model_dump(),
+            rebalance=payload.rebalance,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
