@@ -22,10 +22,14 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from .analysis import calculate_indicators, generate_signal
+
+if TYPE_CHECKING:
+    from .alert_rules import RuleEvaluation
 
 TELEGRAM_API = "https://api.telegram.org"
 SIG_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}
@@ -104,6 +108,24 @@ def format_signal_message(signals: list[dict]) -> str:
         lines.append(f"{emoji} <b>{s['signal']}</b> <code>{s['code']}</code> @ {s['close']:,.0f} ({rsi})")
     lines.append("")
     lines.append("<i>Rule-based (SMA20/50 + RSI). Bukan nasihat keuangan.</i>")
+    return "\n".join(lines)
+
+
+def format_rule_message(alerts: list[RuleEvaluation]) -> str:
+    """Format triggered watch rules into one Telegram message (HTML).
+
+    ``alerts`` are the evaluations that just crossed their threshold (see
+    ``alert_rules.RuleState``), so the reader only sees real transitions.
+    """
+    lines = [
+        "<b>🔔 Market Labs — Aturan Pantauan</b>",
+        f"<i>{time.strftime('%Y-%m-%d %H:%M WIB', time.gmtime(time.time() + 7 * 3600))}</i>",
+        "",
+    ]
+    for alert in alerts:
+        lines.append(f"• {alert.message}")
+    lines.append("")
+    lines.append("<i>Aturan yang kamu pasang sendiri. Bukan nasihat keuangan.</i>")
     return "\n".join(lines)
 
 

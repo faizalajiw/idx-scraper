@@ -29,10 +29,14 @@ from .client import (
     fetch_yahoo_quotes,
     idx_reachable,
 )
-from .notify import SignalState, TelegramNotifier, run_alert_check
+from .notify import (
+    SignalState,
+    TelegramNotifier,
+    format_rule_message,
+    run_alert_check,
+)
 from .source_state import (
     SOURCE_IDX,
-    SOURCE_YAHOO,
     current_source,
     maybe_probe_and_switch,
 )
@@ -187,6 +191,61 @@ def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
     return codes[:top_n]
 
 
+def _job_monthly_ic() -> None:
+    """IC analysis bulanan -> research.factor_ic_history (bobot composite)."""
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from .research.monthly_ic import run_and_store
+
+        out = run_and_store(dsn)
+        print(
+            f"[{datetime.now(WIB).isoformat()}] IC bulanan tersimpan "
+            f"run_date={out['run_date']} rows={out['rows']} bobot={out['weights']}"
+        )
+    except Exception as e:
+        print(f"[err] IC bulanan: {e}", file=sys.stderr)
+
+
+def cmd_ic(args) -> None:
+    """Run IC analysis manual + simpan histori bobot faktor."""
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        return
+    from .research.monthly_ic import run_and_store
+
+    out = run_and_store(dsn, horizons=args.k)
+    print(f"run_date={out['run_date']} rows={out['rows']}")
+    print(f"bobot composite terbaru: {out['weights']}")
+
+
+def _job_index_eod_close() -> None:
+    """Tulis close resmi IHSG (Yahoo ^JKSE daily) tiap hari bursa jam 16:10 WIB.
+
+    Yahoo daily close baru final beberapa menit setelah closing auction 16:00;
+    snapshot polling terakhir (mis. 15:59) biasanya selisih beberapa poin dari
+    close resmi. Job ini menimpanya lewat snapshot EOD idempotent + mengisi
+    index_summary_daily (seri harian untuk RRG/benchmark).
+    """
+    if not _is_market_hours() and datetime.now(WIB).weekday() >= 5:
+        return  # weekend guard (cron sudah bursa-only, ini double safety)
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from scripts.backfill_index_eod import backfill_index_eod
+
+        upserted, snapshots = backfill_index_eod(dsn, days=10)
+        print(
+            f"[{datetime.now(WIB).isoformat()}] index EOD close — "
+            f"upsert={upserted}, snapshot baru={snapshots}"
+        )
+    except Exception as e:
+        print(f"[err] index EOD close job: {e}", file=sys.stderr)
+
+
 def _job_eod_full(client: IDXClient, storage) -> None:
     """Full market EOD snapshot at market close."""
     from datetime import datetime
@@ -209,6 +268,7 @@ def _ingest_eod_research(rows) -> None:
     IDX omits PreviousPrice on EOD, so prev_close is recovered from close-change.
     """
     import json
+
     import psycopg
 
     dsn = os.getenv("DATABASE_URL")
@@ -217,7 +277,7 @@ def _ingest_eod_research(rows) -> None:
     inserted = quarantined = 0
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         for r in rows:
-            trade_date = datetime.strptime(r.date, "%Y%m%d").date()
+            trade_date = datetime.strptime(r.date, "%Y%m%d").replace(tzinfo=WIB).date()
             prev_close = r.previous
             if prev_close is None and r.close is not None and r.change is not None:
                 prev_close = r.close - r.change
@@ -236,7 +296,8 @@ def _ingest_eod_research(rows) -> None:
                 quarantined += 1
                 continue
 
-            _ohl = lambda v: v if v else None  # noqa: E731 - null zeroed OHL from non-traded days
+            def _ohl(v):  # null zeroed OHL from non-traded days
+                return v if v else None
             cur.execute(
                 """insert into research.raw_eod
                    (code, trade_date, open, high, low, close, prev_close,
@@ -326,7 +387,11 @@ def cmd_signals(args) -> None:
 
 
 def cmd_alerts(args) -> None:
-    """Scan sinyal dan kirim alert Telegram untuk sinyal yang berubah."""
+    """Scan sinyal dan kirim alert Telegram untuk sinyal yang berubah.
+
+    Juga mengevaluasi aturan pantauan (harga/RSI/volume) yang disimpan lewat
+    halaman Pantau di dashboard.
+    """
     notifier = TelegramNotifier()
     if args.test:
         notifier.test_connection()
@@ -334,10 +399,42 @@ def cmd_alerts(args) -> None:
     storage = get_storage_from_env()
     tickers = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
     try:
-        sent = run_alert_check(storage, tickers, notifier, SignalState())
-        print(f"alerts: {sent} terkirim" if sent else "alerts: tidak ada sinyal baru")
+        signals = run_alert_check(storage, tickers, notifier, SignalState())
+        rules = run_rule_alerts()
+        if signals or rules:
+            print(f"alerts terkirim — sinyal: {signals}, aturan: {rules}")
+        else:
+            print("alerts: tidak ada sinyal atau aturan yang berubah")
     finally:
         storage.close()
+
+
+def run_rule_alerts() -> int:
+    """Evaluate saved watch rules and push newly-triggered ones to Telegram.
+
+    Rules are evaluated through the API service layer on purpose: the dashboard
+    and the notifier must agree on what "triggered" means, and that layer already
+    reads the Postgres research data the UI shows.
+    """
+    notifier = TelegramNotifier()
+    if not notifier.enabled:
+        return 0
+
+    from .alert_rules import RuleState
+    from .api import alerts as alerts_api
+
+    try:
+        evaluations = alerts_api.evaluate_all()
+    except Exception as e:  # DB down / config missing must not kill the scheduler
+        print(f"[err] aturan pantauan dilewati: {e}", file=sys.stderr)
+        return 0
+    if not evaluations:
+        return 0
+
+    fresh = RuleState().newly_triggered(evaluations)
+    if not fresh:
+        return 0
+    return len(fresh) if notifier.send_message(format_rule_message(fresh)) else 0
 
 
 def _job_alerts(storage, codes: list[str]) -> None:
@@ -346,9 +443,13 @@ def _job_alerts(storage, codes: list[str]) -> None:
     notifier = TelegramNotifier()
     if not notifier.enabled:
         return
-    sent = run_alert_check(storage, codes, notifier, SignalState())
-    if sent:
-        print(f"[{datetime.now(WIB).isoformat()}] telegram alerts: {sent}")
+    signals = run_alert_check(storage, codes, notifier, SignalState())
+    rules = run_rule_alerts()
+    if signals or rules:
+        print(
+            f"[{datetime.now(WIB).isoformat()}] telegram alerts — "
+            f"sinyal: {signals}, aturan: {rules}"
+        )
 
 
 def _is_market_hours() -> bool:
@@ -397,6 +498,7 @@ def _job_intraday(client: IDXClient, top_n: int) -> None:
     if current_source() != SOURCE_IDX:
         return
     import psycopg
+
     from scripts.intraday_capture import capture_once
     try:
         with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
@@ -444,6 +546,18 @@ def cmd_serve(args) -> None:
         _job_eod_full, "cron", day_of_week="mon-fri", hour=15, minute=55,
         args=[client, storage], id="eod_s2",
     )
+    # Close resmi IHSG dari Yahoo daily — jam 16:10 WIB (closing auction 16:00,
+    # Yahoo butuh beberapa menit supaya bar daily-nya final).
+    scheduler.add_job(
+        _job_index_eod_close, "cron", day_of_week="mon-fri", hour=16, minute=10,
+        id="index_eod_close",
+    )
+    # IC analysis bulanan — hari pertama kerja tiap bulan, 06:30 WIB (pra-buka).
+    # Bobot composite hold-check otomatis mengikuti hasil terbaru.
+    scheduler.add_job(
+        _job_monthly_ic, "cron", day="1", hour=6, minute=30,
+        id="monthly_ic",
+    )
     # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
     # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).
     intraday_top = int(os.getenv("IDX_INTRADAY_TOP", "200"))
@@ -465,7 +579,7 @@ def cmd_serve(args) -> None:
             args=[storage, watchlist],
             id="alerts",
         )
-        print(f"telegram alerts every {alert_interval}s")
+        print(f"telegram alerts (sinyal + aturan pantauan) every {alert_interval}s")
     else:
         print("telegram alerts OFF (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi)")
 
@@ -498,6 +612,8 @@ def main() -> None:
     sub.add_parser("signals", help="show buy/sell signals from stored EOD data")
     p_alerts = sub.add_parser("alerts", help="kirim alert Telegram utk sinyal BUY/SELL yang berubah")
     p_alerts.add_argument("--test", action="store_true", help="test koneksi bot (getMe) lalu keluar")
+    p_ic = sub.add_parser("ic", help="run IC analysis + simpan bobot faktor ke research.factor_ic_history")
+    p_ic.add_argument("--k", type=int, nargs="+", default=[5, 10], help="horizon hari bursa (default: 5 10)")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
     sub.add_parser("serve", help="start continuous polling loop")
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
@@ -515,6 +631,8 @@ def main() -> None:
         cmd_signals(args)
     elif args.command == "alerts":
         cmd_alerts(args)
+    elif args.command == "ic":
+        cmd_ic(args)
     elif args.command == "watchlist":
         client = IDXClient()
         storage = get_storage_from_env()
