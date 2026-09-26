@@ -12,6 +12,7 @@ sector_map.py and is intentionally data, not logic.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -755,13 +756,15 @@ def get_screener(
     min_days: int = 30,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Rule-based multi-factor screener ("AI screening" v1: transparent rules).
+    """    Rule-based multi-factor screener ("AI screening" v1: transparent rules).
 
     Factors per stock: technical signal (SMA20/50+RSI rule), 20-day momentum,
     RSI, volume ratio (today vs 20d avg — detects unusual activity), foreign
-    net, and liquidity (traded value). All filters are optional; combining
+    net, liquidity (traded value), plus order-book flow (ob_imbalance /
+    ob_absorption dari snapshot intraday). All filters are optional; combining
     them is the "strategy".
     """
+    ob = _latest_orderbook_factors()
     with get_cursor() as cur:
         cur.execute("select distinct code from research.latest_pit order by code")
         codes = [r["code"] for r in cur.fetchall()]
@@ -845,6 +848,8 @@ def get_screener(
                 "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
                 "dist_52w": round(dist_52w * 100, 2) if dist_52w is not None else None,
                 "days_since_signal": days_since_signal,
+                "ob_imbalance": ob.get(code, {}).get("ob_imbalance"),
+                "ob_absorption": ob.get(code, {}).get("ob_absorption"),
                 "foreign_net": fnet,
                 "value": value,
                 "hist_days": len(df),
@@ -871,6 +876,39 @@ def get_screener(
 
     out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
     return out[:limit]
+
+
+# --------------------------------------------------------------- order-book helper
+
+
+def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
+    """Faktor order-book terakhir per emiten (cache 30 menit).
+
+    Dihitung dari snapshot intraday via research.orderbook; None bila emiten
+    tidak tercakup capture / snapshot terlalu tipis / sumber bermasalah —
+    screener tetap jalan tanpa kolom ini.
+    """
+    cached = _research_cache_get("ob_latest")
+    if cached is not None:
+        return cached
+    out: dict[str, dict[str, float | None]] = {}
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if dsn:
+        try:
+            from ..research.orderbook import compute_daily, load_snapshots
+
+            ob_daily = compute_daily(load_snapshots(dsn))
+            for r in ob_daily.itertuples():
+                # groupby mengurutkan (code, date) asc -> okrurrence terakhir
+                # per kode = tanggal terbaru.
+                out[r.code] = {
+                    "ob_imbalance": None if pd.isna(r.ob_imbalance) else round(float(r.ob_imbalance), 4),
+                    "ob_absorption": None if pd.isna(r.ob_absorption) else round(float(r.ob_absorption), 4),
+                }
+        except Exception as e:  # graceful degradation — screener tetap hidup
+            print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
+    _research_cache_put("ob_latest", out)
+    return out
 
 
 # --------------------------------------------------------------- event study UI
@@ -969,7 +1007,15 @@ def get_factors_overview() -> dict[str, Any]:
         cur.execute("select max(run_date) as d from research.factor_ic_history")
         latest = cur.fetchone()["d"]
         if not latest:
-            return {"latest_run": None, "weights": {}, "factors": [], "history": []}
+            from ..research.factors import FACTOR_DEFINITIONS
+
+            return {
+                "latest_run": None,
+                "weights": {},
+                "factors": [],
+                "history": [],
+                "definitions": dict(FACTOR_DEFINITIONS),
+            }
 
         cur.execute(
             """select factor, horizon, mean_ic, icir, t_stat, hit_rate, n_days,
@@ -1016,11 +1062,14 @@ def get_factors_overview() -> dict[str, Any]:
 
         weights = {"vol_21d": FACTOR_WEIGHTS["vol"], "turnover_21d": FACTOR_WEIGHTS["turnover"], "dist_52w_high": FACTOR_WEIGHTS["dist_52w"]}
 
+    from ..research.factors import FACTOR_DEFINITIONS
+
     out = {
         "latest_run": str(latest),
         "weights": weights,
         "factors": factors,
         "history": history,
+        "definitions": dict(FACTOR_DEFINITIONS),
     }
     _research_cache_put("factors_overview", out)
     return out

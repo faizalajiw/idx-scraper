@@ -229,6 +229,10 @@ class ScreenerRow(BaseModel):
     atr_pct: float | None = None
     dist_52w: float | None = None
     days_since_signal: int | None = None
+    # Order-book flow dari snapshot intraday (research.orderbook); null bila
+    # emiten tidak tercakup capture / snapshot terlalu tipis.
+    ob_imbalance: float | None = None
+    ob_absorption: float | None = None
     foreign_net: float | None = None
     value: float | None = None
     hist_days: int
