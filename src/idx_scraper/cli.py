@@ -191,6 +191,24 @@ def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
     return codes[:top_n]
 
 
+def _job_regime_daily() -> None:
+    """Rekam klasifikasi regime hari bursa terakhir ke research.regime_daily."""
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from .research.regime import record_today
+
+        row = record_today(dsn)
+        if row:
+            print(
+                f"[{datetime.now(WIB).isoformat()}] regime {row['date']}: "
+                f"{row['regime']} (ADX {row['adx']}, vol {row['vol_state']})"
+            )
+    except Exception as e:
+        print(f"[err] regime harian: {e}", file=sys.stderr)
+
+
 def _job_monthly_ic() -> None:
     """IC analysis bulanan -> research.factor_ic_history (bobot composite)."""
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
@@ -557,6 +575,11 @@ def cmd_serve(args) -> None:
     scheduler.add_job(
         _job_monthly_ic, "cron", day="1", hour=6, minute=30,
         id="monthly_ic",
+    )
+    # Histori regime — tiap hari bursa 16:20 WIB (setelah close resmi IHSG 16:10).
+    scheduler.add_job(
+        _job_regime_daily, "cron", day_of_week="mon-fri", hour=16, minute=20,
+        id="regime_daily",
     )
     # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
     # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).

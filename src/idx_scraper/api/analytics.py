@@ -11,6 +11,8 @@ sector_map.py and is intentionally data, not logic.
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,6 +29,22 @@ from .database import get_cursor
 from .sector_map import sector_for
 
 WIB = timezone(timedelta(hours=7))
+
+# Cache in-process untuk event study & factors overview: query panel + compute
+# butuh detik-an; data harian tidak berubah intraday. Key -> (monotonic_ts, val).
+_RESEARCH_CACHE: dict[str, tuple[float, Any]] = {}
+_RESEARCH_TTL = 3600.0  # 1 jam
+
+
+def _research_cache_get(key: str) -> Any | None:
+    hit = _RESEARCH_CACHE.get(key)
+    if hit and (time.monotonic() - hit[0]) < _RESEARCH_TTL:
+        return hit[1]
+    return None
+
+
+def _research_cache_put(key: str, val: Any) -> None:
+    _RESEARCH_CACHE[key] = (time.monotonic(), val)
 
 
 def get_market_regime() -> dict[str, Any]:
@@ -853,3 +871,196 @@ def get_screener(
 
     out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
     return out[:limit]
+
+
+# --------------------------------------------------------------- event study UI
+
+
+def _event_study_bundle() -> dict[str, Any]:
+    """Jalankan event study semua preset sekali, cache 1 jam, share antar kode."""
+    cached = _research_cache_get("event_bundle")
+    if cached is not None:
+        return cached
+
+    from ..research import events as ev
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+
+    # Panel adjusted utk return emiten; market_daily (raw close rata-rata
+    # pasar) utk konteks kurva event-time.
+    panel = ev.load_panel_from_db(dsn)
+    with get_cursor() as cur:
+        cur.execute(
+            """select trade_date as date, avg(close) as close
+               from research.latest_pit group by trade_date order by trade_date"""
+        )
+        md = pd.Series(
+            {pd.Timestamp(r["date"]): _f(r["close"]) for r in cur.fetchall()},
+            dtype=float,
+        ).dropna()
+    ev.set_market_daily(md)
+
+    bundle: dict[str, Any] = {"events": {}, "panel": panel}
+    for name in sorted(ev.EVENT_PRESETS):
+        bundle["events"][name] = ev.run_event_study(panel, name, horizon=21, min_gap=10)
+    _research_cache_put("event_bundle", bundle)
+    return bundle
+
+
+def get_stock_events(code: str) -> dict[str, Any] | None:
+    """Statistik event study utk satu emiten: riwayat + agregat pasar.
+
+    Returns None bila emiten tidak ditemukan di panel (kode salah / terlalu
+    pendek histori).
+    """
+    from ..research import events as ev  # ev dipakai utk PRESETS di bawah
+
+    code = code.strip().upper()
+    bundle = _event_study_bundle()
+    panel: pd.DataFrame = bundle["panel"]
+    if panel.empty or code not in set(panel["code"]):
+        return None
+
+    out_events: list[dict[str, Any]] = []
+    for name, res in bundle["events"].items():
+        ev_rows = res.events
+        mine = (
+            ev_rows[ev_rows["code"] == code] if not ev_rows.empty else pd.DataFrame()
+        )
+        out_events.append(
+            {
+                "event": name,
+                "description": ev.EVENT_PRESETS[name]["description"],
+                "my_count": len(mine),
+                "my_last_date": (
+                    str(pd.Timestamp(mine["date"].max()).date())
+                    if not mine.empty
+                    else None
+                ),
+                "my_median_fwd": (
+                    float(mine["fwd"].median()) if not mine.empty else None
+                ),
+                "my_median_abnormal": (
+                    float(mine["abnormal"].median()) if not mine.empty else None
+                ),
+                # baseline pasar (semua emiten, semua event)
+                "market_count": int(res.n_events),
+                "market_hit_rate": res.hit_rate,
+                "market_median_fwd": res.median_fwd,
+                "market_mean_abnormal": res.mean_abnormal,
+            }
+        )
+    last_date = str(pd.Timestamp(panel["date"].max()).date())
+    return {"code": code, "as_of": last_date, "events": out_events}
+
+
+# --------------------------------------------------------------- factors/IC UI
+
+
+def get_factors_overview() -> dict[str, Any]:
+    """Ringkasan kalibrasi faktor: run terbaru + bobot aktif + histori panjang."""
+    cached = _research_cache_get("factors_overview")
+    if cached is not None:
+        return cached
+
+    with get_cursor() as cur:
+        cur.execute("select max(run_date) as d from research.factor_ic_history")
+        latest = cur.fetchone()["d"]
+        if not latest:
+            return {"latest_run": None, "weights": {}, "factors": [], "history": []}
+
+        cur.execute(
+            """select factor, horizon, mean_ic, icir, t_stat, hit_rate, n_days,
+                      eligible, weight
+               from research.factor_ic_history
+               where run_date = %s
+               order by horizon, abs(mean_ic) desc nulls last""",
+            (latest,),
+        )
+        factors = [
+            {
+                "factor": r["factor"],
+                "horizon": int(r["horizon"]),
+                "mean_ic": _f(r["mean_ic"]),
+                "icir": _f(r["icir"]),
+                "t_stat": _f(r["t_stat"]),
+                "hit_rate": _f(r["hit_rate"]),
+                "n_days": int(r["n_days"]) if r["n_days"] is not None else None,
+                "eligible": bool(r["eligible"]),
+                "weight": _f(r["weight"]),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            """select run_date, count(*) as rows, count(*) filter (where eligible) as eligible
+               from research.factor_ic_history group by run_date order by run_date desc limit 12"""
+        )
+        history = [
+            {
+                "run_date": str(r["run_date"]),
+                "rows": int(r["rows"]),
+                "eligible": int(r["eligible"]),
+            }
+            for r in cur.fetchall()
+        ]
+
+    # Bobot komposit aktif: dari run terbaru utk horizon acuan (10), fallback
+    # konstanta composite kalau tidak ada yang eligible.
+    weights = {
+        f["factor"]: f["weight"] for f in factors if f["horizon"] == 10 and f["weight"]
+    }
+    if not weights:
+        from ..research.composite import FACTOR_WEIGHTS
+
+        weights = {"vol_21d": FACTOR_WEIGHTS["vol"], "turnover_21d": FACTOR_WEIGHTS["turnover"], "dist_52w_high": FACTOR_WEIGHTS["dist_52w"]}
+
+    out = {
+        "latest_run": str(latest),
+        "weights": weights,
+        "factors": factors,
+        "history": history,
+    }
+    _research_cache_put("factors_overview", out)
+    return out
+
+
+# --------------------------------------------------------------- regime history
+
+
+def get_regime_history(days: int = 90) -> dict[str, Any]:
+    """Histori regime harian + agregat jangka panjang dari research.regime_daily."""
+    import psycopg
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+
+    from ..research.regime import backfill, summary
+
+    # Idempoten & murah: backfill menghitung ulang dari index_summary_daily
+    # (SQL window, sekilas saja) sehingga histori selalu terkini tanpa job.
+    try:
+        backfill(dsn)
+    except Exception:
+        pass  # tabel belum siap -> tetap sajikan yang ada
+
+    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """select trade_date, regime, adx, realized_vol
+               from research.regime_daily where regime is not null
+               order by trade_date desc limit %s""",
+            (int(days),),
+        )
+        rows = [
+            {
+                "date": str(r[0]),
+                "regime": r[1],
+                "adx": _f(r[2]),
+                "realized_vol": _f(r[3]),
+            }
+            for r in cur.fetchall()
+        ]
+    rows.reverse()  # urut naik utk timeline
+    return {"recent": rows, "summary": summary(dsn)}

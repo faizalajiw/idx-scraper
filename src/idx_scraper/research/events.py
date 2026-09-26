@@ -23,10 +23,24 @@ from __future__ import annotations
 import argparse
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import (
+    dataclass,
+    field,
+)
 
 import numpy as np
 import pandas as pd
+
+# Konteks harga pasar utk kurva event-time (diset API/CLI via set_market_daily).
+# "market_daily" = Series (index tanggal, raw close rata-rata pasar). Kurva
+# abnormal memakai RAW close: split tidak mengubah pola return harian, dan
+# market_daily berasal dari raw layer (latest_pit).
+_G: dict = {"market_daily": None}
+
+
+def set_market_daily(series: pd.Series | None) -> None:
+    """Set konteks harga pasar utk kurva event-time (None = breadth panel)."""
+    _G["market_daily"] = series
 
 # --------------------------------------------------------------------------- #
 # Preset event (semua backward-looking)
@@ -143,6 +157,7 @@ class EventStudyResult:
     mean_abnormal: float | None   # vs pasar equal-weight hari yang sama
     t_abnormal: float | None
     curve: pd.DataFrame           # kolom: offset, mean_fwd, mean_abnormal, n
+    events: pd.DataFrame = field(default_factory=pd.DataFrame)  # per-event (fwd, abnormal)
 
 
 def _nw_tstat(x: pd.Series) -> float | None:
@@ -243,8 +258,14 @@ def event_time_curve(
     """
     df = panel.sort_values(["code", "date"]).reset_index(drop=True)
     df["_ret"] = df.groupby("code")["close"].pct_change()
-    mkt_daily = df.groupby("date")["_ret"].mean()
-    df["_mkt"] = df["date"].map(mkt_daily)
+    if market and _G.get("market_daily") is not None:
+        md = _G["market_daily"]
+        mkt_px = md.reindex(pd.to_datetime(df["date"].unique())).sort_index()
+        mkt_ret = mkt_px.pct_change()
+        df["_mkt"] = pd.to_datetime(df["date"]).map(mkt_ret)
+    else:
+        mkt_daily = df.groupby("date")["_ret"].mean()
+        df["_mkt"] = df["date"].map(mkt_daily)
 
     # (code, pos_per_emiten) untuk tiap event
     pos_of = df.groupby("code").cumcount()
@@ -302,7 +323,7 @@ def run_event_study(
     curve = event_time_curve(panel, events, max_days=horizon)
     if fwd.empty:
         return EventStudyResult(event, len(events), horizon, None, None, None, None,
-                                None, None, curve)
+                                None, None, curve, events)
     mean_fwd = float(fwd["fwd"].mean())
     t_abn = _nw_tstat(fwd["abnormal"]) if "abnormal" in fwd else None
     return EventStudyResult(
@@ -316,6 +337,7 @@ def run_event_study(
         mean_abnormal=float(fwd["abnormal"].mean()) if "abnormal" in fwd else None,
         t_abnormal=t_abn,
         curve=curve,
+        events=fwd,
     )
 
 

@@ -313,6 +313,30 @@ def quality_duplicates() -> dict:
     return quality.get_duplicate_pit()
 
 
+# --------------------------------------------------------------- research UI
+
+
+@app.get("/api/stocks/{code}/events")
+def stock_events(code: str) -> dict:
+    """Event study utk satu emiten: riwayat event + baseline pasar (cache 1 jam)."""
+    result = analytics.get_stock_events(code.upper())
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No event study data for {code.upper()}")
+    return result
+
+
+@app.get("/api/factors/overview")
+def factors_overview() -> dict:
+    """Kalibrasi faktor: run IC terbaru, bobot aktif, histori rekalibrasi."""
+    return analytics.get_factors_overview()
+
+
+@app.get("/api/market/regime/history")
+def regime_history(days: int = Query(default=90, ge=30, le=500)) -> dict:
+    """Histori regime harian + agregat (% waktu per regime, transisi)."""
+    return analytics.get_regime_history(days=days)
+
+
 # ------------------------------------------------ dividends & corp actions
 
 
