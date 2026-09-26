@@ -7,7 +7,7 @@ quarantine audit, calendar gaps, and duplicate-knowledge checks.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import get_cursor
