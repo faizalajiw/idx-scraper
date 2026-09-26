@@ -5,6 +5,27 @@ import pandas as pd
 
 # pandas_ta not available on Python 3.14; using pure pandas instead
 
+
+def is_mechanical_sell(df: pd.DataFrame, div_cash: float | None) -> bool:
+    """True bila SELL di bar terakhir hilang setelah dividen dikembalikan.
+
+    Pada ex-date, close turun mekanis sebesar cash dividend (uang pindah ke
+    pemegang saham, bukan hilang). Rule SMA/RSI bisa membaca drop itu sebagai
+    breakdown -> SELL palsu. Pembandingan: hitung ulang sinyal pada basis
+    total-return (close terakhir + div_cash). Hanya SELL yang bisa "palsu";
+    BUY/HOLD tidak pernah dinegasi oleh kembalian dividen.
+
+    Pure & testable — tidak menyentuh DB.
+    """
+    if div_cash is None or div_cash <= 0 or df.empty:
+        return False
+    if generate_signal(df) != "SELL":
+        return False
+    adj = df.copy()
+    adj["close"] = pd.to_numeric(adj["close"], errors="coerce")
+    adj.iloc[-1, adj.columns.get_loc("close")] += float(div_cash)
+    return generate_signal(calculate_indicators(adj)) != "SELL"
+
 # Regime thresholds (IHSG): ADX >= 25 tren kuat, < 20 ranging.
 ADX_TREND = 25.0
 ADX_RANGE = 20.0

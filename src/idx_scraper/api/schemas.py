@@ -58,7 +58,13 @@ class WatchlistUpdate(BaseModel):
 
 class Signal(BaseModel):
     code: str
+    # ``signal`` sudah melewati corp-action filter; ``raw_signal`` = SELL
+    # mentah sebelum filter. ``div_adjusted`` True berarti SELL palsu
+    # ex-dividend yang dinetralkan jadi HOLD (div_cash = per saham).
     signal: str
+    raw_signal: str | None = None
+    div_cash: float | None = None
+    div_adjusted: bool = False
     close: float | None = None
     pct: float | None = None
     rsi: float | None = None

@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..analysis import calculate_indicators, generate_signal
+from ..analysis import calculate_indicators, generate_signal, is_mechanical_sell
 from .database import get_cursor
 
 WIB = timezone(timedelta(hours=7))
@@ -374,7 +374,12 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
             if df.empty or len(df) < min_days:
                 continue
             df = calculate_indicators(df)
-            signal = generate_signal(df)
+            raw_signal = generate_signal(df)
+            # Corp-action filter: SELL yang hanya terbentuk karena drop
+            # mekanis ex-dividend dinetralkan jadi HOLD juga di hold-check,
+            # supaya skor tidak kena penalti -25 untuk hal yang bukan
+            # tekanan jual.
+            signal, div_cash, div_mech = _apply_dividend_guard(cur, code, df, raw_signal)
             last = df.iloc[-1]
             close = float(last["close"])
             rsi = _f(last.get("RSI"))
@@ -409,6 +414,11 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
             elif signal == "SELL":
                 score -= 25
                 reasons.append("Sinyal teknikal SELL (tren jangka pendek menembus ke bawah)")
+            elif div_mech:
+                reasons.append(
+                    f"Sinyal SELL dibatalkan: turun mekanis ex-dividend "
+                    f"(Rp {div_cash:.0f}/saham) — bukan tekanan jual"
+                )
             else:
                 reasons.append("Sinyal teknikal HOLD (tidak ada konfirmasi kuat)")
 
@@ -519,6 +529,42 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
     return out
 
 
+def _ex_div_cash(cur: Any, code: str, lookback_days: int = 7) -> float | None:
+    """Cash dividend ex-date terakhir dalam `lookback_days` hari kalender.
+
+    Window ketat: drop mekanis ex-dividend hanya relevan untuk sinyal yang
+    terbentuk sekitar ex-date. None bila tidak ada.
+    """
+    cur.execute(
+        """select cash_amount from research.corporate_actions
+           where code = %s and action_type = 'dividend'
+             and cash_amount is not null and cash_amount > 0
+             and ex_date between current_date - %s::int and current_date
+           order by ex_date desc limit 1""",
+        (code, lookback_days),
+    )
+    row = cur.fetchone()
+    return float(row["cash_amount"]) if row else None
+
+
+def _apply_dividend_guard(
+    cur: Any, code: str, df: pd.DataFrame, signal: str
+) -> tuple[str, float | None, bool]:
+    """Netralkan SELL palsu akibat ex-dividend (corp-action filter #4).
+
+    Returns (signal_efektif, div_cash, was_mechanical). Hanya dipanggil bila
+    sinyal mentah SELL — tidak menyentuh BUY/HOLD.
+    """
+    if signal != "SELL":
+        return signal, None, False
+    div = _ex_div_cash(cur, code)
+    if div is None:
+        return signal, None, False
+    if is_mechanical_sell(df, div):
+        return "HOLD", div, True
+    return signal, div, False
+
+
 def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     with get_cursor() as cur:
@@ -532,9 +578,17 @@ def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
             pct = None
             if prev["close"]:
                 pct = (last["close"] - prev["close"]) / prev["close"] * 100
+            # Corp-action filter: SELL yang hanya terbentuk karena drop
+            # mekanis ex-dividend -> HOLD (bukan tekanan jual sesungguhnya).
+            eff_signal, div_cash, mech = _apply_dividend_guard(cur, code, df, signal)
+            if mech:
+                pct = pct + (div_cash / prev["close"] * 100) if prev["close"] else pct
             out.append({
                 "code": code,
-                "signal": signal,
+                "signal": eff_signal,
+                "raw_signal": signal,
+                "div_cash": div_cash,
+                "div_adjusted": mech,
                 "close": _f(last["close"]),
                 "pct": _f(pct),
                 "rsi": _f(last.get("RSI")),
