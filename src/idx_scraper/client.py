@@ -151,6 +151,17 @@ class IDXClient:
             ))
         return results
 
+    def fetch_broker_summary(self, date: str) -> dict[str, Any] | None:
+        """Raw payload broker summary per firm utk satu tanggal (YYYYMMDD).
+
+        Agregat seluruh pasar (IDX tidak menyediakan per-stock di endpoint
+        publik). Parsing + storage ada di broker_store.
+        """
+        raw = self._get_json(
+            f"/primary/TradingSummary/GetBrokerSummary?date={date}&start=0&length=9999"
+        )
+        return raw if isinstance(raw, dict) else None
+
     def fetch_full_market_today(self) -> list[EodStockRow]:
         """Shortcut to fetch EOD summary for TODAY (market close data)."""
         today = datetime.now(WIB).strftime("%Y%m%d")

@@ -226,6 +226,24 @@ def _job_monthly_ic() -> None:
         print(f"[err] IC bulanan: {e}", file=sys.stderr)
 
 
+def _job_broker_eod() -> None:
+    """Broker summary EOD (bandarmologi) -> research.broker_daily, 16:30 WIB.
+
+    20 menit setelah close resmi supaya endpoint IDX sudah memuat data final
+    hari itu. Idempoten per tanggal — aman dijalankan ulang.
+    """
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from scripts.backfill_broker_eod import backfill_broker_eod
+
+        n, d = backfill_broker_eod(dsn)
+        print(f"[{datetime.now(WIB).isoformat()}] broker summary {d}: {n} baris")
+    except Exception as e:
+        print(f"[err] broker summary job: {e}", file=sys.stderr)
+
+
 def cmd_ic(args) -> None:
     """Run IC analysis manual + simpan histori bobot faktor."""
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
@@ -581,9 +599,14 @@ def cmd_serve(args) -> None:
         _job_regime_daily, "cron", day_of_week="mon-fri", hour=16, minute=20,
         id="regime_daily",
     )
+    # Broker summary EOD (bandarmologi) — 16:30 WIB, idempoten per tanggal.
+    scheduler.add_job(
+        _job_broker_eod, "cron", day_of_week="mon-fri", hour=16, minute=30,
+        id="broker_eod",
+    )
     # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
     # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).
-    intraday_top = int(os.getenv("IDX_INTRADAY_TOP", "200"))
+    intraday_top = int(os.getenv("IDX_INTRADAY_TOP", "400"))
     intraday_interval = int(os.getenv("IDX_INTRADAY_INTERVAL", "60"))
     if intraday_top > 0:
         scheduler.add_job(

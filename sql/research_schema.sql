@@ -178,3 +178,24 @@ SELECT DISTINCT ON (code, trade_date)
     code, trade_date, knowledge_date, open, high, low, close, volume, value
 FROM research.prices_pit
 ORDER BY code, trade_date, knowledge_date DESC;
+
+-- ----------------------------------------------------------------------------
+-- 8) BROKER_DAILY — broker summary EOD (bandarmologi).
+--    Agregat transaksi PER BROKER FIRM seluruh pasar dari
+--    /primary/TradingSummary/GetBrokerSummary (IDX tidak menyediakan
+--    breakdown per saham di endpoint publik; flow per emiten lewat faktor
+--    order-book dari snapshot intraday). Upsert idempoten per tanggal.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS research.broker_daily (
+    trade_date  DATE        NOT NULL,
+    broker_code TEXT        NOT NULL,
+    broker_name TEXT,
+    volume      BIGINT,
+    value       NUMERIC(24,4),
+    frequency   BIGINT,
+    source      TEXT        NOT NULL DEFAULT 'IDX',
+    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (trade_date, broker_code)
+);
+CREATE INDEX IF NOT EXISTS idx_broker_daily_broker
+    ON research.broker_daily (broker_code, trade_date);

@@ -25,7 +25,10 @@ import threading
 from typing import Any
 
 IDX_BASE = "https://www.idx.co.id"
-PROFILE_DIR = os.path.join(
+# Override via env supaya script manual bisa jalan berdampingan dengan
+# scheduler yang sedang memegang profile utama (Chrome menolak dua instance
+# pada user-data-dir yang sama).
+PROFILE_DIR = os.environ.get("IDX_CHROME_PROFILE_DIR") or os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
     "idx-scraper-chrome-profile",
 )

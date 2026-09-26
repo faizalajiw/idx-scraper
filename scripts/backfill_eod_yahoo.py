@@ -72,7 +72,7 @@ def main() -> int:
             for code, tk in zip(chunk, tickers):
                 try:
                     sub = df if single else df[tk]
-                except Exception:
+                except Exception:  # ticker hilang dari batch -> skip senyap
                     continue
                 sub = sub.dropna(how="all")
                 if len(sub) == 0:
@@ -90,7 +90,8 @@ def main() -> int:
                 def _f(row, key):
                     try:
                         v = float(row[key])
-                        return None if (v != v) else v  # NaN guard
+                        # NaN guard: NaN != NaN, bukan pembandingan diri biasa.
+                        return None if (v != v) else v
                     except (KeyError, ValueError, TypeError):
                         return None
 
