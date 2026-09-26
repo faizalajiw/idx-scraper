@@ -6,8 +6,8 @@ All endpoints are unofficial/internal IDX APIs used for personal research.
 
 from __future__ import annotations
 
+import math
 import sys
-import time
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
@@ -345,10 +345,10 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
         if last is None:
             continue
 
-        def _f(key):
+        def _f(key, today=today):  # bind this row: closure is called per-loop (B023)
             try:
                 v = float(today[key])
-                return v if v == v else None  # NaN guard
+                return None if math.isnan(v) else v  # NaN guard
             except (KeyError, ValueError, TypeError):
                 return None
 

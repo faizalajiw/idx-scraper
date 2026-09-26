@@ -16,11 +16,74 @@ from typing import Any
 
 import pandas as pd
 
-from ..analysis import calculate_indicators, generate_signal
+from ..analysis import (
+    calculate_adx,
+    calculate_indicators,
+    classify_regime,
+    generate_signal,
+    signal_series,
+)
 from .database import get_cursor
-from .sector_map import SECTOR_MAP
+from .sector_map import sector_for
 
 WIB = timezone(timedelta(hours=7))
+
+
+def get_market_regime() -> dict[str, Any]:
+    """Regime IHSG (TRENDING/RANGING/TRANSITION + volatilitas) dari ADX(14).
+
+    Sumber: ``index_summary_daily`` (close resmi harian, di-backfill dari
+    Yahoo). Fallback: medan breadth equal-weight dari ``research.latest_pit``
+    kalau seri indeks terlalu pendek. Output dipakai banner konteks di semua
+    halaman analisis.
+    """
+    with get_cursor() as cur:
+        cur.execute(
+            """select date, open, high, low, close
+               from index_summary_daily where code = 'COMPOSITE'
+               order by date"""
+        )
+        rows = cur.fetchall()
+
+    df = pd.DataFrame(
+        [
+            (str(r["date"]), _f(r["open"]), _f(r["high"]), _f(r["low"]), _f(r["close"]))
+            for r in rows
+        ],
+        columns=["date", "open", "high", "low", "close"],
+    )
+    source = "index_summary_daily"
+    if len(df) < 40:  # ADX(14) + smoothing butuh sejarah yang layak
+        source = "breadth_latest_pit"
+        with get_cursor() as cur:
+            cur.execute(
+                """select trade_date as date,
+                          avg(close) as close,
+                          avg(close) as high,
+                          avg(close) as low
+                   from research.latest_pit
+                   group by trade_date order by trade_date"""
+            )
+            rows = cur.fetchall()
+        df = pd.DataFrame(
+            [(str(r["date"]), _f(r["close"]), _f(r["close"]), _f(r["close"]), _f(r["close"])) for r in rows],
+            columns=["date", "open", "high", "low", "close"],
+        )
+
+    if df.empty:
+        return {"regime": None, "source": None, "as_of": None}
+
+    adx_df = calculate_adx(df)
+    out = classify_regime(adx_df)
+    out["source"] = source
+    out["as_of"] = df["date"].iloc[-1][:10]
+    # Nama regime diwarnai UI; arah tren penting untuk konteks sinyal.
+    out["dir_hint"] = (
+        "up"
+        if out["regime"] == "TRENDING_UP"
+        else "down" if out["regime"] == "TRENDING_DOWN" else None
+    )
+    return out
 
 
 def _f(v: Any) -> float | None:
@@ -119,6 +182,7 @@ def get_broker_summary(code: str, date: str | None = None) -> dict[str, Any]:
             "net": fbuy - (fsell or 0.0),
             "buy_rank": 1,
             "sell_rank": 1 if fsell is not None else None,
+            "estimated": True,
         })
     if avg_bid is not None or avg_offer is not None:
         # Rough IDR estimate using the day's close as reference price.
@@ -133,6 +197,7 @@ def get_broker_summary(code: str, date: str | None = None) -> dict[str, Any]:
             "net": (b or 0.0) - (o or 0.0),
             "buy_rank": 2,
             "sell_rank": 2,
+            "estimated": True,
         })
 
     buyers = sorted(rows, key=lambda r: r["buy_value"], reverse=True)
@@ -304,7 +369,7 @@ def get_sector_rrg(
     sums: dict[str, dict[str, float]] = {}
     counts: dict[str, dict[str, int]] = {}
     for r in rows:
-        sector = SECTOR_MAP.get(r["code"], "Lainnya")
+        sector = sector_for(r["code"])
         p = _f(r["percent"])
         if p is None:
             continue
@@ -392,7 +457,7 @@ def get_sector_analysis(date: str | None = None) -> dict[str, Any]:
 
     buckets: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
-        sector = SECTOR_MAP.get(r["code"], "Lainnya")
+        sector = sector_for(r["code"])
         buckets.setdefault(sector, []).append(r)
 
     sectors: list[dict[str, Any]] = []
@@ -572,7 +637,7 @@ def get_market_narration() -> dict[str, Any]:
 
 def _valuation_frame(cur: Any, code: str) -> pd.DataFrame | None:
     cur.execute(
-        """select trade_date as date, close, volume from research.latest_pit
+        """select trade_date as date, close, high, low, volume from research.latest_pit
            where code = %s order by trade_date""",
         (code,),
     )
@@ -580,8 +645,11 @@ def _valuation_frame(cur: Any, code: str) -> pd.DataFrame | None:
     if len(rows) < 30:
         return None
     df = pd.DataFrame(
-        [(str(r["date"]), _f(r["close"]), _f(r["volume"])) for r in rows],
-        columns=["date", "close", "volume"],
+        [
+            (str(r["date"]), _f(r["close"]), _f(r["high"]), _f(r["low"]), _f(r["volume"]))
+            for r in rows
+        ],
+        columns=["date", "close", "high", "low", "volume"],
     )
     df["close"] = pd.to_numeric(df["close"])
     return df
@@ -703,6 +771,38 @@ def get_screener(
             vol = df["volume"].fillna(0)
             vol_ratio = float(vol.iloc[-1] / vol.tail(20).mean()) if vol.tail(20).mean() > 0 else None
 
+            # --- metrik riset tambahan (ATR%, 52w high, hari sejak sinyal) ---
+            # ATR(14) Wilder-style rolling, % dari close (volatilitas komparabel
+            # antar emiten). High/low NULL (hari non-trading) -> diabaikan.
+            prev_close = close.shift(1)
+            tr = pd.concat(
+                [
+                    df["high"] - df["low"],
+                    (df["high"] - prev_close).abs(),
+                    (df["low"] - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            atr = tr.rolling(14).mean()
+            atr_pct = (
+                float(atr.iloc[-1] / close.iloc[-1] * 100)
+                if pd.notna(atr.iloc[-1]) and close.iloc[-1] > 0
+                else None
+            )
+            # Jarak dari puncak 52 minggu (<= 0; min_periods 63 agar emiten baru
+            # tidak selalu -100%).
+            hi_252 = close.rolling(252, min_periods=63).max()
+            dist_52w = (
+                float(close.iloc[-1] / hi_252.iloc[-1] - 1.0)
+                if pd.notna(hi_252.iloc[-1])
+                else None
+            )
+            # Hari sejak sinyal BUY/SELL terakhir (rule = signal_series, sama
+            # dengan generate_signal). None = belum pernah bersinyal non-HOLD.
+            sigs = signal_series(df)
+            non_hold = sigs[sigs != "HOLD"]
+            days_since_signal = int(len(sigs) - 1 - non_hold.index[-1]) if len(non_hold) else None
+
             # Latest day liquidity + foreign net from EOD table
             cur.execute(
                 """select value, foreign_net, close from research.latest_pit
@@ -724,6 +824,9 @@ def get_screener(
                 "trend_up": bool((df["MA_Short"].iloc[-1] or 0) > (df["MA_Long"].iloc[-1] or 0)),
                 "momentum_20d": round(momo, 2) if momo is not None else None,
                 "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
+                "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+                "dist_52w": round(dist_52w * 100, 2) if dist_52w is not None else None,
+                "days_since_signal": days_since_signal,
                 "foreign_net": fnet,
                 "value": value,
                 "hist_days": len(df),

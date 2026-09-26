@@ -1,8 +1,131 @@
 """Technical analysis utilities for IDX stocks."""
 
+import numpy as np
 import pandas as pd
 
 # pandas_ta not available on Python 3.14; using pure pandas instead
+
+# Regime thresholds (IHSG): ADX >= 25 tren kuat, < 20 ranging.
+ADX_TREND = 25.0
+ADX_RANGE = 20.0
+# Realized vol ter-annualisasi (%): IDX ~240 hari bursa/tahun.
+IDX_TRADING_DAYS = 240
+VOL_HIGH = 30.0   # >= 30% ann = VOLATILE
+VOL_LOW = 15.0    # <= 15% ann = QUIET
+
+
+def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """ADX + DI+/DI- (Wilder) — pure pandas, tanpa dependensi baru.
+
+    Butuh kolom ``high``/``low`` (dan ``close`` untuk TR prev-close).
+    Smoothing Wilder via ``ewm(alpha=1/period, adjust=False)`` dengan
+    ``min_periods`` supaya baris warmup tetap NaN. Semua backward-looking.
+    """
+    df = df.copy()
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").reset_index(drop=True)
+
+    up_move = df["high"].diff()
+    down_move = -df["low"].diff()
+    # +DM saat up_move > down_move dan positif; -DM sebaliknya.
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    alpha = 1.0 / period
+    smooth = lambda s: s.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    tr_s = smooth(tr)
+    plus_di = 100.0 * smooth(plus_dm) / tr_s.where(tr_s > 0)
+    minus_di = 100.0 * smooth(minus_dm) / tr_s.where(tr_s > 0)
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).where(lambda s: s > 0)
+    df["DI_Plus"] = plus_di
+    df["DI_Minus"] = minus_di
+    df["ADX"] = dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    return df
+
+
+def classify_regime(df: pd.DataFrame) -> dict:
+    """Klasifikasi regime pasar dari frame yang sudah punya ADX/DI.
+
+    Returns dict: ``regime`` (TRENDING_UP | TRENDING_DOWN | TRANSITION |
+    RANGING), ``adx``, ``plus_di``, ``minus_di``, ``realized_vol_annual``
+    (% ann, rolling 20), ``vol_state`` (VOLATILE | NORMAL | QUIET).
+    Data kurang -> ``regime=None``.
+    """
+    last = df.iloc[-1] if not df.empty else None
+    if last is None or pd.isna(last.get("ADX")):
+        return {
+            "regime": None, "adx": None, "plus_di": None, "minus_di": None,
+            "realized_vol_annual": None, "vol_state": None,
+        }
+    adx = float(last["ADX"])
+    pdi = float(last["DI_Plus"]) if pd.notna(last.get("DI_Plus")) else None
+    mdi = float(last["DI_Minus"]) if pd.notna(last.get("DI_Minus")) else None
+
+    if adx >= ADX_TREND:
+        if pdi is not None and mdi is not None and pdi < mdi:
+            regime = "TRENDING_DOWN"
+        else:
+            regime = "TRENDING_UP"
+    elif adx < ADX_RANGE:
+        regime = "RANGING"
+    else:
+        regime = "TRANSITION"
+
+    ret = df["close"].pct_change()
+    rv = ret.rolling(20).std().iloc[-1]
+    rv_ann = float(rv * np.sqrt(IDX_TRADING_DAYS) * 100) if pd.notna(rv) else None
+    if rv_ann is None:
+        vol_state = None
+    elif rv_ann >= VOL_HIGH:
+        vol_state = "VOLATILE"
+    elif rv_ann <= VOL_LOW:
+        vol_state = "QUIET"
+    else:
+        vol_state = "NORMAL"
+
+    return {
+        "regime": regime,
+        "adx": round(adx, 1),
+        "plus_di": round(pdi, 1) if pdi is not None else None,
+        "minus_di": round(mdi, 1) if mdi is not None else None,
+        "realized_vol_annual": round(rv_ann, 1) if rv_ann is not None else None,
+        "vol_state": vol_state,
+    }
+
+
+def signal_series(df: pd.DataFrame) -> pd.Series:
+    """BUY/SELL/HOLD **per baris** — rule yang sama dengan ``generate_signal``.
+
+    Satu sumber kebenaran untuk rule sinyal: generate_signal memakai baris
+    terakhir deret ini, screener memakai seluruh deret (hitung hari sejak
+    sinyal terakhir). Input NaN -> HOLD untuk baris itu.
+    """
+    hold = pd.Series("HOLD", index=df.index, dtype=object)
+    if df.empty:
+        return hold
+    rsi = df.get("RSI")
+    ma_short = df.get("MA_Short")
+    ma_long = df.get("MA_Long")
+    if rsi is None or ma_short is None or ma_long is None:
+        return hold
+    buy = (ma_short > ma_long) & (rsi >= 50) & (rsi <= 80)
+    sell = (ma_short < ma_long) & (rsi >= 20) & (rsi <= 50)
+    valid = rsi.notna() & ma_short.notna() & ma_long.notna()
+    out = hold.copy()
+    out[buy & valid] = "BUY"
+    out[sell & valid] = "SELL"
+    return out
 
 
 def calculate_indicators(df: pd.DataFrame, short_ma: int = 20, long_ma: int = 50, rsi_period: int = 14) -> pd.DataFrame:
@@ -47,14 +170,4 @@ def generate_signal(df: pd.DataFrame) -> str:
     """
     if df.empty:
         return "HOLD"
-    last = df.iloc[-1]
-    rsi = last.get("RSI")
-    ma_short = last.get("MA_Short")
-    ma_long = last.get("MA_Long")
-    if any(v is None or pd.isna(v) for v in (rsi, ma_short, ma_long)):
-        return "HOLD"
-    if ma_short > ma_long and 50 <= rsi <= 80:
-        return "BUY"
-    if ma_short < ma_long and 20 <= rsi <= 50:
-        return "SELL"
-    return "HOLD"
+    return str(signal_series(df).iloc[-1])

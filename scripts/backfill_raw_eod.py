@@ -22,12 +22,13 @@ import json
 import os
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 
 from idx_scraper.client import IDXClient
 
+WIB = timezone(timedelta(hours=7))  # IDX business timezone
 SLEEP_SECONDS = 1.2  # anti-throttle between IDX requests
 
 
@@ -52,7 +53,7 @@ def _ohl(v):
 
 def backfill(years: float) -> None:
     dsn = os.environ["DATABASE_URL"]
-    end = datetime.now().date()
+    end = datetime.now(WIB).date()
     start = end - timedelta(days=round(365.25 * years))
 
     client = IDXClient()

@@ -79,7 +79,7 @@ class BrowserTransport:
             asyncio.set_event_loop(self._loop)
             try:
                 self._loop.run_until_complete(_run())
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 print(f"[cf-transport] browser open failed: {e!r}", file=sys.stderr)
             finally:
                 self._ready.set()
@@ -135,20 +135,20 @@ class BrowserTransport:
             if self._context is not None:
                 try:
                     await self._context.close()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 self._context = None
                 self._page = None
             if self._playwright is not None:
                 try:
                     await self._playwright.stop()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 self._playwright = None
 
         try:
             self._call(_close())
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         finally:
             self._loop = None
