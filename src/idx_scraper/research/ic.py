@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -280,6 +281,17 @@ def run_ic_analysis(
         raise SystemExit("panel kosong — cek DATABASE_URL / rentang tanggal")
 
     panel = compute_factors(panel)
+
+    # Faktor order-book (snapshot intraday) — enhancement, bukan fondasi:
+    # kalau sumber snapshot bermasalah, IC analysis tetap jalan tanpa kolomnya.
+    try:
+        from .orderbook import attach_orderbook_factors, compute_daily, load_snapshots
+
+        ob_daily = compute_daily(load_snapshots(dsn, start=start, end=end))
+        panel = attach_orderbook_factors(panel, ob_daily)
+    except Exception as e:  # graceful degradation disengaja — jangan matikan IC
+        print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
+
     merged = forward_returns(panel, horizons, nlags=nlags)
     factors = [c for c in FACTOR_DEFINITIONS if c in merged.columns]
     # Buang faktor yang kosong total (mis. foreign flow belum ada datanya).

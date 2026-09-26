@@ -41,6 +41,9 @@ FACTOR_DEFINITIONS: dict[str, str] = {
     # --- flow ---
     "foreign_net_pct": "Foreign net / value transaksi (hari yang sama)",
     "foreign_streak": "Hari berturut-turut foreign net positif (negatif = jual)",
+    # --- order book (dari snapshot intraday, lihat research.orderbook) ---
+    "ob_imbalance": "Ketimpangan buku intraday: (bid_vol-offer_vol)/(total) rata-rata",
+    "ob_absorption": "Buku vs arah harga: imbalance tertanda saat tick bergerak (negatif = absorption)",
 }
 
 
