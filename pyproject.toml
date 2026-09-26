@@ -50,3 +50,5 @@ target-version = "py311"
 "src/idx_scraper/cli.py" = ["E402"]
 # Broad exception catches are deliberate: scraping must survive per-item failures
 "src/idx_scraper/*.py" = ["BLE001", "S110"]
+# Same reasoning for the one-off backfill/refresh jobs
+"scripts/*.py" = ["BLE001"]
