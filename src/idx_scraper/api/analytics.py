@@ -47,6 +47,16 @@ def _research_cache_get(key: str) -> Any | None:
 def _research_cache_put(key: str, val: Any) -> None:
     _RESEARCH_CACHE[key] = (time.monotonic(), val)
 
+def clear_research_cache() -> int:
+    """Kosongkan cache in-process supaya menu langsung menyajikan data terbaru.
+
+    Dipanggil serve loop tiap pipeline refresh (pra-buka / close sesi) — tanpa
+    ini Sentimen & Jejak Sinyal bisa menampilkan data basi hingga 1 jam.
+    """
+    n = len(_RESEARCH_CACHE)
+    _RESEARCH_CACHE.clear()
+    return n
+
 
 def get_market_regime() -> dict[str, Any]:
     """Regime IHSG (TRENDING/RANGING/TRANSITION + volatilitas) dari ADX(14).
@@ -1113,3 +1123,74 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
         ]
     rows.reverse()  # urut naik utk timeline
     return {"recent": rows, "summary": summary(dsn)}
+
+
+# --------------------------------------------------------------- sentimen (flow & buku)
+
+
+def get_sentiment(limit: int = 15) -> dict[str, Any]:
+    """Sentimen posisi/aliran dari data yang sudah tersimpan (cache 1 jam).
+
+    Menggabungkan tiga sumber yang sudah kita miliki — arus asing
+    (``latest_pit.foreign_net``), ketimpangan & absorption buku intraday
+    (``research.orderbook``), dan breadth pasar — menjadi skor emiten
+    ``-1..+1`` plus gauge pasar ``0..100``. Tidak ada sumber/scraping baru, dan
+    snapshot intraday hari T memang sudah tertutup pada close T (no look-ahead).
+    """
+    cache_key = f"sentiment:{limit}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research import sentiment
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+
+    with get_cursor() as cur:
+        idx = _latest_index(cur)
+    index_pct = idx["percent"] if idx else None
+
+    # Order-book adalah enhancement: capture bisa tidak tersedia / tipis.
+    try:
+        ob = _latest_orderbook_factors()
+    except Exception as e:
+        print(f"[warn] sentimen tanpa faktor order-book: {e}", file=sys.stderr)
+        ob = {}
+
+    out = sentiment.compute(dsn, index_pct=index_pct, ob_by_code=ob, limit=limit)
+    _research_cache_put(cache_key, out)
+    return out
+
+
+# --------------------------------------------------------------- signal track record
+
+
+def get_signal_track() -> dict[str, Any]:
+    """Track record sinyal BUY/SELL dari research.signal_log (cache 1 jam).
+
+    Kalau log masih kosong, backfill dijalankan sekali (idempoten) supaya
+    halaman punya isi tanpa harus menunggu job harian. Sinyal dinilai di close
+    T+1 dan dibandingkan dengan pasar equal-weight pada window yang sama.
+    """
+    cached = _research_cache_get("signal_track")
+    if cached is not None:
+        return cached
+
+    from ..research import signal_log as sl
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+
+    try:
+        if sl.load_log(dsn).empty:
+            sl.backfill(dsn)
+    except Exception as e:  # DB belum siap -> tetap sajikan apa adanya
+        print(f"[warn] backfill jejak sinyal dilewati: {e}", file=sys.stderr)
+
+    out = sl.evaluate(dsn, horizons=sl.DEFAULT_HORIZONS)
+    out["generated_at"] = datetime.now(WIB).isoformat(timespec="seconds")
+    _research_cache_put("signal_track", out)
+    return out

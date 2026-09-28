@@ -38,6 +38,16 @@ def _f(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+def _is_market_hours() -> bool:
+    """Sen–Jum, jam bursa WIB (default 09:00–16:00; override via env)."""
+    import os
+
+    now = datetime.now(WIB)
+    open_h, open_m = map(int, os.getenv("IDX_MARKET_OPEN", "09:00").split(":"))
+    close_h, close_m = map(int, os.getenv("IDX_MARKET_CLOSE", "16:00").split(":"))
+    t = now.hour * 60 + now.minute
+    return (open_h * 60 + open_m) <= t < (close_h * 60 + close_m) and now.weekday() < 5
+
 
 # --------------------------------------------------------------- overview
 
@@ -189,6 +199,183 @@ def get_watchlist(codes: list[str]) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+# --------------------------------------------------------------- market leaders
+
+# Metric -> (intraday tick column, EOD raw_eod column). Frequency has no
+# intraday source (ticks only store volume/value), so it is always EOD.
+_LEADER_METRICS: dict[str, tuple[str | None, str]] = {
+    "volume": ("volume", "volume"),
+    "value": ("value", "value"),
+    "frequency": (None, "frequency"),
+}
+
+def _leaders_eod(cur: Any, metric: str, limit: int) -> dict[str, Any]:
+    """Top-N emiten by metric from the latest EOD trade_date (raw_eod)."""
+    col = _LEADER_METRICS[metric][1]
+    cur.execute("select max(trade_date) as d from research.raw_eod")
+    row = cur.fetchone()
+    if not row or not row["d"]:
+        return {"metric": metric, "source": "eod", "date": None, "captured_at": None, "rows": []}
+    date = row["d"]
+    # distinct on (code): raw_eod may hold multiple knowledge rows per trade_date.
+    cur.execute(
+        f"""with latest as (
+                select distinct on (code)
+                       code, name, close, prev_close, volume, value, frequency, ingested_at
+                from research.raw_eod
+                where trade_date = %s
+                order by code, ingested_at desc
+            )
+            select code, name, close, prev_close, volume, value, frequency, ingested_at,
+                   case when prev_close is not null and prev_close <> 0
+                        then (close - prev_close) / prev_close * 100 end as percent
+            from latest
+            where {col} is not null and {col} > 0
+            order by {col} desc
+            limit %s""",
+        (date, limit),
+    )
+    rows = cur.fetchall()
+    captured = max((r["ingested_at"] for r in rows if r["ingested_at"]), default=None)
+    return {
+        "metric": metric,
+        "source": "eod",
+        "date": _norm_date(date),
+        "captured_at": captured.isoformat() if captured else None,
+        "rows": [
+            {
+                "code": r["code"],
+                "name": r["name"],
+                "close": _f(r["close"]),
+                "percent": _f(r["percent"]),
+                "volume": _f(r["volume"]),
+                "value": _f(r["value"]),
+                "frequency": _f(r["frequency"]),
+            }
+            for r in rows
+        ],
+    }
+
+def _leaders_intraday(cur: Any, metric: str, limit: int) -> dict[str, Any] | None:
+    """Top-N by cumulative day metric from the freshest intraday snapshot.
+
+    Ticks store cumulative volume/value, so the newest ts per code already holds
+    the day-to-date total. Returns None when no ticks exist for today (WIB) so the
+    caller can fall back to EOD.
+    """
+    col = _LEADER_METRICS[metric][0]
+    if col is None:
+        return None
+    cur.execute("select max(ts) as mx from research.intraday_ticks")
+    row = cur.fetchone()
+    if not row or not row["mx"]:
+        return None
+    latest_ts = row["mx"]
+    if latest_ts.astimezone(WIB).strftime("%Y-%m-%d") != _today():
+        return None
+    cur.execute(
+        f"""with snap as (
+                select distinct on (code) code, last, volume, value
+                from research.intraday_ticks
+                order by code, ts desc
+            )
+            select s.code, s.last, s.volume, s.value,
+                   lp.name, lp.prev_close
+            from snap s
+            left join lateral (
+                select name, close as prev_close
+                from research.latest_pit p
+                where p.code = s.code
+                order by trade_date desc limit 1
+            ) lp on true
+            where s.{col} is not null and s.{col} > 0
+            order by s.{col} desc
+            limit %s""",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    return {
+        "metric": metric,
+        "source": "intraday",
+        "date": _today(),
+        "captured_at": latest_ts.isoformat(),
+        "rows": [
+            {
+                "code": r["code"],
+                "name": r["name"],
+                "close": _f(r["last"]),
+                "percent": (
+                    _f((float(r["last"]) - float(r["prev_close"])) / float(r["prev_close"]) * 100)
+                    if r["last"] is not None and r["prev_close"] not in (None, 0)
+                    else None
+                ),
+                "volume": _f(r["volume"]),
+                "value": _f(r["value"]),
+                "frequency": None,  # not captured intraday
+            }
+            for r in rows
+        ],
+    }
+
+def get_market_leaders(metric: str, limit: int = 5) -> dict[str, Any]:
+    """Top-N emiten by volume/value/frequency; realtime during market hours,
+    else the latest EOD session. Frequency is EOD-only (no intraday source)."""
+    metric = metric.lower()
+    if metric not in _LEADER_METRICS:
+        metric = "volume"
+    limit = max(1, min(limit, 50))
+    with get_cursor() as cur:
+        if _is_market_hours():
+            live = _leaders_intraday(cur, metric, limit)
+            if live and live["rows"]:
+                return live
+        return _leaders_eod(cur, metric, limit)
+
+
+# --------------------------------------------------------------- top brokers
+
+def get_top_brokers(limit: int = 5) -> dict[str, Any]:
+    """Top-N broker firms by traded value from the latest broker_daily session.
+
+    broker_daily is EOD-only (IDX GetBrokerSummary). Returns an empty rows list
+    (never raises) when the table/data is absent so the UI shows an empty state.
+    """
+    limit = max(1, min(limit, 50))
+    with get_cursor() as cur:
+        cur.execute("select to_regclass('research.broker_daily') as t")
+        reg = cur.fetchone()
+        if not reg or not reg["t"]:
+            return {"date": None, "captured_at": None, "rows": []}
+        cur.execute("select max(trade_date) as d from research.broker_daily")
+        row = cur.fetchone()
+        if not row or not row["d"]:
+            return {"date": None, "captured_at": None, "rows": []}
+        date = row["d"]
+        cur.execute(
+            """select broker_code, broker_name, volume, value, frequency, captured_at
+               from research.broker_daily
+               where trade_date = %s and value is not null
+               order by value desc limit %s""",
+            (date, limit),
+        )
+        rows = cur.fetchall()
+    captured = max((r["captured_at"] for r in rows if r["captured_at"]), default=None)
+    return {
+        "date": _norm_date(date),
+        "captured_at": captured.isoformat() if captured else None,
+        "rows": [
+            {
+                "broker_code": r["broker_code"],
+                "broker_name": r["broker_name"],
+                "volume": _f(r["volume"]),
+                "value": _f(r["value"]),
+                "frequency": _f(r["frequency"]),
+            }
+            for r in rows
+        ],
+    }
 
 
 # --------------------------------------------------------------- price history

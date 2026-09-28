@@ -80,12 +80,22 @@ class BrowserTransport:
         def _bootstrap():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            try:
-                self._loop.run_until_complete(_run())
-            except Exception as e:
-                print(f"[cf-transport] browser open failed: {e!r}", file=sys.stderr)
-            finally:
-                self._ready.set()
+
+            async def _startup():
+                try:
+                    await _run()
+                except Exception as e:
+                    print(f"[cf-transport] browser open failed: {e!r}", file=sys.stderr)
+                finally:
+                    self._ready.set()
+
+            # Keep the loop alive for the whole transport lifetime so that
+            # run_coroutine_threadsafe() from get()/close() actually executes.
+            # (run_until_complete would stop the loop right after setup, leaving
+            # Chrome running but the loop dead → the next call relaunches Chrome
+            # on the same profile → "Opening in existing browser session".)
+            self._loop.create_task(_startup())
+            self._loop.run_forever()
 
         self._thread = threading.Thread(target=_bootstrap, daemon=True)
         self._thread.start()
@@ -154,6 +164,10 @@ class BrowserTransport:
         except Exception:
             pass
         finally:
+            loop = self._loop
+            if loop is not None:
+                loop.call_soon_threadsafe(loop.stop)
             self._loop = None
+            self._ready.clear()
 
 

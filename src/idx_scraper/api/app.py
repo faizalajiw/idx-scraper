@@ -40,14 +40,18 @@ from .schemas import (
     MarketNarration,
     MarketOverview,
     MarketRegime,
+    MarketLeaders,
+    TopBrokers,
     QualityOverview,
     QuarantineReason,
     QuarantineRow,
     ScreenerRow,
     SectorAnalysis,
     SectorRRG,
+    SentimentResponse,
     SessionMovers,
     Signal,
+    SignalTrack,
     StockBrokerSummary,
     TechnicalChart,
     ThinDay,
@@ -118,6 +122,19 @@ def market_regime() -> dict:
 @app.get("/api/market/session-movers", response_model=SessionMovers)
 def session_movers() -> dict:
     return services.get_session_movers()
+
+@app.get("/api/market/leaders", response_model=MarketLeaders)
+def market_leaders(
+    metric: str = Query(default="volume", description="volume | value | frequency"),
+    limit: int = Query(default=5, ge=1, le=50),
+) -> dict:
+    """Top emiten by volume/value/frequency — realtime saat jam bursa, else EOD."""
+    return services.get_market_leaders(metric, limit)
+
+@app.get("/api/market/top-brokers", response_model=TopBrokers)
+def top_brokers(limit: int = Query(default=5, ge=1, le=50)) -> dict:
+    """Top broker firm by traded value (EOD GetBrokerSummary)."""
+    return services.get_top_brokers(limit)
 
 
 @app.get("/api/watchlist", response_model=list[WatchlistRow])
@@ -240,6 +257,11 @@ def sectors(date: str | None = Query(default=None)) -> dict:
 def market_narration() -> dict:
     return analytics.get_market_narration()
 
+@app.post("/api/cache/clear")
+def cache_clear() -> dict:
+    """Kosongkan cache analitik in-process (dipakai serve loop tiap refresh)."""
+    return {"cleared": analytics.clear_research_cache()}
+
 
 @app.get("/api/valuation", response_model=ValuationResponse)
 def valuation() -> dict:
@@ -314,6 +336,27 @@ def quality_duplicates() -> dict:
 
 
 # --------------------------------------------------------------- research UI
+
+
+@app.get("/api/signals/track", response_model=SignalTrack)
+def signals_track() -> dict:
+    """Track record sinyal BUY/SELL: hit-rate, forward return, abnormal vs pasar.
+
+    Statistik dipecah per jenis sinyal, horizon, dan regime IHSG saat sinyal
+    terbentuk — supaya "sinyal ini benar-benar berguna?" terjawab dengan angka,
+    bukan opini. Log diisi job harian (`idx signal-log`) atau backfill otomatis.
+    """
+    return analytics.get_signal_track()
+
+
+@app.get("/api/sentiment", response_model=SentimentResponse)
+def sentiment(limit: int = Query(default=15, ge=1, le=50)) -> dict:
+    """Sentimen posisi & aliran dari data tersimpan (arus asing + buku intraday).
+
+    Bukan sentimen berita: skornya dihitung dari jejak transaksi yang sudah kita
+    punya, jadi bisa diverifikasi dan tidak butuh sumber baru.
+    """
+    return analytics.get_sentiment(limit=limit)
 
 
 @app.get("/api/stocks/{code}/events")

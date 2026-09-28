@@ -39,6 +39,34 @@ class SessionMovers(BaseModel):
     top_gainers: list[Mover]
     top_losers: list[Mover]
 
+class LeaderRow(BaseModel):
+    code: str
+    name: str | None = None
+    close: float | None = None
+    percent: float | None = None
+    volume: float | None = None
+    value: float | None = None
+    frequency: float | None = None
+
+class MarketLeaders(BaseModel):
+    metric: str
+    source: str  # "intraday" | "eod"
+    date: str | None = None
+    captured_at: str | None = None
+    rows: list[LeaderRow]
+
+class BrokerLeaderRow(BaseModel):
+    broker_code: str
+    broker_name: str | None = None
+    volume: float | None = None
+    value: float | None = None
+    frequency: float | None = None
+
+class TopBrokers(BaseModel):
+    date: str | None = None
+    captured_at: str | None = None
+    rows: list[BrokerLeaderRow]
+
 
 class WatchlistRow(BaseModel):
     code: str
@@ -81,6 +109,107 @@ class PriceBar(BaseModel):
     low: float | None = None
     close: float | None = None
     volume: float | None = None
+
+
+class SignalTrackStat(BaseModel):
+    """Statistik track record satu irisan (signal x regime x horizon).
+
+    ``mean_abnormal`` = forward return dikurangi return pasar equal-weight pada
+    window yang sama; ``avg_mfe``/``avg_mae`` = excursion rata-rata (kenaikan
+    terbaik / penurunan terburuk) selama horizon.
+    """
+
+    signal: str
+    regime: str | None = None
+    horizon: int
+    n: int
+    hit_rate: float | None = None
+    mean_fwd: float | None = None
+    median_fwd: float | None = None
+    mean_abnormal: float | None = None
+    t_stat: float | None = None
+    avg_mfe: float | None = None
+    avg_mae: float | None = None
+
+
+class SignalTrackRecent(BaseModel):
+    """Satu sinyal terbaru dengan return yang sudah terealisasi."""
+
+    code: str
+    date: str
+    signal: str
+    close: float | None = None
+    fwd_5: float | None = None
+    fwd_10: float | None = None
+    fwd_21: float | None = None
+
+
+class SentimentItem(BaseModel):
+    """Satu emiten di daftar sorotan sentimen (akumulasi / distribusi).
+
+    ``score`` = skor aliran+buku ``-1..+1``; ``reasons`` = alasan terbaca yang
+    bisa dipakai UI. ``ob_*`` null bila capture order-book tidak tersedia.
+    """
+
+    code: str
+    name: str | None = None
+    close: float | None = None
+    percent: float | None = None
+    value: float | None = None
+    foreign_net: float | None = None
+    foreign_net_pct: float | None = None
+    foreign_rank: float | None = None
+    ob_imbalance: float | None = None
+    ob_absorption: float | None = None
+    score: float
+    label: str
+    reasons: list[str]
+
+
+class SentimentMarket(BaseModel):
+    """Gauge sentimen pasar 0..100 dari breadth + IHSG + intensitas asing."""
+
+    score: float
+    label: str
+    components: dict[str, float]
+    breadth_up: float | None = None
+    foreign_breadth: float | None = None
+    up: int = 0
+    down: int = 0
+    flat: int = 0
+    index_percent: float | None = None
+    total_value: float | None = None
+    total_foreign_net: float | None = None
+    foreign_to_value: float | None = None
+
+
+class SentimentResponse(BaseModel):
+    """Sentimen posisi/aliran dari data tersimpan (bukan berita)."""
+
+    as_of: str | None = None
+    generated_at: str | None = None
+    market: SentimentMarket
+    accumulation: list[SentimentItem]
+    distribution: list[SentimentItem]
+    stats: dict[str, int]
+    weights: dict[str, float]
+    orderbook_available: bool = False
+    disclaimer: str | None = None
+
+
+class SignalTrack(BaseModel):
+    """Track record sinyal BUY/SELL (point-in-time, entry T+1)."""
+
+    generated_at: str | None = None
+    signals: int
+    buy: int = 0
+    sell: int = 0
+    first_date: str | None = None
+    last_date: str | None = None
+    horizons: list[int]
+    overall: list[SignalTrackStat]
+    by_regime: list[SignalTrackStat]
+    recent: list[SignalTrackRecent]
 
 
 class IndicatorBar(PriceBar):

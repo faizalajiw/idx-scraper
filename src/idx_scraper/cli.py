@@ -244,6 +244,44 @@ def _job_broker_eod() -> None:
         print(f"[err] broker summary job: {e}", file=sys.stderr)
 
 
+def _job_signal_log() -> None:
+    """Rekam sinyal BUY/SELL hari bursa terakhir ke research.signal_log.
+
+    16:25 WIB — setelah close resmi IHSG + regime harian, supaya kolom regime
+    ikut terisi. Idempoten per (code, trade_date); aman dijalankan ulang.
+    """
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from .research.signal_log import load_log, record_recent
+
+        # Window 1 bulan: cukup menutup koreksi data telat, jauh lebih murah
+        # daripada menghitung ulang 18 bulan tiap hari.
+        n = record_recent(dsn, months=1)
+        log = load_log(dsn)
+        last = str(log["date"].max().date()) if not log.empty else "-"
+        print(
+            f"[{datetime.now(WIB).isoformat()}] jejak sinyal tersimpan: "
+            f"{n} baris (sinyal terakhir {last})"
+        )
+    except Exception as e:
+        print(f"[err] jejak sinyal job: {e}", file=sys.stderr)
+
+
+def cmd_signal_log(args) -> None:
+    """Backfill + tampilkan track record sinyal (jejak sinyal)."""
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        return
+    from .research.signal_log import backfill, evaluate, print_report
+
+    written = backfill(dsn, months=args.months)
+    print(f"[ok] {written} baris sinyal ditulis ke research.signal_log")
+    print_report(evaluate(dsn, horizons=tuple(args.k)))
+
+
 def cmd_ic(args) -> None:
     """Run IC analysis manual + simpan histori bobot faktor."""
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
@@ -258,12 +296,12 @@ def cmd_ic(args) -> None:
 
 
 def _job_index_eod_close() -> None:
-    """Tulis close resmi IHSG (Yahoo ^JKSE daily) tiap hari bursa jam 16:10 WIB.
+    """Tulis close resmi IHSG dari IDX live tiap hari bursa jam 16:10 WIB.
 
-    Yahoo daily close baru final beberapa menit setelah closing auction 16:00;
-    snapshot polling terakhir (mis. 15:59) biasanya selisih beberapa poin dari
-    close resmi. Job ini menimpanya lewat snapshot EOD idempotent + mengisi
-    index_summary_daily (seri harian untuk RRG/benchmark).
+    Sumber = IDX GetIndexList (Current = close resmi pasca closing auction),
+    bukan Yahoo — biar angka IHSG di dashboard sama persis dengan idx.co.id.
+    Snapshot polling terakhir (mis. 15:59) ditimpa lewat baris idempotent
+    captured_at 16:00 WIB + isi index_summary_daily (seri harian benchmark).
     """
     if not _is_market_hours() and datetime.now(WIB).weekday() >= 5:
         return  # weekend guard (cron sudah bursa-only, ini double safety)
@@ -271,11 +309,11 @@ def _job_index_eod_close() -> None:
     if not dsn:
         return
     try:
-        from scripts.backfill_index_eod import backfill_index_eod
+        from scripts.backfill_index_eod_idx import backfill_index_eod_idx
 
-        upserted, snapshots = backfill_index_eod(dsn, days=10)
+        upserted, snapshots = backfill_index_eod_idx(dsn)
         print(
-            f"[{datetime.now(WIB).isoformat()}] index EOD close — "
+            f"[{datetime.now(WIB).isoformat()}] index EOD close (IDX live) — "
             f"upsert={upserted}, snapshot baru={snapshots}"
         )
     except Exception as e:
@@ -296,6 +334,50 @@ def _job_eod_full(client: IDXClient, storage) -> None:
             pass
     print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
     _ingest_eod_research(rows)
+
+def _clear_api_cache() -> None:
+    """Flush the API in-process analytic cache so menus show fresh data at once.
+
+    The API is a separate process; cache lives there. Best-effort — kalau API
+    sedang mati, refresh berikutnya tetap jalan (TTL 1 jam sebagai jaring).
+    """
+    base = os.getenv("IDX_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{base}/api/cache/clear", method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        print(f"[{datetime.now(WIB).isoformat()}] cache analitik dikosongkan")
+    except Exception as e:
+        print(f"[warn] gagal clear cache API: {e}", file=sys.stderr)
+
+def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: bool) -> None:
+    """Satu siklus refresh pipeline untuk 8 menu (Narasi/Screener/Valuasi/Hold
+    Check/Jejak Sinyal/Foreign Flow/Sentimen/Sektor).
+
+    ``do_eod`` True hanya di close sesi hari bursa (ada data EOD pasar hari ini);
+    pra-buka & akhir pekan cukup recompute + koreksi IHSG dari Yahoo + clear
+    cache. Semua sub-job idempoten & dibungkus try/except supaya satu gagal
+    tidak menghentikan yang lain. Sengaja TIDAK dijaga _is_market_hours().
+    """
+    print(f"[{datetime.now(WIB).isoformat()}] pipeline refresh — {label}")
+    if do_eod:
+        try:
+            _job_eod_full(client, storage)
+        except Exception as e:
+            print(f"[err] refresh EOD: {e}", file=sys.stderr)
+    for name, fn in (
+        ("index EOD close", _job_index_eod_close),
+        ("regime harian", _job_regime_daily),
+        ("jejak sinyal", _job_signal_log),
+        ("broker summary", _job_broker_eod),
+    ):
+        try:
+            fn()
+        except Exception as e:
+            print(f"[err] refresh {name}: {e}", file=sys.stderr)
+    _clear_api_cache()
 
 
 def _ingest_eod_research(rows) -> None:
@@ -567,42 +649,58 @@ def cmd_serve(args) -> None:
             args=[client, storage, watchlist],
             id="wl",
         )
-    # EOD full market snapshot, 5 menit setelah tiap penutupan sesi (WIB, hari bursa)
-    # Sesi I close: Sen-Kam 12:00 -> fetch 12:05 ; Jum 11:30 -> fetch 11:35
+    # ------------------------------------------------------------------
+    # Refresh pipeline 8 menu (Narasi/Screener/Valuasi/Hold Check/Jejak
+    # Sinyal/Foreign Flow/Sentimen/Sektor) pada jadwal WIB yang diminta.
+    # Semua job ini SENGAJA bypass _is_market_hours() dan clear cache API.
+    #   - Sen-Jum 08:45  pra-pembukaan (waktu input) -> recompute + clear cache
+    #   - Sen-Kam 12:00  close Sesi I  -> EOD + recompute
+    #   - Jum     11:30  close Sesi I  -> EOD + recompute
+    #   - Sen-Jum 16:00  close Sesi II -> EOD + recompute (offset kecil utk Yahoo)
+    #   - Sab-Min 08:45 & 16:00        -> recompute + clear cache (tanpa EOD)
+    # ------------------------------------------------------------------
+    def _refresh(label: str, do_eod: bool):
+        return dict(func=_job_pipeline_refresh, trigger="cron",
+                    args=[client, storage], kwargs={"label": label, "do_eod": do_eod})
+
+    # Pra-pembukaan Sen-Jum 08:45 — recompute + clear cache (belum ada EOD baru).
     scheduler.add_job(
-        _job_eod_full, "cron", day_of_week="mon-thu", hour=12, minute=5,
-        args=[client, storage], id="eod_s1",
+        **_refresh("pra-buka Sen-Jum 08:45", do_eod=False),
+        day_of_week="mon-fri", hour=8, minute=45, id="refresh_preopen",
+    )
+    # Close Sesi I: Sen-Kam 12:00, Jum 11:30 — tarik EOD + recompute.
+    scheduler.add_job(
+        **_refresh("close Sesi I Sen-Kam 12:00", do_eod=True),
+        day_of_week="mon-thu", hour=12, minute=0, id="refresh_s1",
     )
     scheduler.add_job(
-        _job_eod_full, "cron", day_of_week="fri", hour=11, minute=35,
-        args=[client, storage], id="eod_s1_fri",
+        **_refresh("close Sesi I Jum 11:30", do_eod=True),
+        day_of_week="fri", hour=11, minute=30, id="refresh_s1_fri",
     )
-    # Sesi II close: 15:49:59 semua hari -> fetch 15:55
+    # Close Sesi II Sen-Jum 16:00 — offset 5 menit supaya Yahoo daily bar final.
     scheduler.add_job(
-        _job_eod_full, "cron", day_of_week="mon-fri", hour=15, minute=55,
-        args=[client, storage], id="eod_s2",
+        **_refresh("close Sesi II Sen-Jum 16:00", do_eod=True),
+        day_of_week="mon-fri", hour=16, minute=5, id="refresh_s2",
     )
-    # Close resmi IHSG dari Yahoo daily — jam 16:10 WIB (closing auction 16:00,
-    # Yahoo butuh beberapa menit supaya bar daily-nya final).
+    # Susulan +15 menit — jaring bar harian yang telat final dari Yahoo.
     scheduler.add_job(
-        _job_index_eod_close, "cron", day_of_week="mon-fri", hour=16, minute=10,
-        id="index_eod_close",
+        **_refresh("close Sesi II susulan Sen-Jum 16:20", do_eod=True),
+        day_of_week="mon-fri", hour=16, minute=20, id="refresh_s2_late",
+    )
+    # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
+    scheduler.add_job(
+        **_refresh("akhir pekan 08:45", do_eod=False),
+        day_of_week="sat,sun", hour=8, minute=45, id="refresh_weekend_am",
+    )
+    scheduler.add_job(
+        **_refresh("akhir pekan 16:00", do_eod=False),
+        day_of_week="sat,sun", hour=16, minute=0, id="refresh_weekend_pm",
     )
     # IC analysis bulanan — hari pertama kerja tiap bulan, 06:30 WIB (pra-buka).
     # Bobot composite hold-check otomatis mengikuti hasil terbaru.
     scheduler.add_job(
         _job_monthly_ic, "cron", day="1", hour=6, minute=30,
         id="monthly_ic",
-    )
-    # Histori regime — tiap hari bursa 16:20 WIB (setelah close resmi IHSG 16:10).
-    scheduler.add_job(
-        _job_regime_daily, "cron", day_of_week="mon-fri", hour=16, minute=20,
-        id="regime_daily",
-    )
-    # Broker summary EOD (bandarmologi) — 16:30 WIB, idempoten per tanggal.
-    scheduler.add_job(
-        _job_broker_eod, "cron", day_of_week="mon-fri", hour=16, minute=30,
-        id="broker_eod",
     )
     # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
     # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).
@@ -633,7 +731,8 @@ def cmd_serve(args) -> None:
     print(f"watchlist: {watchlist[:10]}...")
     print(f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
           f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
-    print("EOD full market — Sesi I: Sen-Kam 12:05 / Jum 11:35 WIB, Sesi II: 15:55 WIB")
+    print("refresh pipeline 8 menu — Sen-Jum 08:45, Sen-Kam 12:00 / Jum 11:30, "
+          "Sen-Jum 16:05 & 16:20; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
     try:
         scheduler.start()
     except KeyboardInterrupt:
@@ -660,6 +759,9 @@ def main() -> None:
     p_alerts.add_argument("--test", action="store_true", help="test koneksi bot (getMe) lalu keluar")
     p_ic = sub.add_parser("ic", help="run IC analysis + simpan bobot faktor ke research.factor_ic_history")
     p_ic.add_argument("--k", type=int, nargs="+", default=[5, 10], help="horizon hari bursa (default: 5 10)")
+    p_slog = sub.add_parser("signal-log", help="backfill + tampilkan track record sinyal BUY/SELL")
+    p_slog.add_argument("--months", type=int, default=18, help="panjang histori (default: 18 bulan)")
+    p_slog.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
     sub.add_parser("serve", help="start continuous polling loop")
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
@@ -679,6 +781,8 @@ def main() -> None:
         cmd_alerts(args)
     elif args.command == "ic":
         cmd_ic(args)
+    elif args.command == "signal-log":
+        cmd_signal_log(args)
     elif args.command == "watchlist":
         client = IDXClient()
         storage = get_storage_from_env()

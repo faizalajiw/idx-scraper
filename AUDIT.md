@@ -148,3 +148,91 @@ menampilkannya** (dead API). Diselesaikan:
 Verifikasi: ruff bersih · pytest 161 lulus · tsc bersih · next build 14 route ·
 runtime (API :8011 + web :3100) — endpoint mengembalikan `estimated: true` dan
 kartu ter-render di `/stock/ASLI` dengan disclaimer.
+
+---
+
+## 7. Riset keputusan jual/beli — jejak sinyal & sentimen (2026-09-28)
+
+Dua fitur pertama dari peta jalan riset keputusan. Prinsip yang dipegang:
+hanya memakai data yang sudah tersimpan, point-in-time, dan mengukur — bukan
+menambah klaim.
+
+### 7.1 Jejak Sinyal (track record sinyal)
+
+Sinyal BUY/SELL sebelumnya tidak pernah diukur kinerjanya. Sekarang setiap
+sinyal dicatat lalu dinilai di close T+1 — konsisten dengan IC analysis dan
+backtest.
+
+| File | Fungsi |
+|---|---|
+| `src/idx_scraper/research/signal_log.py` | Baru. `compute_signal_rows` (pure, PIT, filter warmup + likuiditas + SELL-palsu-ex-dividend), `backfill`/`record_recent` (recompute rentang dalam satu transaksi), `attach_outcomes` (fwd/mfe/mae/abnormal vs pasar), `summarize_outcomes`/`evaluate`, CLI `python -m idx_scraper.research.signal_log`. |
+| `sql/signal_log.sql` | Baru. DDL `research.signal_log` (PK `code, trade_date`, idempoten). |
+| `tests/test_signal_log.py` | Baru, 17 test: invariant vs `signal_series`, warmup, no-look-ahead, guard dividen, gate likuiditas, aritmetika fwd/MFE/MAE/abnormal, agregasi. |
+| `src/idx_scraper/api/analytics.py` | `get_signal_track()` — backfill malas bila log kosong, cache 1 jam. |
+| `src/idx_scraper/api/schemas.py` | `SignalTrack`, `SignalTrackStat`, `SignalTrackRecent`. |
+| `src/idx_scraper/api/app.py` | `GET /api/signals/track`. |
+| `src/idx_scraper/cli.py` | Subcommand `idx signal-log`; job harian `_job_signal_log` 16:25 WIB (setelah regime 16:20, window 1 bulan). |
+| `idx-web/app/jejak-sinyal/page.tsx` | Halaman baru: ringkasan, kinerja per sinyal (pilih horizon), per regime, sinyal terbaru. |
+| `idx-web/lib/{types,hooks}.ts`, `components/Sidebar.tsx` | Tipe, `useSignalTrack`, menu "Jejak Sinyal". |
+
+**Temuan temuan data nyata** (18 bulan backfill di DB lokal): 84.331 sinyal
+(34.443 BUY / 49.888 SELL). BUY h5: hit 42%, mean +0,32%, abnormal +0,30%
+(t=3,9); BUY h21 mean −0,44%. SELL h21: mean +0,58% tapi abnormal −0,23% —
+artinya SELL tidak lebih buruk dari pasar secara material. Ini justru output
+yang diinginkan: sinyal kini punya angka, bukan asumsi. Catatan jujur: sebagian
+besar sinyal ber-regime "TIDAK DIKETAHUI" karena `regime_daily` baru terisi
+belakangan — akan terisi sendiri seiring histori regime memanjang.
+
+### 7.2 Sentimen aliran & buku (`/sentimen`)
+
+Belum ada lapisan sentimen sama sekali di repo. Alih-alih menambah sumber
+berita, versi ini mengekstrak "sentimen" dari jejak transaksi yang sudah ada.
+
+| File | Fungsi |
+|---|---|
+| `src/idx_scraper/research/sentiment.py` | Baru. Skor emiten `-1..+1` dari **persentil cross-sectional arus asing** + ketimpangan buku + absorption; gauge pasar `0..100` dari breadth harga + IHSG + breadth arus asing; `load_latest` memilih hari EOD terakhir yang cukup lengkap. |
+| `tests/test_sentiment.py` | Baru, 21 test: persentil, pemetaan komponen, renormalisasi bobot, band label, gauge pasar (risk-on/off), agregasi `build()`. |
+| `src/idx_scraper/api/analytics.py` | `get_sentiment()` — memakai `_latest_orderbook_factors()` yang sudah ada, cache 1 jam. |
+| `src/idx_scraper/api/schemas.py`, `app.py` | `SentimentResponse` + `GET /api/sentiment` (param `limit`). |
+| `idx-web/app/sentimen/page.tsx` | Halaman baru: gauge pasar, statistik, dua daftar sorotan (akumulasi/distribusi) dengan alasan per emiten. |
+| `idx-web/lib/{types,hooks}.ts`, `components/Sidebar.tsx` | Tipe, `useSentiment`, menu "Sentimen" di grup Flow. |
+
+**Dua koreksi desain yang muncul dari data nyata** (keduanya karena memeriksa
+DB, bukan berasumsi):
+
+1. **Ambang absolut salah kalibrasi.** `foreign_net / value` di IDX sangat kecil
+   (p50 ≈ −0,008%, |p90| ≈ 0,1%). Skala tetap membuat semua emiten "NETRAL"
+   (833 dianalisis, 0 sorotan). Diganti persentil cross-sectional — bebas
+   konstanta ajaib dan sebanding antar emiten, idiom yang sama dengan
+   `research/composite.py`.
+2. **Hari EOD terakhir bisa parsial.** Pada 2026-09-25 seluruh baris punya
+   `value`/`foreign_net` NULL, sehingga `max(trade_date)` menghasilkan sentimen
+   kosong. `load_latest` kini memilih hari terakhir yang minimal separuh
+   barisnya bernilai, dan jatuh ke 2026-09-24 pada data sekarang.
+
+Sumber: arus asing (`research.latest_pit`), order-book (`research.orderbook`
+dari snapshot `stock_quotes`), breadth. **Tidak ada scraping baru** dan tidak
+ada look-ahead: snapshot intraday hari T memang sudah tertutup pada close T.
+
+### 7.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src tests scripts` | ✅ bersih |
+| `pytest` (backend) | ✅ 289 lulus (161 sebelum sesi ini) |
+| `tsc --noEmit` | ✅ bersih |
+| `next build` | ✅ sukses, 18 route (dari 14) |
+| Runtime nyata (uvicorn :8124 + Postgres berisi 232k baris) | ✅ `GET /api/signals/track` & `GET /api/sentiment` 200, payload lengkap; backfill 84.331 baris; `/jejak-sinyal` & `/sentimen` ter-render |
+
+### 7.4 Sisa peta jalan (belum dikerjakan)
+
+1. `/keputusan` — Ruang Keputusan: satu verdict per emiten (sinyal + komposit +
+   base rate event + regime + sentimen) dengan level pembatalan.
+2. `/sentimen` lanjutan — sentimen berita (RSS/leksikon/LLM), dijadikan
+   penyesuai kecil seperti lapisan faktor, bukan penentu utama.
+3. `/event` pasar, Screener jadi Signal Screener, perluasan aturan alert,
+   `/risiko` (sizing & stop).
+
+Catatan operasional: job jejak sinyal dan tabel `research.signal_log` baru
+muncul setelah `idx serve`/`idx signal-log` dijalankan; endpoint tetap aman
+(backfill malas) bila tabel belum ada.
