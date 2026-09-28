@@ -9,7 +9,7 @@ Near-real-time Indonesia Stock Exchange (IDX) data scraper for algorithmic resea
 ### 1. Install & Setup
 
 ```bash
-cd /d/Project/idx-scraper
+cd /d/Project/market-labs/idx-scraper
 .venv\Scripts\python.exe -m pip install -e .
 ```
 
@@ -102,7 +102,7 @@ memakai cookie Cloudflare yang sudah lolos challenge.
 - Run pertama kadang gagal `Execution context destroyed` (halaman sedang menjalani
   challenge) → cukup **ulangi sekali**, biasanya langsung berhasil.
 
-## Data Sources
+## Storage
 
 
 ### SQLite (default)
@@ -125,6 +125,18 @@ SUPABASE_DB_URL=postgresql://postgres.REF:PASSWORD@REGION.pooler.supabase.com:65
 
 **Penting:** Pakai **Transaction pooler** (port 6543), bukan direct (5432) — koneksi lebih stabil untuk polling.
 
+### Skema tabel inti
+
+| Tabel | Isi |
+|---|---|
+| `raw_eod` | Source of truth EOD mentah dari IDX `GetStockSummary` |
+| `prices_pit` / `research.prices_asof_adj` | Harga point-in-time (bitemporal, bebas look-ahead) + adjusted |
+| `index_quotes` / `index_summary_daily` | Kuotasi & close resmi IHSG (IDX-live) |
+| `research.broker_daily` | Broker summary EOD |
+| `research.signal_log` | Jejak sinyal BUY/SELL + forward return |
+| `research.factor_ic_history` | Bobot faktor hasil analisis IC |
+| `research.*` | Layer PIT: faktor, regime, event study, sentimen, order book |
+
 ## CLI Commands
 
 ```bash
@@ -134,8 +146,10 @@ python -m idx_scraper.cli eod [YYYYMMDD]    # fetch EOD summary (default: today)
 python -m idx_scraper.cli seed [--days N]   # seed historical OHLCV from Yahoo Finance
 python -m idx_scraper.cli signals           # show BUY/SELL signals from stored data
 python -m idx_scraper.cli signal-log        # backfill + tampilkan track record sinyal (jejak sinyal)
+python -m idx_scraper.cli ic [--days N]     # analisis IC + simpan bobot faktor ke research.factor_ic_history
 python -m idx_scraper.cli alerts [--test]   # kirim alert Telegram utk sinyal berubah
 python -m idx_scraper.cli watchlist         # fetch current prices for watchlist
+python -m idx_scraper.cli source [YAHOO|IDX]  # lihat / set sumber data live
 ```
 
 ### Backfill (scripts)
@@ -143,6 +157,11 @@ python -m idx_scraper.cli watchlist         # fetch current prices for watchlist
 ```bash
 python -m scripts.backfill_broker_eod --date YYYYMMDD   # broker summary EOD → research.broker_daily
 python -m scripts.backfill_index_eod_idx                # close resmi IHSG dari IDX-live → index_quotes + index_summary_daily
+python -m scripts.backfill_corp_actions                 # aksi korporasi (split, bonus, rights, dividen)
+python -m scripts.backfill_raw_eod                      # isi ulang raw_eod dari sumber
+python -m scripts.backfill_eod_yahoo                    # historis OHLCV dari Yahoo (.JK)
+python -m scripts.intraday_capture                      # snapshot intraday order book
+python -m scripts.refresh_sector_map                    # perbarui pemetaan sektor emiten
 ```
 
 > `backfill_index_eod_idx` menggantikan `backfill_index_eod` (Yahoo) sebagai sumber
@@ -203,11 +222,25 @@ API backend yang dikonsumsi frontend:
 uvicorn idx_scraper.api.app:app --port 8000
 ```
 
-Endpoint (read-only): `/api/market/*`, `/api/screener`, `/api/hold-check`,
-`/api/valuation`, `/api/stocks/{code}/*`, `/api/foreign-flow`, `/api/sectors[/rrg]`,
-`/api/quality/*`, `/api/signals/track` (track record sinyal), `/api/sentiment`
-(sentimen aliran & buku), plus simulator backtest point-in-time:
-`GET /api/backtest/config` dan `POST /api/backtest/run`.
+Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
+
+- **Market:** `/api/market/overview`, `/api/market/regime`, `/api/market/regime/history`,
+  `/api/market/session-movers`, `/api/market/leaders`, `/api/market/top-brokers`,
+  `/api/market/narration`
+- **Watchlist & sinyal:** `/api/watchlist` (GET/POST), `/api/signals`,
+  `/api/signals/track` (track record sinyal), `/api/hold-check`
+- **Per-emiten:** `/api/stocks/{code}/history`, `/api/stocks/{code}/technical`,
+  `/api/stocks/{code}/brokers`, `/api/stocks/{code}/events`, `/api/stocks/{code}/dividends`
+- **Analitik:** `/api/screener`, `/api/valuation`, `/api/foreign-flow`,
+  `/api/sectors`, `/api/sectors/rrg`, `/api/sentiment`, `/api/factors/overview`
+- **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
+  `/api/corporate-actions`
+- **Kualitas data:** `/api/quality/overview`, `/api/quality/quarantine`,
+  `/api/quality/quarantine-reasons`, `/api/quality/coverage-gaps`,
+  `/api/quality/thin-days`, `/api/quality/corp-actions`, `/api/quality/duplicates`
+- **Alert Telegram:** `/api/alerts` (GET/POST/DELETE), `/api/alerts/test`
+- **Backtest:** `GET /api/backtest/config`, `POST /api/backtest/run`
+- **Utilitas:** `/health`, `POST /api/cache/clear`
 
 Backtest memakai layer `research.prices_asof_adj` (bitemporal, bebas look-ahead)
 dan memperhitungkan biaya nyata: komisi per sisi, pajak jual, slippage, serta cap
@@ -234,12 +267,16 @@ src/idx_scraper/
 ├── models.py        # Pydantic data models
 ├── storage.py       # SQLite / Supabase storage layer
 ├── analysis.py      # Technical indicators (MA, RSI, Bollinger, MACD) + signals
-├── research/        # layer PIT: faktor & IC, event study, regime, jejak sinyal, sentimen
-├── cli.py           # CLI entry point + scheduler
+├── research/        # layer PIT: composite, factors, ic, regime, events,
+│                    #   signal_log, sentiment, orderbook
+├── cli.py           # CLI entry point + scheduler (APScheduler, WIB)
 ├── api/             # FastAPI read-only API untuk frontend idx-web
+│                    #   (analytics, dividends, quality, simulation, alerts, ...)
 └── __init__.py
-scripts/             # utilitas DB + backfill (broker EOD, index EOD IDX-live)
-sql/                 # schema Postgres
+scripts/             # utilitas DB + backfill (broker/index/corp-actions/raw EOD,
+│                    #   intraday capture, sector map, migrasi Postgres)
+sql/                 # schema Postgres + PIT functions + signal_log/intraday schema
+tests/               # test signal_log, sentiment, dll
 ```
 
 **Key features:**
