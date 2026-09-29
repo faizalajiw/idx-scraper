@@ -30,6 +30,7 @@ from .schemas import (
     BacktestRequest,
     BacktestResult,
     BrokerActivity,
+    BrokerFlow,
     CorpActionRow,
     CorpActionSummary,
     CoverageGaps,
@@ -138,6 +139,19 @@ def market_leaders(
 def top_brokers(limit: int = Query(default=5, ge=1, le=50)) -> dict:
     """Top broker firm by traded value (EOD GetBrokerSummary)."""
     return services.get_top_brokers(limit)
+
+
+@app.get("/api/broker-flow", response_model=BrokerFlow)
+def broker_flow(
+    days: int = Query(default=20, ge=1, le=120, description="Jendela tren riwayat (hari kalender)"),
+    top_n: int = Query(default=5, ge=1, le=20, description="Firma teratas per kategori"),
+) -> dict:
+    """Komposisi nilai transaksi broker per kategori: asing / lokal / BUMN.
+
+    Komposisi turnover, bukan net buy/sell (IDX tidak menyediakan split
+    beli/jual per firma). Sumber: research.broker_daily.
+    """
+    return analytics.get_broker_flow(days=days, top_n=top_n)
 
 
 @app.get("/api/broker-activity", response_model=BrokerActivity)

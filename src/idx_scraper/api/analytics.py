@@ -1215,6 +1215,100 @@ def get_signal_track() -> dict[str, Any]:
     return out
 
 
+# --------------------------------------------------------------- broker flow (kategori)
+
+
+def get_broker_flow(days: int = 20, top_n: int = 5) -> dict[str, Any]:
+    """Komposisi nilai transaksi per kategori broker: asing / lokal / BUMN.
+
+    Sumber: ``research.broker_daily`` (EOD per firma, seluruh pasar). Kategori
+    dari map kurasi kode broker (``idx_scraper.broker_flow``) — kode asing
+    (UBS, CGS, JPM, ...) dipisah dari lokal, dan sekuritas BUMN (Mandiri, BNI,
+    BRI Danareksa, Bahana) dipisah sendiri.
+
+    Yang diukur adalah KOMPOSISI (turnover share), bukan net buy/sell: IDX
+    tidak mempublikasikan split beli/jual per firma di endpoint publik.
+
+    Returns ``date, captured_at, n_brokers, total_value, categories,
+    top, history, classification``. Tabel kosong -> struktur kosong (tidak
+    pernah raise) supaya UI menampilkan empty state.
+    """
+    days = max(1, min(days, 120))
+    top_n = max(1, min(top_n, 20))
+    cache_key = f"broker_flow:{days}:{top_n}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..broker_flow import (
+        CATEGORIES,
+        classify_broker,
+        composition,
+        composition_series,
+        top_brokers_by_category,
+    )
+
+    empty: dict[str, Any] = {
+        "date": None,
+        "captured_at": None,
+        "n_brokers": 0,
+        "total_value": None,
+        "categories": {c: {"value": None, "share": None, "n_brokers": 0} for c in CATEGORIES},
+        "top": {c: [] for c in CATEGORIES},
+        "history": [],
+        "classification": [],
+    }
+    with get_cursor() as cur:
+        cur.execute("select to_regclass('research.broker_daily') as t")
+        reg = cur.fetchone()
+        if not reg or not reg["t"]:
+            return empty
+        cur.execute(
+            """select trade_date as d, broker_code, broker_name, value, captured_at
+               from research.broker_daily
+               where trade_date >= (select max(trade_date) from research.broker_daily) - %s::int
+                 and broker_code is not null
+               order by trade_date""",
+            (days,),
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        return empty
+
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    captured: dict[str, Any] = {}
+    for r in rows:
+        d = str(r["d"])
+        by_date.setdefault(d, []).append(r)
+        if r.get("captured_at") and (captured.get(d) is None or r["captured_at"] > captured[d]):
+            captured[d] = r["captured_at"]
+
+    latest = max(by_date)
+    comp = composition(by_date[latest])
+    tops = top_brokers_by_category(by_date[latest], top_n)
+
+    out: dict[str, Any] = {
+        "date": latest,
+        "captured_at": captured.get(latest).isoformat() if captured.get(latest) else None,
+        "n_brokers": comp["n_brokers"],
+        "total_value": comp["total_value"],
+        "categories": comp["categories"],
+        "top": tops,
+        "history": composition_series(by_date),
+        "classification": [
+            {
+                "broker_code": str(r["broker_code"]),
+                "broker_name": r.get("broker_name"),
+                "category": classify_broker(str(r["broker_code"])),
+            }
+            for r in sorted(by_date[latest], key=lambda x: x.get("value") or 0, reverse=True)
+        ],
+    }
+    _research_cache_put(cache_key, out)
+    return out
+
+
 # --------------------------------------------------------------- broker activity
 
 # Jendela histori yang dibangun ulang untuk faktor aliran. 260 hari kalender

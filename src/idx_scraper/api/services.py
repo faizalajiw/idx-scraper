@@ -452,6 +452,8 @@ def get_top_brokers(limit: int = 5) -> dict[str, Any]:
         )
         rows = cur.fetchall()
     captured = max((r["captured_at"] for r in rows if r["captured_at"]), default=None)
+    from ..broker_flow import classify_broker  # map kurasi kode -> kategori
+
     return {
         "date": _norm_date(date),
         "captured_at": captured.isoformat() if captured else None,
@@ -462,6 +464,7 @@ def get_top_brokers(limit: int = 5) -> dict[str, Any]:
                 "volume": _f(r["volume"]),
                 "value": _f(r["value"]),
                 "frequency": _f(r["frequency"]),
+                "category": classify_broker(r["broker_code"]),
             }
             for r in rows
         ],

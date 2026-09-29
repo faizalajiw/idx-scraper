@@ -63,6 +63,8 @@ class BrokerLeaderRow(BaseModel):
     volume: float | None = None
     value: float | None = None
     frequency: float | None = None
+    # Kategori bandarmologi dari map kurasi kode (asing/lokal/bumn).
+    category: str | None = None
 
 class TopBrokers(BaseModel):
     date: str | None = None
@@ -268,6 +270,62 @@ class BrokerConcentration(BaseModel):
     cr5: float | None = None
     hhi: float | None = None
     top: list[BrokerConcentrationRow]
+
+
+class BrokerFlowCategory(BaseModel):
+    """Satu kategori broker: nilai transaksi + porsi pasar sesi terakhir."""
+
+    value: float | None = None
+    share: float | None = None
+    n_brokers: int = 0
+
+
+class BrokerFlowTopRow(BaseModel):
+    """Firma terbesar dalam satu kategori (porsi dihitung terhadap pasar)."""
+
+    broker_code: str
+    broker_name: str | None = None
+    value: float
+    share: float | None = None
+
+
+class BrokerFlowDay(BaseModel):
+    """Satu titik tren komposisi (bentuk pipih untuk chart)."""
+
+    date: str
+    total_value: float | None = None
+    asing_value: float = 0.0
+    lokal_value: float = 0.0
+    bumn_value: float = 0.0
+    asing_share: float | None = None
+    lokal_share: float | None = None
+    bumn_share: float | None = None
+
+
+class BrokerClassificationRow(BaseModel):
+    """Kategori satu broker pada sesi terakhir — untuk audit klasifikasi."""
+
+    broker_code: str
+    broker_name: str | None = None
+    category: str
+
+
+class BrokerFlow(BaseModel):
+    """Komposisi nilai transaksi per kategori broker (asing/lokal/BUMN).
+
+    Komposisi (turnover share), bukan net buy/sell — IDX tidak menyediakan
+    split beli/jual per firma. ``classification`` memaparkan kategori tiap
+    broker sesi terakhir supaya map kurasi bisa diaudit dari UI.
+    """
+
+    date: str | None = None
+    captured_at: str | None = None
+    n_brokers: int = 0
+    total_value: float | None = None
+    categories: dict[str, BrokerFlowCategory]
+    top: dict[str, list[BrokerFlowTopRow]]
+    history: list[BrokerFlowDay]
+    classification: list[BrokerClassificationRow]
 
 
 class BrokerActivityFactor(BaseModel):
