@@ -307,6 +307,131 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------- foreign flow per emiten
+
+
+def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_limit: int = 10) -> dict[str, Any]:
+    """Aliran asing satu emiten: tren harian, flip, dan pembanding sektor.
+
+    Sumber ``research.latest_pit`` (``foreign_net`` dalam SAHAM — dikali close
+    hari itu supaya rupiah). Agregasinya di modul pure
+    ``idx_scraper.foreign_flow`` (dites tanpa DB), query di sini hanya
+    menyiapkan baris ``{date, net_idr, buy_idr, sell_idr}``.
+
+    Pembanding sektor memakai map kurasi ``sector_for`` (pola yang sama dengan
+    peer di Aktivitas Broker): emiten di bucket fallback "Lainnya" tetap
+    dibandingkan dengan sesama isinya, tapi ditandai ``comparable=False``
+    supaya UI tidak mengklaim itu sektor sebenarnya.
+
+    Returns ``code, sector, comparable, days, flow, flip_summary, peers,
+    peer_rank``. Emiten tanpa data flow -> struktur dengan ``flow`` kosong
+    (tidak pernah raise) supaya UI menampilkan empty state.
+    """
+    days = max(5, min(days, 120))
+    peer_days = max(1, min(peer_days, 60))
+    peer_limit = max(3, min(peer_limit, 30))
+    code = code.upper()
+    cache_key = f"stock_foreign_flow:{code}:{days}:{peer_days}:{peer_limit}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..foreign_flow import (
+        daily_flow,
+        flip_summary as _flip_summary,
+        rank_in_peers,
+        sector_peer_flow,
+    )
+
+    empty: dict[str, Any] = {
+        "code": code,
+        "sector": sector_for(code),
+        "comparable": sector_for(code) != FALLBACK_SECTOR,
+        "date": None,
+        "flow": [],
+        "flip_summary": {
+            "last_flip": None,
+            "days_since_flip": None,
+            "current_streak": None,
+            "current_side": "flat",
+        },
+        "peers": [],
+        "peer_rank": {"rank": None, "count": 0, "median_sum": None},
+    }
+
+    with get_cursor() as cur:
+        # Tren emiten: N hari terakhir yang punya baris (close NULL -> baris
+        # dilewati; nilai flow NULL dibiarkan lewat agar hari terlihat kosong,
+        # bukan dianggap net 0).
+        cur.execute(
+            """select trade_date as date,
+                      foreign_net * close as net_idr,
+                      foreign_buy * close as buy_idr,
+                      foreign_sell * close as sell_idr
+               from (
+                   select * from research.latest_pit
+                   where code = %s and close is not null
+                   order by trade_date desc limit %s
+               ) t
+               order by trade_date""",
+            (code, days),
+        )
+        rows = cur.fetchall()
+
+        # Peer: emiten lain se-sektor, jendela pendek untuk pembanding.
+        sector = sector_for(code)
+        peer_days_map: dict[str, list[dict[str, Any]]] = {}
+        if rows:
+            cur.execute(
+                """select code, trade_date as date, foreign_net * close as net_idr
+                   from research.latest_pit
+                   where trade_date >= (select max(trade_date) from research.latest_pit) - %s::int
+                     and close is not null and foreign_net is not null
+                   order by trade_date""",
+                (peer_days * 4,),
+            )
+            for r in cur.fetchall():
+                c = str(r["code"]).upper()
+                if c == code or sector_for(c) != sector:
+                    continue
+                peer_days_map.setdefault(c, []).append(
+                    {"date": str(r["date"]), "net_idr": r["net_idr"]}
+                )
+
+    self_rows = [
+        {"date": str(r["date"]), "net_idr": r["net_idr"], "buy_idr": r["buy_idr"], "sell_idr": r["sell_idr"]}
+        for r in rows
+    ]
+    if not self_rows:
+        return empty
+
+    flow = daily_flow(self_rows)
+    peers = sector_peer_flow(self_rows, peer_days_map, days=peer_days)
+
+    # Batasi daftar yang ditampilkan, tapi emiten sendiri harus tetap terlihat.
+    shown = [p for p in peers if not p["is_self"]][:peer_limit]
+    if any(p["is_self"] for p in peers):
+        shown = sorted([p for p in peers if p["is_self"]] + shown, key=lambda x: x["net_sum"], reverse=True)
+    shown = [
+        {**p, "code": code if p["is_self"] else p["code"]}
+        for p in shown
+    ]
+
+    latest_date = flow[-1]["date"] if flow else None
+    out: dict[str, Any] = {
+        "code": code,
+        "sector": sector,
+        "comparable": sector != FALLBACK_SECTOR,
+        "date": latest_date,
+        "flow": flow,
+        "flip_summary": _flip_summary(flow),
+        "peers": shown,
+        "peer_rank": rank_in_peers(peers),
+    }
+    _research_cache_put(cache_key, out)
+    return out
+
+
 # --------------------------------------------------------------- sector analysis
 
 
@@ -1791,6 +1916,10 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
             "score": round(float(r["score"]), 1),
             "coverage": round(float(r["coverage"]), 2),
             "drivers": list(r["drivers"]),
+            # Baseline pasar hari itu — garis pembanding di chart timeline.
+            "market_median": round(float(r["market_median"]), 1)
+            if r.get("market_median") is not None and pd.notna(r["market_median"])
+            else None,
         }
         for _, r in history.iterrows()
     ]

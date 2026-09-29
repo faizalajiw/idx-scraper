@@ -56,6 +56,7 @@ from .schemas import (
     Signal,
     SignalTrack,
     StockBrokerActivity,
+    StockForeignFlow,
     StockBrokerSummary,
     TechnicalChart,
     ThinDay,
@@ -278,6 +279,22 @@ def stock_broker_activity(
 @app.get("/api/foreign-flow", response_model=ForeignFlow)
 def foreign_flow(days: int = Query(default=20, ge=1, le=120)) -> dict:
     return analytics.get_foreign_flow(days=days)
+
+
+@app.get("/api/stocks/{code}/foreign-flow", response_model=StockForeignFlow)
+def stock_foreign_flow(
+    code: str,
+    days: int = Query(default=30, ge=5, le=120, description="Jendela tren harian emiten (hari bursa)"),
+    peer_days: int = Query(default=10, ge=1, le=60, description="Jendela pembanding sektor"),
+    peer_limit: int = Query(default=10, ge=3, le=30, description="Maks peer yang ditampilkan"),
+) -> dict:
+    """Aliran asing satu emiten: tren harian, flip arah, dan peer sektor.
+
+    Net flow dalam rupiah (``foreign_net`` saham * close). Flip = hari tanda
+    net berubah vs hari non-nol sebelumnya. Peer sektor dari map kurasi;
+    ``comparable`` False menandakan bucket fallback "Lainnya".
+    """
+    return analytics.get_stock_foreign_flow(code.upper(), days=days, peer_days=peer_days, peer_limit=peer_limit)
 
 
 @app.get("/api/sectors/rrg", response_model=SectorRRG)

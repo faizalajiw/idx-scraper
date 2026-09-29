@@ -353,9 +353,12 @@ def composite_score_history(
     coverage DILEWATI (riwayatnya bolong), bukan diisi skor rekaan.
 
     ``panel``: panel multi-tanggal (kolom ``code``, ``date`` + kolom faktor).
-    Returns DataFrame ``date, score, coverage, drivers`` urut tanggal menaik.
+    Returns DataFrame ``date, score, coverage, drivers, market_median`` urut
+    tanggal menaik. ``market_median`` = median skor seluruh emiten yang diskor
+    HARI ITU — baseline "50 = median pasar" dalam angka nyata, untuk garis
+    pembanding di chart riwayat UI.
     """
-    cols = ["date", "score", "coverage", "drivers"]
+    cols = ["date", "score", "coverage", "drivers", "market_median"]
     active = eligible_factors(selected)
     if panel.empty or not active or lookback <= 0:
         return pd.DataFrame(columns=cols)
@@ -388,6 +391,9 @@ def composite_score_history(
                 "score": float(score.loc[i]),
                 "coverage": float(coverage.loc[i]),
                 "drivers": _drivers_for(contrib.loc[i], pct.loc[i], driver_count),
+                # Median aktual cross-section hari itu (nilai 50 sudah ditegaskan
+                # docs; ini angka nyatanya untuk garis pembanding di UI).
+                "market_median": round(float(score.median()), 1),
             }
         )
 

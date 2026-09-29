@@ -301,7 +301,8 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/foreign-flow`,
   `/api/sectors`, `/api/sectors/rrg`, `/api/sectors/rotation`, `/api/sentiment`,
   `/api/factors/overview`,
-  `/api/broker-activity`, `/api/broker-flow` (komposisi asing/lokal/BUMN)
+  `/api/broker-activity`, `/api/broker-flow` (komposisi asing/lokal/BUMN),
+  `/api/stocks/{code}/foreign-flow` (arus asing per emiten: tren, flip, peer sektor)
 - **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
   `/api/corporate-actions`
 - **Kualitas data:** `/api/quality/overview`, `/api/quality/quarantine`,

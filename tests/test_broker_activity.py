@@ -611,8 +611,19 @@ def test_breadth_threshold_is_above_market_median():
     assert BREADTH_THRESHOLD > 50.0
 
 
+def test_history_market_median_is_the_cross_section_median():
+    # Panel 2 emiten: median cross-section dua nilai percentile-rank.
+    hist = composite_score_history(
+        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA"
+    )
+    # _score_matrix pakai percentile rank -> dua emiten = {50, 100}; median 75.
+    assert hist["market_median"].tolist() == [75.0, 75.0]
+    # Kolom baru tidak mengubah skor/coverage yang sudah diuji test lain.
+    assert hist["score"].tolist() == [50.0, 50.0]
+
+
 def test_history_empty_cases():
-    cols = ["date", "score", "coverage", "drivers"]
+    cols = ["date", "score", "coverage", "drivers", "market_median"]
     sel = [_selected("flow_net_5d", 1.0)]
     panel = _two_day_panel()
     assert composite_score_history(pd.DataFrame(), sel, "AAAA").empty
