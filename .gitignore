@@ -16,6 +16,9 @@ data/
 *.sqlite
 *.log
 
+# Scratch/debug
+_*.txt
+
 # Project meta
 .freebuff/
 
