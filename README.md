@@ -301,7 +301,7 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/foreign-flow`,
   `/api/sectors`, `/api/sectors/rrg`, `/api/sectors/rotation`, `/api/sentiment`,
   `/api/factors/overview`,
-  `/api/broker-activity`
+  `/api/broker-activity`, `/api/broker-flow` (komposisi asing/lokal/BUMN)
 - **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
   `/api/corporate-actions`
 - **Kualitas data:** `/api/quality/overview`, `/api/quality/quarantine`,
@@ -355,6 +355,21 @@ tests/               # test signal_log, sentiment, dll
 - ✅ Multi-backend storage (SQLite default, Supabase ready)
 - ✅ Structured data models (Pydantic validation)
 - ✅ Rate-limited & polite polling
+
+## Chat Commands
+
+Perintah singkat buat nyuruh AI jalanin project ini. Tinggal copy-paste di chat:
+
+| Perintah | Yang dijalankan |
+|---|---|
+| `jalanin backend` | `python -m idx_scraper.cli serve` (API + polling + scheduler) |
+| `jalanin scheduler` | `python -m idx_scraper.cli scheduler` (scheduler only, no HTTP serve) |
+| `jalanin backend + scheduler` | `python -m idx_scraper.cli serve` (sudah include scheduler) |
+| `jalanin snapshot` | `python -m idx_scraper.cli snapshot` (one-off fetch) |
+| `jalanin eod YYYYMMDD` | `python -m idx_scraper.cli eod YYYYMMDD` (EOD fetch untuk tanggal tertentu) |
+| `jalanin broker eod` | `python -m idx_scraper.cli broker-eod` (backfill broker daily) |
+
+> **Note:** `serve` sudah include scheduler. Tidak perlu jalanin keduanya secara terpisah.
 
 ## License
 
