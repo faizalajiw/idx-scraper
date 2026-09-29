@@ -167,6 +167,72 @@ python -m scripts.refresh_sector_map                    # perbarui pemetaan sekt
 > `backfill_index_eod_idx` menggantikan `backfill_index_eod` (Yahoo) sebagai sumber
 > close IHSG. Butuh `IDX_CHROME_PROFILE_DIR` (lihat bagian Cloudflare Bypass).
 
+## Scheduler (idx serve)
+
+Semua jadwal di bawah berjalan otomatis saat `python -m idx_scraper.cli serve`.
+Scheduler pakai **APScheduler** dengan timezone WIB. Polling realtime hanya aktif
+saat jam bursa (Sen–Jum 09:00–16:00 WIB).
+
+### 1. Realtime Polling (saat jam bursa)
+
+| Job ID | Interval | Yang Dilakukan |
+|--------|----------|----------------|
+| `idx` | 60 detik | Fetch **index quotes** (IHSG/COMPOSITE) dari IDX `GetIndexList` atau Yahoo. Juga jalanin **auto-switch probe** tiap 900s untuk cek apakah IDX bisa diakses via BrowserTransport. |
+| `wl` | 60 detik | Fetch **watchlist quotes** (BBCA, BBRI, BMRI, dll) dari IDX atau Yahoo. |
+
+### 2. EOD Pipeline (cron schedule)
+
+Refresh data harian untuk 8 menu dashboard (Narasi, Screener, Valuasi, Hold Check,
+Jejak Sinyal, Foreign Flow, Sentimen, Sektor). Semua job ini **bypass** `_is_market_hours()`
+dan clear cache API.
+
+| Job ID | Jadwal WIB | EOD Fetch? | Keterangan |
+|--------|-----------|-----------|------------|
+| `refresh_preopen` | Sen–Jum 08:45 | Tidak | Pra-pembukaan — recompute + clear cache (belum ada EOD baru) |
+| `refresh_s1` | Sen–Kam 12:00 | Ya | Close Sesi I — EOD fetch + recompute. **Catatan:** `GetStockSummary` masih kosong di jam ini karena sesi belum final. |
+| `refresh_s1_fri` | Jum 11:30 | Ya | Close Sesi I Jum (jam bursa lebih awal) |
+| `refresh_s2` | Sen–Jum 16:05 | Ya | Close Sesi II — EOD fetch + recompute. **Ini job utama yang isi data EOD hari ini.** Offset 5 menit supaya data IDX final. |
+| `refresh_s2_late` | Sen–Jum 16:20 | Ya | Susulan +15 menit — jaring data yang telat final |
+| `refresh_weekend_am` | Sab–Min 08:45 | Tidak | Recompute + clear cache (pasar tutup) |
+| `refresh_weekend_pm` | Sab–Min 16:00 | Tidak | Recompute + clear cache (pasar tutup) |
+
+**Isi EOD fetch** (`_job_eod_full`): ambil `GetStockSummary` dari IDX → simpan ke
+`stock_summary_daily` + `raw_eod` → refresh `prices_pit`.
+
+**Isi recompute** (`_job_pipeline_refresh`): regime harian, jejak sinyal, broker
+summary, index EOD close → clear cache API (`/api/cache/clear`).
+
+### 3. Background Threads & Lain-lain
+
+| Job/Thread | Interval | Keterangan |
+|------------|----------|------------|
+| **LiveCapture thread** | Rolling sweep, 1000ms/req per kode | Poll `GetTradingInfoDaily?code=X` untuk 60 likuid + 20 movers → tulis ke `intraday_ticks`. Hanya jalan saat jam bursa + IDX source aktif. Backoff otomatis kalau kena 429 (rate limit IDX). |
+| `alerts` | 300 detik (5 menit) | Cek sinyal BUY/SELL yang berubah + evaluasi aturan pantauan → kirim alert ke Telegram. Hanya saat jam bursa. |
+| `monthly_ic` | 1 hari per bulan, 06:30 WIB | IC analysis (factor weight) → simpan ke `factor_ic_history`. |
+| **Startup catchup** | Sekali saat boot | Kalau EOD hari ini belum ada + pasar sudah tutup + hari kerja → auto-jalankan full pipeline refresh. Mencegah data stale kalau scheduler di-restart kelewatan jadwal. |
+
+### Alur Data ke Dashboard
+
+```
+IDX GetIndexList ──────→ index_quotes ──────→ IHSG Composite (realtime, tiap 60s)
+IDX GetStockSummary ───→ raw_eod → prices_pit → latest_pit ──→ Top Gainers/Losers, Leaders (EOD)
+IDX GetTradingInfoDaily → intraday_ticks ────→ Top Gainers/Losers, Leaders (Live, saat jam bursa)
+```
+
+Saat jam bursa: dashboard pakai **intraday_ticks** (live) untuk gainers/losers & leaders.
+Kalau ga ada data intraday, fallback ke **latest_pit** (EOD).
+
+### Catatan: `GetStockSummary` EOD-only
+
+`GetStockSummary?date=YYYYMMDD` hanya return data final **setelah pasar tutup** (16:00+).
+Saat sesi berlangsung, endpoint ini return kosong/0. Artinya:
+
+- `refresh_s1` (12:00) **tidak bisa** mengisi data EOD — sesi belum final
+- `refresh_s2` (16:05) dan `refresh_s2_late` (16:20) adalah **satu-satunya** job yang
+  benar-bener mengisi data EOD hari ini
+- Kalau scheduler di-restart setelah 16:00 dan data hari ini belum ada, **startup catchup**
+  otomatis menjalankan full pipeline
+
 
 ## Track Record Sinyal (jejak sinyal)
 

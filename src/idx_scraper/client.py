@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
@@ -28,17 +29,38 @@ class IDXClient:
         # want to launch Chrome or touch IDX at all.
         self.session: BrowserTransport | None = None
         self._warmed = False
+        # Scheduler jobs and the live-capture sweep share this client; without a
+        # lock two threads can both build a BrowserTransport, and Chromium
+        # refuses a second instance on the same user-data-dir.
+        self._lock = threading.Lock()
 
     def _ensure_session(self) -> BrowserTransport:
         if self.session is None:
-            self.session = BrowserTransport()
+            with self._lock:
+                if self.session is None:
+                    self.session = BrowserTransport()
         return self.session
 
     def warmup(self) -> None:
         if self._warmed:
             return
         self._ensure_session().ensure_open()
-        self._warmed = True
+        with self._lock:
+            self._warmed = True
+
+    def reachable(self) -> bool:
+        """Is IDX reachable *through the same browser transport* used for data?
+
+        Cloudflare locks an IP in with a challenge; plain TLS impersonation
+        (curl_cffi) keeps getting 403'd even after the user clears the challenge
+        in the shared Chrome profile. The authoritative probe is therefore the
+        browser page itself: if the index list parses, we know real data can
+        flow. Returns True on a parseable JSON list/dict, else False."""
+        try:
+            raw = self._get_json("/primary/home/GetIndexList")
+        except Exception:
+            return False
+        return isinstance(raw, (list, dict)) and bool(raw)
 
     def _get_json(self, path: str) -> Any | None:
         self.warmup()

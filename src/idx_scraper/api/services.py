@@ -52,6 +52,80 @@ def _is_market_hours() -> bool:
 # --------------------------------------------------------------- overview
 
 
+# Midnight today in WIB, as timestamptz — bounds "ticks from this session".
+_WIB_DAY_START_SQL = (
+    "(date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta'"
+)
+
+# A session's newest tick older than this means the live sweep is down; fall back
+# to EOD rather than showing hours-old prices as if they were live.
+_LIVE_MAX_AGE_SEC = 900
+
+_LIVE_MOVERS_SQL = """
+with snap as (
+    select distinct on (code) code, last
+    from research.intraday_ticks
+    where ts >= {day_start}
+    order by code, ts desc
+),
+live as (
+    select s.code, s.last,
+           (select p.prev_close from research.latest_pit p
+             where p.code = s.code order by p.trade_date desc limit 1) as prev_close
+    from snap s
+    where s.last is not null and s.last > 0
+),
+calc as (
+    select code, last,
+           case when prev_close > 0
+                then round((last - prev_close) / prev_close * 100, 4) end as percent
+    from live
+)
+select code, last as close, percent
+from calc
+where percent is not null and percent {cmp} 0
+order by percent {order}
+limit %s
+"""
+
+
+def _live_movers(cur: Any, limit: int = 5) -> dict[str, Any] | None:
+    """Top gainers/losers from this session's ticks, or None when unavailable.
+
+    Ticks carry only the last price, so the reference is the prior close from the
+    latest EOD session in latest_pit — which during a live session is exactly
+    yesterday's close.
+    """
+    cur.execute(
+        f"select max(ts) as mx from research.intraday_ticks where ts >= {_WIB_DAY_START_SQL}"
+    )
+    row = cur.fetchone()
+    if not row or not row["mx"]:
+        return None
+    newest = row["mx"]
+    if (datetime.now(WIB) - newest).total_seconds() > _LIVE_MAX_AGE_SEC:
+        return None
+
+    def _run(cmp_: str, order: str) -> list[Any]:
+        cur.execute(
+            _LIVE_MOVERS_SQL.format(
+                day_start=_WIB_DAY_START_SQL, cmp=cmp_, order=order
+            ),
+            (limit,),
+        )
+        return cur.fetchall()
+
+    gainers = _run(">", "desc")
+    losers = _run("<", "asc")
+    if not gainers and not losers:
+        return None
+    return {
+        "captured_at": newest.isoformat(),
+        "top_gainers": gainers,
+        "top_losers": losers,
+    }
+
+
 def get_market_overview() -> dict[str, Any]:
     with get_cursor() as cur:
         cur.execute(
@@ -71,23 +145,32 @@ def get_market_overview() -> dict[str, Any]:
         )
         totals = cur.fetchone()
 
-        cur.execute(
-            """select code, close, percent
-               from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit)
-                 and percent is not null and volume > 0 and percent > 0
-               order by percent desc limit 5"""
-        )
-        gainers = cur.fetchall()
+        # Live ticks beat the EOD superset while a session is running; the EOD
+        # query below stays the fallback once the sweep is stale or the market shut.
+        live = _live_movers(cur, 5) if _is_market_hours() else None
 
-        cur.execute(
-            """select code, close, percent
-               from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit)
-                 and percent is not null and volume > 0 and percent < 0
-               order by percent asc limit 5"""
-        )
-        losers = cur.fetchall()
+        if live:
+            gainers, losers = live["top_gainers"], live["top_losers"]
+            movers_at, movers_src = live["captured_at"], "intraday"
+        else:
+            cur.execute(
+                """select code, close, percent
+                   from research.latest_pit
+                   where trade_date = (select max(trade_date) from research.latest_pit)
+                     and percent is not null and volume > 0 and percent > 0
+                   order by percent desc limit 5"""
+            )
+            gainers = cur.fetchall()
+
+            cur.execute(
+                """select code, close, percent
+                   from research.latest_pit
+                   where trade_date = (select max(trade_date) from research.latest_pit)
+                     and percent is not null and volume > 0 and percent < 0
+                   order by percent asc limit 5"""
+            )
+            losers = cur.fetchall()
+            movers_at, movers_src = None, "eod"
 
     index_ov = None
     if idx:
@@ -106,6 +189,8 @@ def get_market_overview() -> dict[str, Any]:
             "total_value": _f(totals["total_value"]) if totals else None,
             "stock_count": int(totals["stock_count"]) if totals and totals["stock_count"] else 0,
         },
+        "movers_source": movers_src,
+        "movers_captured_at": movers_at,
         "top_gainers": [
             {"code": r["code"], "close": _f(r["close"]), "percent": _f(r["percent"])}
             for r in gainers
@@ -262,30 +347,35 @@ def _leaders_intraday(cur: Any, metric: str, limit: int) -> dict[str, Any] | Non
     """Top-N by cumulative day metric from the freshest intraday snapshot.
 
     Ticks store cumulative volume/value, so the newest ts per code already holds
-    the day-to-date total. Returns None when no ticks exist for today (WIB) so the
-    caller can fall back to EOD.
+    the day-to-date total. Restricted to this WIB session and to ticks that are
+    still fresh, so a dead sweep falls back to EOD instead of serving old prices
+    as if they were live. The reference close is the most recent EOD close, which
+    during a session is the prior close today's move is measured against.
     """
     col = _LEADER_METRICS[metric][0]
     if col is None:
         return None
-    cur.execute("select max(ts) as mx from research.intraday_ticks")
+    cur.execute(
+        f"select max(ts) as mx from research.intraday_ticks where ts >= {_WIB_DAY_START_SQL}"
+    )
     row = cur.fetchone()
     if not row or not row["mx"]:
         return None
     latest_ts = row["mx"]
-    if latest_ts.astimezone(WIB).strftime("%Y-%m-%d") != _today():
+    if (datetime.now(WIB) - latest_ts).total_seconds() > _LIVE_MAX_AGE_SEC:
         return None
     cur.execute(
         f"""with snap as (
                 select distinct on (code) code, last, volume, value
                 from research.intraday_ticks
+                where ts >= {_WIB_DAY_START_SQL}
                 order by code, ts desc
             )
             select s.code, s.last, s.volume, s.value,
-                   lp.name, lp.prev_close
+                   lp.name, lp.ref_close
             from snap s
             left join lateral (
-                select name, close as prev_close
+                select name, close as ref_close
                 from research.latest_pit p
                 where p.code = s.code
                 order by trade_date desc limit 1
@@ -307,8 +397,8 @@ def _leaders_intraday(cur: Any, metric: str, limit: int) -> dict[str, Any] | Non
                 "name": r["name"],
                 "close": _f(r["last"]),
                 "percent": (
-                    _f((float(r["last"]) - float(r["prev_close"])) / float(r["prev_close"]) * 100)
-                    if r["last"] is not None and r["prev_close"] not in (None, 0)
+                    _f((float(r["last"]) - float(r["ref_close"])) / float(r["ref_close"]) * 100)
+                    if r["last"] is not None and r["ref_close"] not in (None, 0)
                     else None
                 ),
                 "volume": _f(r["volume"]),

@@ -29,6 +29,8 @@ class Mover(BaseModel):
 class MarketOverview(BaseModel):
     index: IndexOverview | None = None
     totals: MarketTotals
+    movers_source: str = "eod"  # "intraday" | "eod"
+    movers_captured_at: str | None = None
     top_gainers: list[Mover]
     top_losers: list[Mover]
 

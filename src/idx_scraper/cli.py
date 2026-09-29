@@ -13,10 +13,18 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import dotenv
 
 dotenv.load_dotenv()
+
+# scripts/ lives at the repo root, outside the installable src/ package. Put the
+# repo root on sys.path so the scheduler's `from scripts.X import ...` resolves
+# regardless of the caller's working directory or PYTHONPATH.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -27,8 +35,8 @@ from .client import (
     fetch_stock_historical,
     fetch_yahoo_indices,
     fetch_yahoo_quotes,
-    idx_reachable,
 )
+from .live_capture import LiveCapture
 from .notify import (
     SignalState,
     TelegramNotifier,
@@ -581,9 +589,11 @@ def _is_market_hours() -> bool:
 def _job_indices(client: IDXClient, storage) -> None:
     if not _is_market_hours():
         return
-    # Auto-switch check runs on the index tick (throttled internally).
+    # Auto-switch check runs on the index tick (throttled internally). Probe
+    # through the same browser transport that fetches data — the plain curl
+    # probe can't clear a Cloudflare challenge, so it would never flip to IDX.
     probe_interval = int(os.getenv("IDX_PROBE_INTERVAL", "900"))  # 15 min default
-    source = maybe_probe_and_switch(idx_reachable, probe_interval)
+    source = maybe_probe_and_switch(client.reachable, probe_interval)
     if source == SOURCE_IDX:
         n = fetch_and_store_indices(client, storage)
         tag = "IDX"
@@ -603,27 +613,6 @@ def _job_watchlist(client: IDXClient, storage, codes: list[str]) -> None:
         n = fetch_and_store_watchlist_yahoo(storage, codes)
         tag = "YAHOO"
     print(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed ({tag}): {n}")
-
-
-def _job_intraday(client: IDXClient, top_n: int) -> None:
-    """Snapshot top-N liquid emiten into research.intraday_ticks (market hours only).
-
-    Skipped entirely while on the Yahoo source — this is an IDX-only feature and
-    we must not touch IDX during cooldown.
-    """
-    if not _is_market_hours():
-        return
-    if current_source() != SOURCE_IDX:
-        return
-    import psycopg
-
-    from scripts.intraday_capture import capture_once
-    try:
-        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
-            n = capture_once(conn, client, top_n)
-        print(f"[{datetime.now(WIB).isoformat()}] intraday captured: {n}")
-    except Exception as e:
-        print(f"[err] intraday capture: {e}", file=sys.stderr)
 
 
 def cmd_serve(args) -> None:
@@ -702,16 +691,24 @@ def cmd_serve(args) -> None:
         _job_monthly_ic, "cron", day="1", hour=6, minute=30,
         id="monthly_ic",
     )
-    # Intraday tick capture — top-N liquid emiten, satu request seluruh pasar.
-    # IDX-only feature; the job self-skips while on the Yahoo source (cooldown).
-    intraday_top = int(os.getenv("IDX_INTRADAY_TOP", "400"))
-    intraday_interval = int(os.getenv("IDX_INTRADAY_INTERVAL", "60"))
-    if intraday_top > 0:
-        scheduler.add_job(
-            _job_intraday, "interval", seconds=intraday_interval,
-            args=[client, intraday_top], id="intraday",
+    # Live per-emiten capture — GetStockSummary whole-market is EOD-only, so the
+    # live feed is polled one code at a time. Runs as a rolling background sweep
+    # that self-gates on market hours and the IDX source.
+    live_top = int(os.getenv("IDX_LIVE_TOP", "60"))
+    live_delay_ms = int(os.getenv("IDX_LIVE_DELAY_MS", "1000"))
+    live_capture = LiveCapture(
+        client,
+        top_n=live_top,
+        delay_sec=live_delay_ms / 1000,
+        should_run=lambda: _is_market_hours() and current_source() == SOURCE_IDX,
+    )
+    if live_top > 0:
+        live_capture.start()
+        print(
+            f"live capture — {live_top} liquid + 20 movers, {live_delay_ms}ms/req, rolling sweep"
         )
-        print(f"intraday capture — top {intraday_top} liquid every {intraday_interval}s")
+    else:
+        print("live capture OFF (IDX_LIVE_TOP=0)")
 
     # Telegram alert loop (hanya kalau env Telegram diisi)
     alert_interval = int(os.getenv("IDX_ALERT_INTERVAL", "300"))
@@ -733,12 +730,51 @@ def cmd_serve(args) -> None:
           f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
     print("refresh pipeline 8 menu — Sen-Jum 08:45, Sen-Kam 12:00 / Jum 11:30, "
           "Sen-Jum 16:05 & 16:20; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
+
+    # --- Startup catchup: if today's EOD data is missing, run it now -------
+    # Prevents missed refreshes when scheduler restarts after the cron window.
+    try:
+        import psycopg as _pg
+
+        _dsn = os.getenv("DATABASE_URL")
+        if _dsn:
+            _today = datetime.now(WIB).date()
+            with _pg.connect(_dsn) as _conn, _conn.cursor() as _cur:
+                _cur.execute(
+                    "select 1 from research.latest_pit "
+                    "where trade_date = %s limit 1",
+                    (_today,),
+                )
+                _has_today = _cur.fetchone() is not None
+            if not _has_today:
+                now_wib = datetime.now(WIB)
+                wd = now_wib.weekday()  # 0=Mon..6=Sun
+                past_close = now_wib.hour >= 16
+                is_trading_day = wd < 5
+                if is_trading_day and past_close:
+                    print(f"[catchup] data EOD {now_wib.strftime('%Y-%m-%d')} belum ada — "
+                          "menjalankan refresh pipeline sekarang...")
+                    _job_pipeline_refresh(
+                        client, storage,
+                        label=f"startup catchup {now_wib.strftime('%Y-%m-%d')}",
+                        do_eod=True,
+                    )
+                else:
+                    print(f"[catchup] data EOD hari ini belum ada "
+                          f"(pasar {'sudah tutup' if past_close else 'belum tutup'}, "
+                          f"{'hari kerja' if is_trading_day else 'akhir pekan'})")
+            else:
+                print(f"[catchup] data EOD hari ini sudah ada ✓")
+    except Exception as e:
+        print(f"[warn] catchup check gagal: {e}", file=sys.stderr)
+
     try:
         scheduler.start()
     except KeyboardInterrupt:
         pass
     finally:
         scheduler.shutdown()
+        live_capture.stop()
         client.close()
         storage.close()
 

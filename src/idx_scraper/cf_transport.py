@@ -49,6 +49,9 @@ class BrowserTransport:
         self._context: Any = None
         self._playwright: Any = None
         self._ready = threading.Event()
+        # HTTP status of the most recent get(); lets callers tell a 429 throttle
+        # apart from a legitimately empty payload.
+        self.last_status: int | None = None
 
     # ---------------- background loop management ----------------
 
@@ -129,6 +132,7 @@ class BrowserTransport:
                 }""",
                 url,
             )
+            self.last_status = data["status"]
             if data["status"] != 200:
                 print(f"[warn] IDX {path} status {data['status']}", file=sys.stderr)
                 return None
