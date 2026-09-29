@@ -378,6 +378,92 @@ def get_top_brokers(limit: int = 5) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------- broker concentration
+
+def get_broker_concentration(limit: int = 10) -> dict[str, Any]:
+    """Konsentrasi broker pasar (CR1/CR3/CR5 + HHI) dari sesi broker_daily terakhir.
+
+    CR/HHI dihitung dari SELURUH broker sesi itu, bukan hanya top-N — kalau
+    penyebutnya cuma potongan teratas, angkanya selalu mendekati 100% dan tidak
+    bermakna. broker_daily adalah agregat PER FIRMA untuk SELURUH pasar (bukan
+    per saham; IDX tidak menyediakan breakdown per emiten di endpoint gratis),
+    jadi metrik ini menggambarkan struktur pasar, bukan aliran satu saham.
+
+    Tabel/data kosong -> struktur kosong (tidak pernah raise) supaya UI bisa
+    menampilkan empty state.
+    """
+    limit = max(1, min(limit, 50))
+    empty: dict[str, Any] = {
+        "date": None,
+        "captured_at": None,
+        "n_brokers": 0,
+        "total_value": None,
+        "cr1": None,
+        "cr3": None,
+        "cr5": None,
+        "hhi": None,
+        "top": [],
+    }
+    with get_cursor() as cur:
+        cur.execute("select to_regclass('research.broker_daily') as t")
+        reg = cur.fetchone()
+        if not reg or not reg["t"]:
+            return empty
+        cur.execute("select max(trade_date) as d from research.broker_daily")
+        row = cur.fetchone()
+        if not row or not row["d"]:
+            return empty
+        date = row["d"]
+        cur.execute(
+            """select broker_code, broker_name, volume, value, frequency, captured_at
+               from research.broker_daily
+               where trade_date = %s and value is not null
+               order by value desc""",
+            (date,),
+        )
+        broker_rows = cur.fetchall()
+
+    from ..research.broker_activity import concentration
+
+    captured = max(
+        (r["captured_at"] for r in broker_rows if r["captured_at"]), default=None
+    )
+    conc = concentration(
+        [
+            {
+                "broker_code": r["broker_code"],
+                "broker_name": r["broker_name"],
+                "volume": _f(r["volume"]),
+                "value": _f(r["value"]),
+                "frequency": _f(r["frequency"]),
+            }
+            for r in broker_rows
+        ],
+        top_n=limit,
+    )
+    return {
+        "date": _norm_date(date),
+        "captured_at": captured.isoformat() if captured else None,
+        "n_brokers": conc["n_brokers"],
+        "total_value": conc["total_value"],
+        "cr1": conc["cr1"],
+        "cr3": conc["cr3"],
+        "cr5": conc["cr5"],
+        "hhi": conc["hhi"],
+        "top": [
+            {
+                "broker_code": t["broker_code"],
+                "broker_name": t["broker_name"],
+                "volume": t["volume"],
+                "value": t["value"],
+                "frequency": t["frequency"],
+                "share": t["share"],
+            }
+            for t in conc["top"]
+        ],
+    }
+
+
 # --------------------------------------------------------------- price history
 
 
@@ -526,6 +612,21 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
 
     This is a research aid, not a recommendation to buy/sell.
     """
+    # Lapisan aktivitas broker (proksi aliran, bobot dari IC). Dihitung SEBELUM
+    # blok cursor: snapshot-nya membuka koneksi sendiri untuk query panel faktor
+    # yang berat, jadi jangan tahan koneksi pool sambil menunggu. Gagal atau
+    # belum tervalidasi -> lapisan tidak aktif (adj 0) dan hold-check berperilaku
+    # persis seperti sebelum fitur ini ada.
+    from ..research.broker_activity import apply_broker_layer
+
+    try:
+        from .analytics import broker_scores_by_code
+
+        broker_by_code, broker_validated = broker_scores_by_code()
+    except Exception as e:
+        print(f"[warn] skor aktivitas broker dilewati: {e}", file=sys.stderr)
+        broker_by_code, broker_validated = {}, False
+
     out: list[dict[str, Any]] = []
     with get_cursor() as cur:
         names: dict[str, str | None] = {}
@@ -682,6 +783,16 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 factor_adj,
             ) = apply_factor_layer(base_score, verdict, reasons, base, weights)
 
+            # --- lapisan aktivitas broker (diterapkan setelah lapisan faktor) ---
+            broker_row = broker_by_code.get(code)
+            score, verdict, reasons, broker_adj = apply_broker_layer(
+                score,
+                verdict,
+                reasons,
+                broker_row["score"] if broker_row else None,
+                broker_validated,
+            )
+
             out.append({
                 "code": code,
                 "name": names.get(code),
@@ -697,6 +808,8 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 "base_score": round(base_score),  # type: ignore[arg-type]
                 "factor_adj": round(factor_adj, 1),
                 "factor_pct": base if base is not None else None,
+                "broker_score": broker_row["score"] if broker_row else None,
+                "broker_adj": round(broker_adj, 1),
                 "verdict": verdict,
                 "reasons": reasons,
             })
@@ -754,6 +867,7 @@ def _apply_dividend_guard(
 
 def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    generated_at = datetime.now(WIB).isoformat(timespec="seconds")
     with get_cursor() as cur:
         for code in codes:
             df, is_live = _build_frame(cur, code)
@@ -770,6 +884,12 @@ def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
             eff_signal, div_cash, mech = _apply_dividend_guard(cur, code, df, signal)
             if mech:
                 pct = pct + (div_cash / prev["close"] * 100) if prev["close"] else pct
+            last_date = last["date"]
+            as_of = (
+                last_date.strftime("%Y-%m-%d")
+                if hasattr(last_date, "strftime")
+                else _norm_date(last_date)
+            )
             out.append({
                 "code": code,
                 "signal": eff_signal,
@@ -783,6 +903,8 @@ def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
                 "macd": _f(last.get("MACD")),
                 "trend_up": bool((last.get("MA_Short") or 0) > (last.get("MA_Long") or 0)),
                 "live": is_live,
+                "as_of": as_of,
+                "generated_at": generated_at,
             })
     return out
 

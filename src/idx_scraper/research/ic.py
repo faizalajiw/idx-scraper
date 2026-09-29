@@ -264,6 +264,39 @@ class ICReport:
     quintiles: dict[tuple[str, int], pd.DataFrame]  # (factor, horizon) -> kuintil
 
 
+def build_factor_panel(
+    dsn: str,
+    start: str | None = None,
+    end: str | None = None,
+    min_history: int = 60,
+) -> pd.DataFrame:
+    """Panel harga PIT + semua faktor (termasuk order-book) — sumber tunggal.
+
+    Dipakai ``run_ic_analysis`` dan ``research.broker_activity`` supaya IC dan
+    menu Aktivitas Broker melihat himpunan faktor yang PERSIS sama — kalau
+    panelnya dibangun dua cara berbeda, bobot yang divalidasi tidak lagi
+    menggambarkan skor yang dipakai.
+
+    Faktor order-book bersifat enhancement: kalau sumber snapshot bermasalah,
+    panel tetap terbentuk tanpa kolomnya (faktor itu jadi NaN).
+    """
+    panel = load_panel(dsn, start=start, end=end, min_history=min_history)
+    if panel.empty:
+        return panel
+
+    panel = compute_factors(panel)
+
+    try:
+        from .orderbook import attach_orderbook_factors, compute_daily, load_snapshots
+
+        ob_daily = compute_daily(load_snapshots(dsn, start=start, end=end))
+        panel = attach_orderbook_factors(panel, ob_daily)
+    except Exception as e:  # graceful degradation disengaja — jangan matikan IC
+        print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
+
+    return panel
+
+
 def run_ic_analysis(
     dsn: str,
     horizons: list[int] | None = None,
@@ -276,21 +309,9 @@ def run_ic_analysis(
 ) -> ICReport:
     """Pipeline lengkap: load -> faktor -> fwd returns -> IC -> ringkasan."""
     horizons = horizons or [5, 10]
-    panel = load_panel(dsn, start=start, end=end, min_history=min_history)
+    panel = build_factor_panel(dsn, start=start, end=end, min_history=min_history)
     if panel.empty:
         raise SystemExit("panel kosong — cek DATABASE_URL / rentang tanggal")
-
-    panel = compute_factors(panel)
-
-    # Faktor order-book (snapshot intraday) — enhancement, bukan fondasi:
-    # kalau sumber snapshot bermasalah, IC analysis tetap jalan tanpa kolomnya.
-    try:
-        from .orderbook import attach_orderbook_factors, compute_daily, load_snapshots
-
-        ob_daily = compute_daily(load_snapshots(dsn, start=start, end=end))
-        panel = attach_orderbook_factors(panel, ob_daily)
-    except Exception as e:  # graceful degradation disengaja — jangan matikan IC
-        print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
 
     merged = forward_returns(panel, horizons, nlags=nlags)
     factors = [c for c in FACTOR_DEFINITIONS if c in merged.columns]

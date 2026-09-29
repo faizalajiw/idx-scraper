@@ -132,7 +132,7 @@ SUPABASE_DB_URL=postgresql://postgres.REF:PASSWORD@REGION.pooler.supabase.com:65
 | `raw_eod` | Source of truth EOD mentah dari IDX `GetStockSummary` |
 | `prices_pit` / `research.prices_asof_adj` | Harga point-in-time (bitemporal, bebas look-ahead) + adjusted |
 | `index_quotes` / `index_summary_daily` | Kuotasi & close resmi IHSG (IDX-live) |
-| `research.broker_daily` | Broker summary EOD |
+| `research.broker_daily` | Broker summary EOD (per firma, seluruh pasar) |
 | `research.signal_log` | Jejak sinyal BUY/SELL + forward return |
 | `research.factor_ic_history` | Bobot faktor hasil analisis IC |
 | `research.*` | Layer PIT: faktor, regime, event study, sentimen, order book |
@@ -231,8 +231,11 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/signals/track` (track record sinyal), `/api/hold-check`
 - **Per-emiten:** `/api/stocks/{code}/history`, `/api/stocks/{code}/technical`,
   `/api/stocks/{code}/brokers`, `/api/stocks/{code}/events`, `/api/stocks/{code}/dividends`
-- **Analitik:** `/api/screener`, `/api/valuation`, `/api/foreign-flow`,
-  `/api/sectors`, `/api/sectors/rrg`, `/api/sentiment`, `/api/factors/overview`
+- **Analitik:** `/api/screener` (+ filter `min_broker_score`), `/api/valuation`,
+  `/api/foreign-flow`,
+  `/api/sectors`, `/api/sectors/rrg`, `/api/sectors/rotation`, `/api/sentiment`,
+  `/api/factors/overview`,
+  `/api/broker-activity`
 - **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
   `/api/corporate-actions`
 - **Kualitas data:** `/api/quality/overview`, `/api/quality/quarantine`,
@@ -268,7 +271,7 @@ src/idx_scraper/
 ├── storage.py       # SQLite / Supabase storage layer
 ├── analysis.py      # Technical indicators (MA, RSI, Bollinger, MACD) + signals
 ├── research/        # layer PIT: composite, factors, ic, regime, events,
-│                    #   signal_log, sentiment, orderbook
+│                    #   signal_log, sentiment, orderbook, broker_activity
 ├── cli.py           # CLI entry point + scheduler (APScheduler, WIB)
 ├── api/             # FastAPI read-only API untuk frontend idx-web
 │                    #   (analytics, dividends, quality, simulation, alerts, ...)

@@ -12,7 +12,7 @@ service publicly, add authentication/authorization and rate limiting.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +29,7 @@ from .schemas import (
     BacktestConfig,
     BacktestRequest,
     BacktestResult,
+    BrokerActivity,
     CorpActionRow,
     CorpActionSummary,
     CoverageGaps,
@@ -47,11 +48,13 @@ from .schemas import (
     QuarantineRow,
     ScreenerRow,
     SectorAnalysis,
+    SectorRotation,
     SectorRRG,
     SentimentResponse,
     SessionMovers,
     Signal,
     SignalTrack,
+    StockBrokerActivity,
     StockBrokerSummary,
     TechnicalChart,
     ThinDay,
@@ -137,6 +140,16 @@ def top_brokers(limit: int = Query(default=5, ge=1, le=50)) -> dict:
     return services.get_top_brokers(limit)
 
 
+@app.get("/api/broker-activity", response_model=BrokerActivity)
+def broker_activity(limit: int = Query(default=25, ge=1, le=200)) -> dict:
+    """Skor aktivitas broker per emiten (proksi aliran, bobot dari IC) + struktur broker pasar.
+
+    Skor hanya dibentuk dari faktor yang lolos gate IC; kalau tidak ada yang
+    lolos, ``validated`` False dan ``rows`` kosong (lihat research.broker_activity).
+    """
+    return analytics.get_broker_activity(limit)
+
+
 @app.get("/api/watchlist", response_model=list[WatchlistRow])
 def watchlist(codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST")) -> list[dict]:
     return services.get_watchlist(_resolve_codes(codes))
@@ -193,7 +206,8 @@ def hold_check(
 
     with get_cursor() as cur:
         date = analytics._latest_eod_date(cur)
-    return {"date": date, "items": items}
+    return {"date": date, "items": items,
+            "generated_at": datetime.now(timezone(timedelta(hours=7))).isoformat(timespec="seconds")}
 
 
 @app.get("/api/signals", response_model=list[Signal])
@@ -233,6 +247,20 @@ def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
     return analytics.get_broker_summary(code.upper(), date=date)
 
 
+@app.get("/api/stocks/{code}/broker-activity", response_model=StockBrokerActivity)
+def stock_broker_activity(
+    code: str,
+    lookback: int = Query(default=60, ge=2, le=250, description="Jumlah hari bursa riwayat skor"),
+) -> dict:
+    """Skor aktivitas broker + riwayat driver untuk satu emiten (cache 1 jam).
+
+    Skor terkini identik dengan angka di halaman Aktivitas Broker; riwayatnya
+    dihitung per tanggal terhadap pasar hari itu. Kalau faktor aliran belum lolos
+    gate IC, ``validated`` False dan ``current``/``history`` kosong.
+    """
+    return analytics.get_stock_broker_activity(code.upper(), lookback)
+
+
 @app.get("/api/foreign-flow", response_model=ForeignFlow)
 def foreign_flow(days: int = Query(default=20, ge=1, le=120)) -> dict:
     return analytics.get_foreign_flow(days=days)
@@ -246,6 +274,20 @@ def sectors_rrg(
 ) -> dict:
     """RRG (Relative Rotation Graph) positions per sector vs the benchmark."""
     return analytics.get_sector_rrg(benchmark=benchmark, window=window, tail_weeks=tail_weeks)
+
+
+@app.get("/api/sectors/rotation", response_model=SectorRotation)
+def sectors_rotation(
+    lookback: int = Query(default=60, ge=5, le=250, description="Hari bursa riwayat median skor sektor"),
+    min_names: int = Query(default=3, ge=2, le=50, description="Minimum emiten berskor per sektor"),
+) -> dict:
+    """Rotasi sektor dari skor aktivitas broker (proksi aliran dana).
+
+    Beda dari RRG (rotasi harga relatif): ini mengukur sektor mana yang jejak
+    akumulasi alirannya sedang naik. Sektor dengan emiten berskor kurang dari
+    ``min_names`` dibuang; emiten tanpa sektor sebenarnya tidak diikutkan.
+    """
+    return analytics.get_sector_rotation(lookback=lookback, min_names=min_names)
 
 
 @app.get("/api/sectors", response_model=SectorAnalysis)
@@ -278,6 +320,12 @@ def screener(
     min_value: float | None = Query(default=None, ge=0),
     foreign_in_only: bool = Query(default=False),
     min_vol_ratio: float | None = Query(default=None, ge=0),
+    min_broker_score: float | None = Query(
+        default=None,
+        ge=0,
+        le=100,
+        description="Skor aktivitas broker minimal (0-100); butuh skor tervalidasi IC",
+    ),
     min_days: int = Query(default=30, ge=1, le=500),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
@@ -290,6 +338,7 @@ def screener(
         min_value=min_value,
         foreign_in_only=foreign_in_only,
         min_vol_ratio=min_vol_ratio,
+        min_broker_score=min_broker_score,
         min_days=min_days,
         limit=limit,
     )

@@ -100,6 +100,10 @@ class Signal(BaseModel):
     macd: float | None = None
     trend_up: bool
     live: bool
+    # Tanggal sesi bursa bar terakhir (YYYY-MM-DD) — untuk badge "update terakhir".
+    as_of: str | None = None
+    # Jam backend menghitung sinyal ini (WIB, ISO) — untuk badge "diperbarui".
+    generated_at: str | None = None
 
 
 class PriceBar(BaseModel):
@@ -241,6 +245,147 @@ class StockBrokerSummary(BaseModel):
     top_sellers: list[BrokerRow]
 
 
+class BrokerConcentrationRow(BaseModel):
+    broker_code: str
+    broker_name: str | None = None
+    volume: float | None = None
+    value: float | None = None
+    frequency: float | None = None
+    share: float | None = None
+
+
+class BrokerConcentration(BaseModel):
+    """Konsentrasi transaksi per broker firma (seluruh pasar, EOD)."""
+
+    date: str | None = None
+    captured_at: str | None = None
+    n_brokers: int = 0
+    total_value: float | None = None
+    cr1: float | None = None
+    cr3: float | None = None
+    cr5: float | None = None
+    hhi: float | None = None
+    top: list[BrokerConcentrationRow]
+
+
+class BrokerActivityFactor(BaseModel):
+    """Satu faktor aliran + hasil ujinya (IC) dan bobot yang dipakai."""
+
+    factor: str
+    label: str
+    description: str | None = None
+    mean_ic: float | None = None
+    icir: float | None = None
+    t_stat: float | None = None
+    hit_rate: float | None = None
+    n_days: int | None = None
+    eligible: bool = False
+    direction: float = 0.0
+    weight: float = 0.0
+
+
+class BrokerActivityDriver(BaseModel):
+    """Kontributor skor satu emiten (menjelaskan "kenapa skornya begitu")."""
+
+    factor: str
+    label: str
+    contribution: float
+    percentile: float | None = None
+
+
+class BrokerActivityRow(BaseModel):
+    code: str
+    name: str | None = None
+    close: float | None = None
+    change: float | None = None
+    percent: float | None = None
+    score: float
+    coverage: float
+    drivers: list[BrokerActivityDriver]
+
+
+class BrokerActivity(BaseModel):
+    """Skor aktivitas broker per emiten + struktur broker pasar.
+
+    ``validated`` False -> ``rows`` kosong dan ``reason`` menjelaskan kenapa
+    (biasanya belum ada run IC). Sengaja tidak ada skor pengganti.
+    """
+
+    as_of: str | None = None
+    validated: bool
+    reason: str | None = None
+    horizon: int | None = None
+    ic_run_date: str | None = None
+    eligible_count: int = 0
+    factors: list[BrokerActivityFactor]
+    rows: list[BrokerActivityRow]
+    market: BrokerConcentration
+
+
+class BrokerActivitySnapshot(BaseModel):
+    """Nilai skor satu emiten pada sesi terakhir + peringkatnya di pasar."""
+
+    score: float
+    coverage: float
+    rank: int
+    universe: int
+    percentile: float
+    drivers: list[BrokerActivityDriver]
+
+
+class BrokerActivityHistoryPoint(BaseModel):
+    """Satu titik riwayat: skor emiten pada satu tanggal + driver saat itu."""
+
+    date: str
+    score: float
+    coverage: float
+    drivers: list[BrokerActivityDriver]
+
+
+class BrokerActivityPeer(BaseModel):
+    """Satu emiten sebanding (sektor sama) dengan skornya pada sesi terakhir."""
+
+    code: str
+    name: str | None = None
+    score: float
+    coverage: float
+    is_self: bool = False
+
+
+class BrokerActivitySector(BaseModel):
+    """Pembanding skor di dalam satu sektor.
+
+    ``comparable`` False = emiten jatuh ke bucket fallback "Lainnya", yang
+    bukan sektor sebenarnya — pembandingnya tidak berarti.
+    """
+
+    name: str
+    comparable: bool
+    peer_count: int
+    my_rank: int | None = None
+    median_score: float | None = None
+    peers: list[BrokerActivityPeer]
+
+
+class StockBrokerActivity(BaseModel):
+    """Skor aktivitas broker satu emiten + riwayat skor/driver-nya.
+
+    ``current`` None = emiten tidak masuk cross-section hari terakhir (bukan
+    skor nol); ``history`` tetap bisa berisi tanggal-tanggal sebelumnya.
+    """
+
+    code: str
+    as_of: str | None = None
+    validated: bool
+    reason: str | None = None
+    horizon: int | None = None
+    ic_run_date: str | None = None
+    eligible_count: int = 0
+    sector: BrokerActivitySector | None = None
+    current: BrokerActivitySnapshot | None = None
+    history: list[BrokerActivityHistoryPoint]
+
+
 class ForeignFlowDay(BaseModel):
     date: str
     buy: float | None = None
@@ -302,6 +447,43 @@ class SectorRRG(BaseModel):
     points: list[RRGPoint]
 
 
+class SectorRotationRow(BaseModel):
+    """Satu sektor: level skor broker agregat + arah rotasinya.
+
+    ``phase``: AKUMULASI (tinggi & naik) / MEMUDAR (tinggi & turun) / MEMBAIK
+    (rendah & naik) / TERPURUK (rendah & turun). ``history`` = median skor
+    sektor per sesi (terbaru terakhir) untuk grafik mini.
+    """
+
+    sector: str
+    n_names: int
+    median_score: float
+    breadth: float
+    delta_5d: float | None = None
+    delta_21d: float | None = None
+    phase: str | None = None
+    history: list[float]
+
+
+class SectorRotation(BaseModel):
+    """Rotasi sektor berbasis skor aktivitas broker (proksi aliran dana).
+
+    ``unmapped_names`` = emiten berskor yang belum punya sektor sebenarnya
+    (bucket "Lainnya") dan karena itu tidak diikutkan — dilaporkan supaya
+    cakupan rotasinya bisa dinilai apa adanya.
+    """
+
+    as_of: str | None = None
+    validated: bool
+    reason: str | None = None
+    horizon: int | None = None
+    ic_run_date: str | None = None
+    lookback: int
+    min_names: int
+    unmapped_names: int = 0
+    sectors: list[SectorRotationRow]
+
+
 class NarrationSection(BaseModel):
     title: str
     icon: str
@@ -321,6 +503,7 @@ class MarketRegime(BaseModel):
     source: str | None = None
     as_of: str | None = None
     dir_hint: str | None = None
+    generated_at: str | None = None
 
 
 class MarketNarration(BaseModel):
@@ -362,6 +545,9 @@ class ScreenerRow(BaseModel):
     # emiten tidak tercakup capture / snapshot terlalu tipis.
     ob_imbalance: float | None = None
     ob_absorption: float | None = None
+    # Skor aktivitas broker (0-100, proksi aliran ber-bobot IC); null bila skor
+    # belum tervalidasi atau emiten di luar coverage.
+    broker_score: float | None = None
     foreign_net: float | None = None
     value: float | None = None
     hist_days: int
@@ -401,12 +587,18 @@ class HoldCheckItem(BaseModel):
     base_score: int | None = None
     factor_adj: float | None = None
     factor_pct: dict[str, float] | None = None
+    # Lapisan aktivitas broker (research.broker_activity): score sudah termasuk
+    # broker_adj; broker_score null = lapisan tidak aktif (belum tervalidasi IC
+    # atau emiten di luar coverage).
+    broker_score: float | None = None
+    broker_adj: float | None = None
     verdict: str
     reasons: list[str]
 
 
 class HoldCheckResponse(BaseModel):
     date: str | None = None
+    generated_at: str | None = None
     items: list[HoldCheckItem]
 
 

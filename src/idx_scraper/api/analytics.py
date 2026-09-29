@@ -27,7 +27,7 @@ from ..analysis import (
     signal_series,
 )
 from .database import get_cursor
-from .sector_map import sector_for
+from .sector_map import FALLBACK_SECTOR, sector_for
 
 WIB = timezone(timedelta(hours=7))
 
@@ -100,12 +100,14 @@ def get_market_regime() -> dict[str, Any]:
         )
 
     if df.empty:
-        return {"regime": None, "source": None, "as_of": None}
+        return {"regime": None, "source": None, "as_of": None,
+                "generated_at": datetime.now(WIB).isoformat(timespec="seconds")}
 
     adx_df = calculate_adx(df)
     out = classify_regime(adx_df)
     out["source"] = source
     out["as_of"] = df["date"].iloc[-1][:10]
+    out["generated_at"] = datetime.now(WIB).isoformat(timespec="seconds")
     # Nama regime diwarnai UI; arah tren penting untuk konteks sinyal.
     out["dir_hint"] = (
         "up"
@@ -763,6 +765,7 @@ def get_screener(
     min_value: float | None = None,
     foreign_in_only: bool = False,
     min_vol_ratio: float | None = None,
+    min_broker_score: float | None = None,
     min_days: int = 30,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
@@ -770,11 +773,18 @@ def get_screener(
 
     Factors per stock: technical signal (SMA20/50+RSI rule), 20-day momentum,
     RSI, volume ratio (today vs 20d avg — detects unusual activity), foreign
-    net, liquidity (traded value), plus order-book flow (ob_imbalance /
-    ob_absorption dari snapshot intraday). All filters are optional; combining
-    them is the "strategy".
+    net, liquidity (traded value), order-book flow (ob_imbalance / ob_absorption
+    dari snapshot intraday), plus skor aktivitas broker (proksi aliran, bobot
+    dari IC bulanan). All filters are optional; combining them is the "strategy".
+
+    ``min_broker_score`` hanya bermakna kalau skor broker sudah tervalidasi. Kalau
+    belum, tidak ada emiten yang bisa dinyatakan lolos kriteria yang tidak bisa
+    dihitung -> hasilnya kosong, bukan filter yang diam-diam diabaikan.
     """
     ob = _latest_orderbook_factors()
+    # Skor broker diambil di luar blok cursor: snapshot-nya membuka koneksi
+    # sendiri untuk query panel faktor, jadi jangan tahan koneksi pool menunggu.
+    broker_by_code, _broker_validated = broker_scores_by_code()
     with get_cursor() as cur:
         cur.execute("select distinct code from research.latest_pit order by code")
         codes = [r["code"] for r in cur.fetchall()]
@@ -860,6 +870,7 @@ def get_screener(
                 "days_since_signal": days_since_signal,
                 "ob_imbalance": ob.get(code, {}).get("ob_imbalance"),
                 "ob_absorption": ob.get(code, {}).get("ob_absorption"),
+                "broker_score": (broker_by_code.get(code) or {}).get("score"),
                 "foreign_net": fnet,
                 "value": value,
                 "hist_days": len(df),
@@ -882,6 +893,10 @@ def get_screener(
                 continue
             if min_vol_ratio is not None and (vol_ratio is None or vol_ratio < min_vol_ratio):
                 continue
+            if min_broker_score is not None:
+                bs = (broker_by_code.get(code) or {}).get("score")
+                if bs is None or bs < min_broker_score:
+                    continue
             out.append(row)
 
     out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
@@ -1122,7 +1137,11 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
             for r in cur.fetchall()
         ]
     rows.reverse()  # urut naik utk timeline
-    return {"recent": rows, "summary": summary(dsn)}
+    return {
+        "recent": rows,
+        "summary": summary(dsn),
+        "generated_at": datetime.now(WIB).isoformat(timespec="seconds"),
+    }
 
 
 # --------------------------------------------------------------- sentimen (flow & buku)
@@ -1193,4 +1212,511 @@ def get_signal_track() -> dict[str, Any]:
     out = sl.evaluate(dsn, horizons=sl.DEFAULT_HORIZONS)
     out["generated_at"] = datetime.now(WIB).isoformat(timespec="seconds")
     _research_cache_put("signal_track", out)
+    return out
+
+
+# --------------------------------------------------------------- broker activity
+
+# Jendela histori yang dibangun ulang untuk faktor aliran. 260 hari kalender
+# (~178 hari bursa) menutup rolling 252 hari momentum DAN warmup 21 hari flow;
+# panel IC penuh (~18 bulan) terlalu mahal untuk dibangun di jalur request.
+_BROKER_ACTIVITY_LOOKBACK_DAYS = 260
+
+
+def _broker_activity_empty(market: dict[str, Any], reason: str) -> dict[str, Any]:
+    """Payload saat skor belum bisa dibentuk — eksplisit, tanpa angka rekaan."""
+    return {
+        "as_of": None,
+        "validated": False,
+        "reason": reason,
+        "horizon": None,
+        "ic_run_date": None,
+        "eligible_count": 0,
+        "factors": [],
+        "rows": [],
+        "market": market,
+    }
+
+
+def _broker_activity_meta(codes: list[str], as_of: Any) -> dict[str, dict[str, Any]]:
+    """Nama + perubahan harga untuk emiten terpilih (satu query, bukan per kode)."""
+    if not codes or as_of is None:
+        return {}
+    day = as_of.date() if hasattr(as_of, "date") else as_of
+    with get_cursor() as cur:
+        cur.execute(
+            """select code, name, close, change, percent
+               from research.latest_pit
+               where trade_date = %s and code = any(%s)""",
+            (day, codes),
+        )
+        return {
+            str(r["code"]).upper(): {
+                "name": r["name"],
+                "close": _f(r["close"]),
+                "change": _f(r["change"]),
+                "percent": _f(r["percent"]),
+            }
+            for r in cur.fetchall()
+        }
+
+
+def broker_activity_snapshot() -> dict[str, Any]:
+    """Snapshot skor aktivitas broker terbaru — SATU hitung untuk semua konsumen.
+
+    Dipakai tiga tempat: halaman Aktivitas Broker (`get_broker_activity`), filter
+    Screener (`min_broker_score`), dan lapisan verdict Hold Check. Sengaja satu
+    sumber supaya angka di ketiga halaman tidak pernah berbeda. Cache 1 jam
+    (in-process, di-reset `clear_research_cache` tiap pipeline refresh).
+
+    Returns dict:
+
+    - ``validated``     : ada >= 1 faktor aliran yang lolos gate IC
+    - ``reason``        : kenapa belum tervalidasi (None bila tervalidasi)
+    - ``factors``       : hasil ``select_factors`` (termasuk yang gagal gate)
+    - ``scores``        : DataFrame code/close/score/coverage/drivers; KOSONG bila
+                          belum tervalidasi — jangan dipakai sebagai skor 0
+    - ``by_code``       : {CODE: {score, coverage, drivers}} untuk lookup cepat
+
+    Skor hanya dari faktor yang lolos gate (|mean IC| >= 0,05 & |ICIR| >= 0,5),
+    arah mengikuti tanda IC — lihat ``research.broker_activity``.
+    """
+    cached = _research_cache_get("broker_activity_snapshot")
+    if cached is not None:
+        return cached
+
+    from ..research import broker_activity as ba
+    from ..research.ic_history import WEIGHT_HORIZON
+
+    horizon = WEIGHT_HORIZON  # horizon acuan bobot, sama dengan IC bulanan
+    snap: dict[str, Any] = {
+        "as_of": None,
+        "horizon": horizon,
+        "ic_run_date": None,
+        "validated": False,
+        "reason": (
+            "Belum ada run IC tersimpan. Jalankan `idx ic` agar faktor aliran "
+            "bisa diuji dan diberi bobot."
+        ),
+        "eligible_count": 0,
+        "factors": [],
+        "scores": pd.DataFrame(),
+        "by_code": {},
+        # Panel penuh disimpan supaya endpoint per-emiten bisa menghitung riwayat
+        # per tanggal TANPA query ulang. Preseden yang sama: _event_study_bundle
+        # juga menyimpan panelnya di cache.
+        "panel": pd.DataFrame(),
+    }
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        snap["reason"] = "DATABASE_URL/SUPABASE_DB_URL belum diisi"
+        _research_cache_put("broker_activity_snapshot", snap)
+        return snap
+
+    # 1) Baris IC run terbaru -> faktor mana yang lolos gate.
+    latest_run = None
+    ic_rows: list[dict[str, Any]] = []
+    with get_cursor() as cur:
+        cur.execute("select to_regclass('research.factor_ic_history') as t")
+        reg = cur.fetchone()
+        if reg and reg["t"]:
+            cur.execute("select max(run_date) as d from research.factor_ic_history")
+            row = cur.fetchone()
+            latest_run = row["d"] if row else None
+        if latest_run:
+            cur.execute(
+                """select factor, horizon, mean_ic, icir, t_stat, hit_rate, n_days
+                   from research.factor_ic_history
+                   where run_date = %s""",
+                (latest_run,),
+            )
+            ic_rows = [
+                {
+                    "factor": r["factor"],
+                    "horizon": int(r["horizon"]),
+                    "mean_ic": _f(r["mean_ic"]),
+                    "icir": _f(r["icir"]),
+                    "t_stat": _f(r["t_stat"]),
+                    "hit_rate": _f(r["hit_rate"]),
+                    "n_days": int(r["n_days"]) if r["n_days"] is not None else None,
+                }
+                for r in cur.fetchall()
+            ]
+
+    snap["ic_run_date"] = str(latest_run) if latest_run else None
+    selected = ba.select_factors(ic_rows, horizon=horizon)
+    snap["factors"] = selected
+
+    active = ba.eligible_factors(selected)
+    if not active:
+        if ic_rows:
+            snap["reason"] = (
+                "Tidak ada faktor aliran/order-book yang lolos gate "
+                "(|IC| >= 0,05 & |ICIR| >= 0,5) pada run IC terakhir, jadi skor "
+                "akumulasi belum bisa dibentuk."
+            )
+        _research_cache_put("broker_activity_snapshot", snap)
+        return snap
+
+    # 2) Nilai faktor terbaru per emiten (satu hari bursa untuk semua kode).
+    from ..research.ic import build_factor_panel
+
+    start = (datetime.now(WIB) - timedelta(days=_BROKER_ACTIVITY_LOOKBACK_DAYS)).strftime(
+        "%Y-%m-%d"
+    )
+    panel = build_factor_panel(dsn, start=start, min_history=60)
+    latest, as_of = ba.latest_factor_rows(panel, [*ba.BROKER_FACTORS, "close"])
+    scored = ba.composite_scores(latest, selected)
+
+    snap["validated"] = True
+    snap["eligible_count"] = len(active)
+    snap["as_of"] = as_of
+    snap["scores"] = scored
+    snap["panel"] = panel
+    snap["by_code"] = {
+        str(r["code"]): {
+            "score": round(float(r["score"]), 1),
+            "coverage": round(float(r["coverage"]), 2),
+            "drivers": list(r["drivers"]),
+        }
+        for _, r in scored.iterrows()
+    }
+    if scored.empty:
+        # Tervalidasi tapi tidak ada emiten dengan histori cukup: skor tetap
+        # kosong (bukan 0) — konsumen harus memperlakukannya sebagai "tidak ada".
+        snap["reason"] = (
+            "Faktor sudah tervalidasi, tapi belum ada emiten dengan cukup data "
+            "aliran untuk dihitung (butuh histori flow >= 21 hari)."
+        )
+    _research_cache_put("broker_activity_snapshot", snap)
+    return snap
+
+
+def broker_scores_by_code() -> tuple[dict[str, dict[str, Any]], bool]:
+    """Skor broker terbaru per emiten + status validasi (Screener & Hold Check).
+
+    Nilai balikannya read-only: dict dalam snapshot di-cache dan dipakai bersama.
+    """
+    snap = broker_activity_snapshot()
+    return dict(snap.get("by_code") or {}), bool(snap.get("validated"))
+
+
+def get_broker_activity(limit: int = 25) -> dict[str, Any]:
+    """Skor aktivitas broker per emiten + konsentrasi broker pasar.
+
+    Membaca ``broker_activity_snapshot`` (satu hitung bersama Screener & Hold
+    Check) lalu menambahkan nama/perubahan harga, urutan, dan struktur broker
+    pasar. Kalau skor belum tervalidasi, ``validated`` False dan ``rows`` kosong:
+    halaman menampilkan status "belum tervalidasi" alih-alih skor tanpa dasar.
+    """
+    limit = max(1, min(limit, 200))
+    cache_key = f"broker_activity:{limit}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from .services import get_broker_concentration
+
+    market = get_broker_concentration(limit=10)
+    snap = broker_activity_snapshot()
+    scored: pd.DataFrame = snap["scores"]
+    as_of = snap["as_of"]
+
+    def _empty(reason: str) -> dict[str, Any]:
+        out = _broker_activity_empty(market, reason)
+        out["ic_run_date"] = snap["ic_run_date"]
+        out["horizon"] = snap["horizon"]
+        out["factors"] = snap["factors"]
+        out["eligible_count"] = snap["eligible_count"]
+        out["as_of"] = str(as_of.date()) if as_of is not None else None
+        _research_cache_put(cache_key, out)
+        return out
+
+    if not snap["validated"]:
+        return _empty(snap["reason"] or "Skor aktivitas broker belum tervalidasi.")
+    if scored.empty:
+        return _empty(snap["reason"] or "Belum ada emiten dengan data aliran cukup.")
+
+    top = scored.sort_values("score", ascending=False).head(limit)
+    meta = _broker_activity_meta(top["code"].tolist(), as_of)
+
+    rows = []
+    for _, r in top.iterrows():
+        code = str(r["code"])
+        m = meta.get(code, {})
+        rows.append(
+            {
+                "code": code,
+                "name": m.get("name"),
+                "close": m.get("close")
+                if m.get("close") is not None
+                else _f(r["close"]),
+                "change": m.get("change"),
+                "percent": m.get("percent"),
+                "score": round(float(r["score"]), 1),
+                "coverage": round(float(r["coverage"]), 2),
+                "drivers": list(r["drivers"]),
+            }
+        )
+
+    out = {
+        "as_of": str(as_of.date()) if as_of is not None else None,
+        "validated": True,
+        "reason": None,
+        "horizon": snap["horizon"],
+        "ic_run_date": snap["ic_run_date"],
+        "eligible_count": snap["eligible_count"],
+        "factors": snap["factors"],
+        "rows": rows,
+        "market": market,
+    }
+    _research_cache_put(cache_key, out)
+    return out
+
+
+def _sector_peers(
+    code: str,
+    scores: pd.DataFrame,
+    as_of: Any,
+    limit: int = 15,
+) -> dict[str, Any] | None:
+    """Skor emiten lain di sektor yang sama, dari cross-section terakhir.
+
+    Pembanding diambil dari emiten yang SUDAH punya skor. Emiten sektor ini yang
+    skornya belum terbentuk tidak muncul — bukan dianggap 0, karena "tidak ada
+    data" dan "skornya jelek" adalah dua hal berbeda.
+
+    Emiten di bucket fallback ``Lainnya`` ditandai ``comparable=False``:
+    "Lainnya" bukan sektor, jadi membandingkan skor di dalamnya tidak berarti.
+    Returns None kalau emiten tidak punya skor sama sekali.
+    """
+    if scores.empty or "code" not in scores.columns:
+        return None
+    if not (scores["code"] == code).any():
+        return None
+
+    sector = sector_for(code)
+    if sector == FALLBACK_SECTOR:
+        return {
+            "name": sector,
+            "comparable": False,
+            "peer_count": 0,
+            "my_rank": None,
+            "median_score": None,
+            "peers": [],
+        }
+
+    members = scores[scores["code"].map(lambda c: sector_for(str(c)) == sector)]
+    if members.empty:
+        return None
+
+    ordered = members.sort_values("score", ascending=False).reset_index(drop=True)
+    # Peringkat dihitung sebelum pemotongan daftar: emiten peringkat 18 harus
+    # tetap dilaporkan 18 walau hanya 15 baris yang ditampilkan.
+    pos = ordered.index[ordered["code"] == code]
+    shown = ordered.head(limit)
+
+    names = _broker_activity_meta([str(c) for c in shown["code"]], as_of)
+    return {
+        "name": sector,
+        "comparable": True,
+        "peer_count": int(len(members)),
+        "my_rank": int(pos[0]) + 1 if len(pos) else None,
+        "median_score": round(float(members["score"].median()), 1),
+        "peers": [
+            {
+                "code": str(r["code"]),
+                "name": names.get(str(r["code"]), {}).get("name"),
+                "score": round(float(r["score"]), 1),
+                "coverage": round(float(r["coverage"]), 2),
+                "is_self": str(r["code"]) == code,
+            }
+            for _, r in shown.iterrows()
+        ],
+    }
+
+
+def _rotation_delta(history: pd.DataFrame, sessions: int) -> float | None:
+    """Perubahan median skor sektor vs ``sessions`` sesi sebelumnya (None bila kurang)."""
+    if len(history) <= sessions:
+        return None
+    return round(
+        float(history["median_score"].iloc[-1] - history["median_score"].iloc[-1 - sessions]),
+        1,
+    )
+
+
+def get_sector_rotation(lookback: int = 60, min_names: int = 3) -> dict[str, Any]:
+    """Rotasi sektor dari skor aktivitas broker (proksi aliran dana).
+
+    Beda dari RRG di halaman Sektor (rotasi berbasis HARGA relatif), ini rotasi
+    berbasis JEJAK ALIRAN: sektor mana yang skor akumulasinya sedang naik.
+
+    Tiap tanggal diagregasi per sektor (median skor + breadth), lalu rotasi
+    diukur dari perubahan median — bukan levelnya. Sektor dengan kurang dari
+    ``min_names`` emiten berskor dibuang, dan emiten di bucket fallback
+    "Lainnya" tidak diikutkan karena itu bukan sektor (jumlahnya dilaporkan
+    terpisah sebagai ``unmapped_names`` supaya tetap jujur berapa yang tercakup).
+    """
+    lookback = max(5, min(lookback, 250))
+    min_names = max(2, min(min_names, 50))
+    cache_key = f"sector_rotation:{lookback}:{min_names}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research import broker_activity as ba
+
+    snap = broker_activity_snapshot()
+    as_of = snap["as_of"]
+    out: dict[str, Any] = {
+        "as_of": str(as_of.date()) if as_of is not None else None,
+        "validated": bool(snap["validated"]),
+        "reason": snap["reason"],
+        "horizon": snap["horizon"],
+        "ic_run_date": snap["ic_run_date"],
+        "lookback": lookback,
+        "min_names": min_names,
+        "unmapped_names": 0,
+        "sectors": [],
+    }
+
+    if not snap["validated"]:
+        _research_cache_put(cache_key, out)
+        return out
+
+    panel: pd.DataFrame = snap["panel"]
+    scores: pd.DataFrame = snap["scores"]
+    if panel.empty or scores.empty:
+        out["reason"] = (
+            "Skor sudah tervalidasi, tapi panel faktor belum cukup panjang untuk "
+            "menghitung rotasi sektor."
+        )
+        _research_cache_put(cache_key, out)
+        return out
+
+    codes = sorted({str(c).upper() for c in panel["code"]})
+    sector_of = {c: sector_for(c) for c in codes}
+    # Berapa emiten berskor yang belum punya sektor sebenarnya — dilaporkan,
+    # tidak disembunyikan, supaya cakupan rotasi bisa dinilai apa adanya.
+    out["unmapped_names"] = sum(
+        1 for c in (str(x).upper() for x in scores["code"]) if sector_for(c) == FALLBACK_SECTOR
+    )
+
+    hist = ba.sector_score_history(
+        panel,
+        snap["factors"],
+        sector_of,
+        lookback=lookback,
+        min_names=min_names,
+        exclude_sectors={FALLBACK_SECTOR},
+    )
+    if hist.empty:
+        out["reason"] = (
+            "Belum ada sektor dengan cukup emiten berskor untuk dihitung "
+            f"(minimal {min_names} emiten per sektor)."
+        )
+        _research_cache_put(cache_key, out)
+        return out
+
+    sectors: list[dict[str, Any]] = []
+    for sector, group in hist.groupby("sector"):
+        history = group.sort_values("date")
+        latest = history.iloc[-1]
+        level = round(float(latest["median_score"]), 1)
+        delta_5d = _rotation_delta(history, 5)
+        sectors.append(
+            {
+                "sector": str(sector),
+                "n_names": int(latest["n_names"]),
+                "median_score": level,
+                "breadth": round(float(latest["breadth"]), 2),
+                "delta_5d": delta_5d,
+                "delta_21d": _rotation_delta(history, 21),
+                # Fase ditentukan dari perubahan 5 sesi: pertanyaan "sedang ke mana"
+                # lebih relevan untuk rotasi daripada "sedang di mana".
+                "phase": ba.rotation_phase(level, delta_5d),
+                "history": [round(float(v), 1) for v in history["median_score"].tail(30)],
+            }
+        )
+
+    # Urut dari yang paling sedang menguat (rotasi masuk), bukan dari level.
+    sectors.sort(key=lambda s: s["delta_5d"] if s["delta_5d"] is not None else -999.0, reverse=True)
+    out["sectors"] = sectors
+    _research_cache_put(cache_key, out)
+    return out
+
+
+def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
+    """Skor aktivitas broker SATU emiten + riwayat skor & driver-nya.
+
+    Nilai terkini dibaca dari snapshot pasar supaya PERSIS sama dengan angka di
+    halaman ranking. Riwayatnya dihitung ulang per tanggal dari panel yang sama
+    (``research.broker_activity.composite_score_history``) — tiap tanggal
+    di-score terhadap pasar HARI ITU, jadi garis riwayatnya sebanding antar waktu
+    dan tidak tergeser oleh perubahan pasar hari ini.
+
+    Emiten yang tidak masuk cross-section terakhir tetap mendapat riwayat;
+    ``current`` None berarti "tidak ada skor untuk hari terakhir", bukan nol.
+    """
+    code = code.strip().upper()
+    lookback = max(2, min(lookback, 250))
+    cache_key = f"broker_activity_stock:{code}:{lookback}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research import broker_activity as ba
+
+    snap = broker_activity_snapshot()
+    as_of = snap["as_of"]
+    out: dict[str, Any] = {
+        "code": code,
+        "as_of": str(as_of.date()) if as_of is not None else None,
+        "validated": bool(snap["validated"]),
+        "reason": snap["reason"],
+        "horizon": snap["horizon"],
+        "ic_run_date": snap["ic_run_date"],
+        "eligible_count": snap["eligible_count"],
+        "sector": None,
+        "current": None,
+        "history": [],
+    }
+
+    if not snap["validated"]:
+        _research_cache_put(cache_key, out)
+        return out
+
+    history = ba.composite_score_history(
+        snap["panel"], snap["factors"], code, lookback=lookback
+    )
+    out["history"] = [
+        {
+            "date": str(pd.Timestamp(r["date"]).date()),
+            "score": round(float(r["score"]), 1),
+            "coverage": round(float(r["coverage"]), 2),
+            "drivers": list(r["drivers"]),
+        }
+        for _, r in history.iterrows()
+    ]
+
+    scores: pd.DataFrame = snap["scores"]
+    if not scores.empty and (scores["code"] == code).any():
+        ordered = scores.sort_values("score", ascending=False).reset_index(drop=True)
+        universe = int(len(ordered))
+        rank = int(ordered.index[ordered["code"] == code][0]) + 1
+        row = ordered.loc[rank - 1]
+        out["current"] = {
+            "score": round(float(row["score"]), 1),
+            "coverage": round(float(row["coverage"]), 2),
+            "rank": rank,
+            "universe": universe,
+            # 1.0 = peringkat teratas; 0.0 = terbawah.
+            "percentile": round(1.0 - (rank - 1) / max(universe, 1), 4),
+            "drivers": list(row["drivers"]),
+        }
+        out["sector"] = _sector_peers(code, scores, as_of)
+
+    _research_cache_put(cache_key, out)
     return out
