@@ -18,6 +18,8 @@ data/
 
 # Scratch/debug
 _*.txt
+_*.py
+scripts/_*.py
 
 # Project meta
 .freebuff/
