@@ -343,6 +343,9 @@ def build(
         "market": market,
         "accumulation": [i for i in ranked if i["score"] >= LABEL_MILD][:limit],
         "distribution": [i for i in ranked if i["score"] <= -LABEL_MILD][:limit],
+        # Daftar lengkap (tidak terpotong) untuk lookup per emiten — dipakai
+        # Ruang Keputusan yang butuh sentimen SATU emiten, juga saat netral.
+        "items": items,
         "stats": {
             "analyzed": len(items),
             "accumulation": sum(1 for i in items if i["score"] >= LABEL_MILD),

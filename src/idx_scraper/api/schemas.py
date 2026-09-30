@@ -526,9 +526,24 @@ class StockForeignFlow(BaseModel):
     peer_rank: dict[str, Any]
 
 
-class SectorTopStock(BaseModel):
+class StockDecision(BaseModel):
+    """Ruang Keputusan satu emiten: verdict gabungan + konteks & level invalidasi.
+
+    ``hold_check`` adalah SATU-SATUNYA sumber verdict (skor 0-100 + band);
+    sisanya konteks yang tidak mengubah verdict. Semua field bisa None bila
+    sumbernya belum tersedia — UI menyajikannya apa adanya, bukan 0.
+    """
+
     code: str
-    percent: float | None = None
+    generated_at: str
+    hold_check: dict[str, Any] | None = None
+    regime: dict[str, Any] | None = None
+    sentiment: dict[str, Any] | None = None
+    market_gauge: dict[str, Any] | None = None
+    foreign_10: list[dict[str, Any]] = []
+    last_flip: dict[str, Any] | None = None
+    events: list[dict[str, Any]] = []
+    invalidation: dict[str, Any] | None = None
 
 
 class SectorTopStock(BaseModel):

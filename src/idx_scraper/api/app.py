@@ -56,6 +56,7 @@ from .schemas import (
     Signal,
     SignalTrack,
     StockBrokerActivity,
+    StockDecision,
     StockForeignFlow,
     StockBrokerSummary,
     TechnicalChart,
@@ -67,8 +68,38 @@ from .schemas import (
 
 
 @asynccontextmanager
+def _warm_heavy_caches() -> None:
+    """Hitung cache berat sekali saat startup (background thread, fire-and-forget).
+
+    Event study butuh ~2 menit saat dingin — tanpa warm-up, permintaan pertama
+    ke Ruang Keputusan/Event Study menggantung sampai selesai hitung. Kalau
+    gagal (DB belum siap dsb.), cache terisi otomatis di permintaan berikutnya.
+    """
+    import threading
+
+    def _run_events() -> None:
+        try:
+            analytics._event_study_bundle()
+            print("[warmup] event bundle siap")
+        except Exception as e:
+            print(f"[warmup] event bundle dilewati: {e}")
+
+    def _run_broker_snapshot() -> None:
+        # Snapshot skor broker (~15s saat dingin) dipakai Hold Check & Ruang
+        # Keputusan; hangatkan supaya request pertama tidak menanggung biaya.
+        try:
+            analytics.broker_activity_snapshot()
+            print("[warmup] broker snapshot siap")
+        except Exception as e:
+            print(f"[warmup] broker snapshot dilewati: {e}")
+
+    threading.Thread(target=_run_events, daemon=True, name="warmup-event-bundle").start()
+    threading.Thread(target=_run_broker_snapshot, daemon=True, name="warmup-broker-snapshot").start()
+
+
 async def lifespan(app: FastAPI):
     init_pool()
+    _warm_heavy_caches()
     yield
     close_pool()
 
@@ -260,6 +291,17 @@ def technical_chart(code: str) -> dict:
 @app.get("/api/stocks/{code}/brokers", response_model=StockBrokerSummary)
 def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
     return analytics.get_broker_summary(code.upper(), date=date)
+
+
+@app.get("/api/stocks/{code}/decision", response_model=StockDecision)
+def stock_decision(code: str) -> dict:
+    """Ruang Keputusan satu emiten: verdict + konteks + level invalidasi.
+
+    Menggabungkan hold-check (verdict dasar), regime IHSG, sentimen aliran,
+    jejak asing 10 sesi, base rate event study, dan level pembatalan teknikal
+    ke dalam satu respons — semua dari sumber yang sudah ada, cache 30 menit.
+    """
+    return analytics.get_stock_decision(code.upper())
 
 
 @app.get("/api/stocks/{code}/broker-activity", response_model=StockBrokerActivity)
