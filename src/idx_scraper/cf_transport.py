@@ -55,30 +55,69 @@ class BrowserTransport:
 
     # ---------------- background loop management ----------------
 
+    async def _open_browser_async(self) -> None:
+        """Buka Chrome persistent + lewati challenge; isi _context/_page.
+
+        Dipisah dari _ensure_loop supaya bisa dipanggil ulang saat halaman
+        mati (di-close manual / Chrome crash) tanpa membangun ulang loop.
+        """
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+        context = await self._playwright.chromium.launch_persistent_context(
+            PROFILE_DIR,
+            channel="chrome",
+            headless=False,
+            viewport={"width": 1280, "height": 800},
+            locale="id-ID",
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        page = context.pages[0] if context.pages else await context.new_page()
+        await page.goto(f"{IDX_BASE}/id", wait_until="domcontentloaded", timeout=60000)
+        for _ in range(40):
+            await page.wait_for_timeout(2500)
+            title = await page.title()
+            if not _is_challenge(title):
+                break
+        self._context, self._page = context, page
+
+    def _revive_if_dead(self) -> Any:
+        """Pastikan halaman hidup; bangun ulang bila tertutup/crash.
+
+        Transport headful gampang mati karena user tidak sengaja menutup
+        jendelanya. Tanpa revive, SEMUA fetch IDX gagal selamanya dengan
+        "browser page closed" sampai `idx serve` di-restart manual.
+        """
+        self._ensure_loop()
+        page = self._page
+        if page is not None and not page.is_closed():
+            return page
+        if self._loop is None or not self._loop.is_running():
+            return page  # loop juga mati -> biarkan _ensure_loop yang rebuild
+
+        async def _reopen():
+            # Tutup sisa context lama (kalau ada) sebelum buka yang baru.
+            if self._context is not None:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
+                self._page = None
+            await self._open_browser_async()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_reopen(), self._loop).result(timeout=180)
+        except Exception as e:
+            print(f"[cf-transport] revive gagal: {e!r}", file=sys.stderr)
+        return self._page
+
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is not None and self._loop.is_running():
             return self._loop
 
         async def _run():
-            from playwright.async_api import async_playwright
-
-            self._playwright = await async_playwright().start()
-            context = await self._playwright.chromium.launch_persistent_context(
-                PROFILE_DIR,
-                channel="chrome",
-                headless=False,
-                viewport={"width": 1280, "height": 800},
-                locale="id-ID",
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            page = context.pages[0] if context.pages else await context.new_page()
-            await page.goto(f"{IDX_BASE}/id", wait_until="domcontentloaded", timeout=60000)
-            for _ in range(40):
-                await page.wait_for_timeout(2500)
-                title = await page.title()
-                if not _is_challenge(title):
-                    break
-            self._context, self._page = context, page
+            await self._open_browser_async()
 
         def _bootstrap():
             self._loop = asyncio.new_event_loop()
@@ -113,8 +152,7 @@ class BrowserTransport:
     # ---------------- public API ----------------
 
     def ensure_open(self) -> Any:
-        self._ensure_loop()
-        return self._page
+        return self._revive_if_dead()
 
     def get(self, path: str) -> Any | None:
         """Fetch an IDX JSON endpoint from inside the cleared page."""

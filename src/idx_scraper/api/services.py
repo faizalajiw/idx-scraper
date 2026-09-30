@@ -53,8 +53,10 @@ def _is_market_hours() -> bool:
 
 
 # Midnight today in WIB, as timestamptz — bounds "ticks from this session".
+# (The trailing ) closes the leading paren: ts column is timestamptz, so the
+# naive-local result of date_trunc must be re-tagged to WIB.)
 _WIB_DAY_START_SQL = (
-    "(date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta'"
+    "(date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta')"
 )
 
 # A session's newest tick older than this means the live sweep is down; fall back

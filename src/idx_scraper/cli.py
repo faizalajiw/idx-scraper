@@ -747,6 +747,7 @@ def cmd_serve(args) -> None:
 
     # --- Startup catchup: if today's EOD data is missing, run it now -------
     # Prevents missed refreshes when scheduler restarts after the cron window.
+    # Checks BOTH prices_pit (stock EOD) AND index_quotes (COMPOSITE official close).
     try:
         import psycopg as _pg
 
@@ -759,26 +760,42 @@ def cmd_serve(args) -> None:
                     "where trade_date = %s limit 1",
                     (_today,),
                 )
-                _has_today = _cur.fetchone() is not None
-            if not _has_today:
-                now_wib = datetime.now(WIB)
-                wd = now_wib.weekday()  # 0=Mon..6=Sun
-                past_close = now_wib.hour >= 16
-                is_trading_day = wd < 5
-                if is_trading_day and past_close:
-                    print(f"[catchup] data EOD {now_wib.strftime('%Y-%m-%d')} belum ada — "
-                          "menjalankan refresh pipeline sekarang...")
+                _has_today_stocks = _cur.fetchone() is not None
+                # Also check if COMPOSITE has an official 16:00 EOD close for today
+                _cur.execute(
+                    "select 1 from index_quotes "
+                    "where code = 'COMPOSITE' "
+                    "and (captured_at at time zone 'Asia/Jakarta')::date = %s "
+                    "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16 "
+                    "limit 1",
+                    (_today,),
+                )
+                _has_today_index = _cur.fetchone() is not None
+            now_wib = datetime.now(WIB)
+            wd = now_wib.weekday()  # 0=Mon..6=Sun
+            past_close = now_wib.hour >= 16
+            is_trading_day = wd < 5
+
+            if is_trading_day and past_close:
+                if not _has_today_stocks:
+                    print(f"[catchup] data EOD saham {now_wib.strftime('%Y-%m-%d')} belum ada — "
+                          "menjalankan full refresh pipeline...")
                     _job_pipeline_refresh(
                         client, storage,
                         label=f"startup catchup {now_wib.strftime('%Y-%m-%d')}",
                         do_eod=True,
                     )
+                elif not _has_today_index:
+                    print(f"[catchup] close resmi COMPOSITE {now_wib.strftime('%Y-%m-%d')} belum ada — "
+                          "menjalankan index EOD close...")
+                    _job_index_eod_close()
+                    _clear_api_cache()
                 else:
-                    print(f"[catchup] data EOD hari ini belum ada "
-                          f"(pasar {'sudah tutup' if past_close else 'belum tutup'}, "
-                          f"{'hari kerja' if is_trading_day else 'akhir pekan'})")
+                    print(f"[catchup] data EOD hari ini sudah lengkap (saham OK, index OK)")
             else:
-                print(f"[catchup] data EOD hari ini sudah ada ✓")
+                print(f"[catchup] check EOD selesai "
+                      f"(pasar {'sudah tutup' if past_close else 'belum tutup'}, "
+                      f"{'hari kerja' if is_trading_day else 'akhir pekan'})")
     except Exception as e:
         print(f"[warn] catchup check gagal: {e}", file=sys.stderr)
 
