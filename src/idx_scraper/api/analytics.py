@@ -378,17 +378,22 @@ def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_
         )
         rows = cur.fetchall()
 
-        # Peer: emiten lain se-sektor, jendela pendek untuk pembanding.
+        # Peer: emiten lain se-sektor, jendela SESI BURSA (N trade_date
+        # terakhir), bukan hari kalender — supaya label "10 sesi" di UI
+        # selalu persis 10 hari bursa untuk semua emiten.
         sector = sector_for(code)
         peer_days_map: dict[str, list[dict[str, Any]]] = {}
         if rows:
             cur.execute(
                 """select code, trade_date as date, foreign_net * close as net_idr
                    from research.latest_pit
-                   where trade_date >= (select max(trade_date) from research.latest_pit) - %s::int
+                   where trade_date in (
+                       select distinct trade_date from research.latest_pit
+                       order by 1 desc limit %s
+                   )
                      and close is not null and foreign_net is not null
                    order by trade_date""",
-                (peer_days * 4,),
+                (peer_days,),
             )
             for r in cur.fetchall():
                 c = str(r["code"]).upper()

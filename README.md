@@ -208,8 +208,38 @@ summary, index EOD close → clear cache API (`/api/cache/clear`).
 |------------|----------|------------|
 | **LiveCapture thread** | Rolling sweep, 1000ms/req per kode | Poll `GetTradingInfoDaily?code=X` untuk 60 likuid + 20 movers → tulis ke `intraday_ticks`. Hanya jalan saat jam bursa + IDX source aktif. Backoff otomatis kalau kena 429 (rate limit IDX). |
 | `alerts` | 300 detik (5 menit) | Cek sinyal BUY/SELL yang berubah + evaluasi aturan pantauan → kirim alert ke Telegram. Hanya saat jam bursa. |
-| `monthly_ic` | 1 hari per bulan, 06:30 WIB | IC analysis (factor weight) → simpan ke `factor_ic_history`. |
+| `daily_ic` | Sen–Jum 06:30 WIB | IC analysis (factor weight) → simpan ke `factor_ic_history`. Bobot composite hold-check otomatis ikut hasil terbaru. |
 | **Startup catchup** | Sekali saat boot | Kalau EOD hari ini belum ada + pasar sudah tutup + hari kerja → auto-jalankan full pipeline refresh. Mencegah data stale kalau scheduler di-restart kelewatan jadwal. |
+
+### 4. Auto-start saat laptop nyala (Windows)
+
+Dua service background **otomatis jalan tiap login** — tidak perlu buka terminal manual:
+
+| Service | Isi | Log |
+|---------|-----|-----|
+| `idx serve` | Seluruh scheduler di atas (EOD 16:05, IC harian 06:30, polling, live capture) | `_serve.log` |
+| API server | `uvicorn idx_scraper.api.app:app --port 8000` (dashboard) | `_api.log` |
+
+**Mekanismenya:** folder Startup user (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`)
+berisi `idx-serve-silent.vbs` & `idx-api-silent.vbs` — launcher senyap (jendela tak muncul) yang
+memanggil `scripts/start-serve.bat` & `scripts/start-api.bat`. Dua file .bat itu yang membawa
+`PYTHONUNBUFFERED=1` (biar log langsung ter-flush) dan append ke log di atas (keduanya gitignored).
+
+**Cek status:**
+
+```bash
+tail -20 _serve.log                                   # aktivitas scheduler
+curl -s http://localhost:8000/api/broker-flow -o /dev/null -w "%{http_code}\n"   # API hidup? -> 200
+```
+
+Catatan: di Task Manager proses python bisa tampak **dobel** per service — itu pasangan
+parent-child normal dari venv launcher Windows, bukan duplikat. Jangan jalankan `idx serve`
+manual kalau auto-start sudah jalan (biar tidak dobel-polling; kalau kejadian dobel, bunuh
+semua proses `cli serve` lalu jalankan ulang satu instance).
+
+**Matikan auto-start:** hapus `idx-serve-silent.vbs` / `idx-api-silent.vbs` dari folder Startup.
+**Matikan sementara:** `taskkill /F /IM python.exe` (hati-hati, bunuh semua python) atau kill
+proses `cli serve` / `api.app` spesifik lewat Task Manager.
 
 ### Alur Data ke Dashboard
 

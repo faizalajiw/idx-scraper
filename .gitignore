@@ -29,3 +29,8 @@ scripts/_*.py
 
 # Postgres data directory (relocated here; must never be committed)
 /pgdata/
+
+# Scheduler & server logs (background processes)
+/_serve.log
+/_api.log
+/_uvicorn.log

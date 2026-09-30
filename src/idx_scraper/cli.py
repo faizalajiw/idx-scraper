@@ -685,11 +685,14 @@ def cmd_serve(args) -> None:
         **_refresh("akhir pekan 16:00", do_eod=False),
         day_of_week="sat,sun", hour=16, minute=0, id="refresh_weekend_pm",
     )
-    # IC analysis bulanan — hari pertama kerja tiap bulan, 06:30 WIB (pra-buka).
-    # Bobot composite hold-check otomatis mengikuti hasil terbaru.
+    # IC analysis HARIAN — 06:30 WIB (pra-buka, sebelum refresh 08:45).
+    # Sebelumnya bulanan (tanggal 1); karena panel flow baru bertambah tiap
+    # hari dan gate IC tinggal menunggu sampel memadai, evaluasi harian
+    # memastikan faktor aliran langsung terpakai begitu lolos gate — bobot
+    # composite hold-check otomatis mengikuti hasil terbaru.
     scheduler.add_job(
-        _job_monthly_ic, "cron", day="1", hour=6, minute=30,
-        id="monthly_ic",
+        _job_monthly_ic, "cron", day_of_week="mon-fri", hour=6, minute=30,
+        id="daily_ic",
     )
     # Live per-emiten capture — GetStockSummary whole-market is EOD-only, so the
     # live feed is polled one code at a time. Runs as a rolling background sweep
