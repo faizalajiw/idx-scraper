@@ -444,8 +444,19 @@ def _ingest_eod_research(rows) -> None:
                    code, trade_date, ingested_at, open, high, low, close, volume, value,
                    name, prev_close, foreign_buy, foreign_sell, foreign_net
                from research.raw_eod
-               order by code, trade_date, ingested_at desc
+               order by code, trade_date, prev_close is null, ingested_at desc
                on conflict (code, trade_date, knowledge_date) do nothing"""
+        )
+        # Backfill any remaining NULL prev_close from the previous day's close.
+        conn.execute(
+            """update research.prices_pit p
+               set prev_close = prev.close
+               from research.prices_pit prev
+               where p.trade_date > prev.trade_date
+                 and p.code = prev.code
+                 and p.prev_close is null
+                 and prev.close is not null
+                 and prev.trade_date = p.trade_date - 1"""
         )
     print(f"[research] raw_eod +{inserted}, quarantine +{quarantined}, prices_pit refreshed")
 
