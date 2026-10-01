@@ -27,9 +27,11 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from .analysis import calculate_indicators, generate_signal
+from .smart_money import build_alert_message
 
 if TYPE_CHECKING:
     from .alert_rules import RuleEvaluation
+    from .smart_money_state import SmartMoneyEvent
 
 TELEGRAM_API = "https://api.telegram.org"
 SIG_EMOJI = {"BUY": "🟢", "SELL": "🔴", "HOLD": "⚪"}
@@ -126,6 +128,30 @@ def format_rule_message(alerts: list[RuleEvaluation]) -> str:
         lines.append(f"• {alert.message}")
     lines.append("")
     lines.append("<i>Aturan yang kamu pasang sendiri. Bukan nasihat keuangan.</i>")
+    return "\n".join(lines)
+
+
+def format_smart_money_message(events: list[SmartMoneyEvent]) -> str:
+    """Format transisi verdict jejak smart money jadi satu pesan Telegram (HTML).
+
+    ``events`` adalah hasil :meth:`SmartMoneyState.evaluate` — emiten yang
+    verdict non-netralnya BARU berubah (masuk/keluar/balik arah), jadi pembaca
+    hanya melihat transisi nyata. Baris per emiten memakai
+    :func:`smart_money.build_alert_message` (plain-language, pendek) dengan
+    ``previous_side`` agar kata "mulai/berbalik/sedang" benar.
+    """
+    lines = [
+        "<b>📡 Market Labs — Jejak Smart Money</b>",
+        f"<i>{time.strftime('%Y-%m-%d %H:%M WIB', time.gmtime(time.time() + 7 * 3600))}</i>",
+        "",
+    ]
+    for ev in events:
+        lines.append(build_alert_message(ev.code, ev.name, ev.verdict, [], None, ev.previous_side))
+        lines.append("")
+    lines.append(
+        "<i>Jejak investor asing (bukan rekomendasi). Detail: halaman Radar "
+        "Smart Money di dashboard.</i>"
+    )
     return "\n".join(lines)
 
 

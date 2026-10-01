@@ -41,6 +41,7 @@ from .notify import (
     SignalState,
     TelegramNotifier,
     format_rule_message,
+    format_smart_money_message,
     run_alert_check,
 )
 from .source_state import (
@@ -386,6 +387,16 @@ def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: boo
         except Exception as e:
             print(f"[err] refresh {name}: {e}", file=sys.stderr)
     _clear_api_cache()
+    # Alert jejak smart money: verdict jendela 10 sesi baru berubah sekarang
+    # (ada data EOD baru), jadi ini titik yang tepat untuk cek transisi +
+    # kirim Telegram. Dibungkus try/except — gagal tak menghentikan refresh.
+    if do_eod:
+        try:
+            n_sm = run_smart_money_alerts(_parse_watchlist(os.getenv("IDX_WATCHLIST")))
+            if n_sm:
+                print(f"[alerts] jejak smart money: {n_sm} transisi terkirim")
+        except Exception as e:
+            print(f"[err] refresh alert smart money: {e}", file=sys.stderr)
 
 
 def _ingest_eod_research(rows) -> None:
@@ -527,7 +538,8 @@ def cmd_alerts(args) -> None:
     """Scan sinyal dan kirim alert Telegram untuk sinyal yang berubah.
 
     Juga mengevaluasi aturan pantauan (harga/RSI/volume) yang disimpan lewat
-    halaman Pantau di dashboard.
+    halaman Pantau di dashboard, dan transisi verdict jejak smart money
+    (pemain besar masuk/keluar) untuk emiten watchlist.
     """
     notifier = TelegramNotifier()
     if args.test:
@@ -538,10 +550,14 @@ def cmd_alerts(args) -> None:
     try:
         signals = run_alert_check(storage, tickers, notifier, SignalState())
         rules = run_rule_alerts()
-        if signals or rules:
-            print(f"alerts terkirim — sinyal: {signals}, aturan: {rules}")
+        smart = run_smart_money_alerts(tickers)
+        if signals or rules or smart:
+            print(
+                f"alerts terkirim — sinyal: {signals}, aturan: {rules}, "
+                f"smart money: {smart}"
+            )
         else:
-            print("alerts: tidak ada sinyal atau aturan yang berubah")
+            print("alerts: tidak ada sinyal/aturan/smart money yang berubah")
     finally:
         storage.close()
 
@@ -572,6 +588,40 @@ def run_rule_alerts() -> int:
     if not fresh:
         return 0
     return len(fresh) if notifier.send_message(format_rule_message(fresh)) else 0
+
+
+def run_smart_money_alerts(codes: list[str]) -> int:
+    """Kirim alert Telegram untuk emiten yang verdict jejak smart money berubah.
+
+    Di panggil setelah data EOD baru masuk (verdict jendela 10 sesi hanya
+    berubah di titik itu). Alur: ambil verdict per emiten watchlist lewat
+    service read-only ``analytics.get_smart_money_verdicts``, lalu
+    :class:`SmartMoneyState` menyaring yang transisinya bermakna (baru masuk /
+    baru keluar / balik arah) dan mengirimkannya sekali — anti-spam sama
+    persis dengan aturan pantauan. DB down / Telegram tak diatur tidak boleh
+    menghentikan scheduler, jadi seluruh badan dibungkus try/except.
+    """
+    if not codes:
+        return 0
+    notifier = TelegramNotifier()
+    if not notifier.enabled:
+        return 0
+
+    from .api import analytics as analytics_api
+    from .smart_money_state import SmartMoneyState
+
+    try:
+        verdicts = analytics_api.get_smart_money_verdicts(codes)
+    except Exception as e:  # DB down / config missing must not kill the scheduler
+        print(f"[err] alert smart money dilewati: {e}", file=sys.stderr)
+        return 0
+    if not verdicts:
+        return 0
+
+    events = SmartMoneyState().evaluate(verdicts)
+    if not events:
+        return 0
+    return len(events) if notifier.send_message(format_smart_money_message(events)) else 0
 
 
 def _job_alerts(storage, codes: list[str]) -> None:

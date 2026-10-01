@@ -57,6 +57,7 @@ from .schemas import (
     SmartMoneyRadar,
     SmartMoneyStock,
     SmartMoneyTrackRecord,
+    SmartMoneyWatchList,
     StockBrokerActivity,
     StockBrokerSummary,
     StockDecision,
@@ -378,6 +379,21 @@ def smart_money_track_record() -> dict:
     ``analytics``. Cache 1 jam.
     """
     return analytics.get_smart_money_track_record()
+
+
+@app.get("/api/smart-money/verdicts", response_model=SmartMoneyWatchList)
+def smart_money_verdicts(
+    codes: str | None = Query(
+        default=None, description="Comma-separated tickers; default = watchlist"
+    ),
+) -> dict:
+    """Verdict jejak smart money per emiten watchlist (kartu halaman Pantau).
+
+    Menampilkan kondisi sekarang (ditimbun / dibuang / seimbang) supaya user
+    tahu baseline sebelum alert Telegram menyala saat verdict berubah.
+    """
+    data = analytics.get_smart_money_watchlist(_resolve_codes(codes))
+    return {**data, "telegram_enabled": alerts.telegram_enabled()}
 
 
 @app.get("/api/sectors/rrg", response_model=SectorRRG)

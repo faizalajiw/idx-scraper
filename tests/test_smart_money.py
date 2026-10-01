@@ -8,6 +8,7 @@ sebagai porsi nilai transaksi (p50|.| ≈ 2%, ambang bermakna 5%).
 from __future__ import annotations
 
 from idx_scraper.smart_money import (
+    build_alert_message,
     build_narrative,
     collect_pattern_episodes,
     consolidation_range,
@@ -614,3 +615,60 @@ def test_episodes_distribution_on_rally():
     eps = collect_pattern_episodes({"RLY": {"rows": rows}})
     pats = {e["pattern"] for e in eps}
     assert "distribution_on_rally" in pats, f"dapat {pats}"
+
+
+# --------------------------------------------------------------------------- #
+# build_alert_message
+# --------------------------------------------------------------------------- #
+
+
+def test_alert_message_new_accumulation():
+    v = verdict(_flat_rows(10, net=100.0, value=1000.0))  # akumulasi
+    msg = build_alert_message("BBCA", "Bank Central Asia", v, [], None, None)
+    assert "BBCA" in msg and "Bank Central Asia" in msg
+    assert "mulai ditimbun" in msg
+    assert "net buy" in msg
+
+
+def test_alert_message_new_distribution():
+    v = verdict(_flat_rows(10, net=-100.0, value=1000.0))  # distribusi
+    msg = build_alert_message("BMRI", None, v, [], None, None)
+    assert "mulai dibuang" in msg
+    assert "net sell" in msg
+    # tanpa name -> tidak ada label kosong aneh
+    assert "BMRI" in msg
+
+
+def test_alert_message_reversal():
+    # Sekarang distribusi, sebelumnya akumulasi -> "berbalik".
+    v = verdict(_flat_rows(10, net=-100.0, value=1000.0))
+    msg = build_alert_message("GOTO", None, v, [], None, previous_side="akumulasi")
+    assert "berbalik" in msg
+    assert "dibuang" in msg
+
+
+def test_alert_message_stable_side_uses_sedang():
+    # Sisi sama dengan sebelumnya -> "sedang" (bukan "mulai"/"berbalik").
+    v = verdict(_flat_rows(10, net=100.0, value=1000.0))
+    msg = build_alert_message("BBCA", None, v, [], None, previous_side="akumulasi")
+    assert "sedang ditimbun" in msg
+    assert "mulai" not in msg and "berbalik" not in msg
+
+
+def test_alert_message_includes_streak_and_pattern_note():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    v = verdict(rows)
+    patterns = detect_patterns(rows)  # silent_accumulation (butuh >= 11 baris)
+    assert patterns, "diharapkan ada pola"
+    msg = build_alert_message("BBCA", None, v, patterns, None, None)
+    # streak >= 3 (semua net buy) -> disebut
+    assert "berturut-turut" in msg
+    # catatan pola pertama ikut
+    assert any(p["note"] and p["note"] in msg for p in patterns)
+
+
+def test_alert_message_insufficient_is_honest():
+    v = verdict(_flat_rows(2, net=100.0, value=1000.0))  # kurang data
+    assert v["insufficient"] is True
+    msg = build_alert_message("NEW", None, v, [], None, None)
+    assert "belum cukup" in msg

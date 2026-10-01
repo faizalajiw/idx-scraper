@@ -236,3 +236,78 @@ ada look-ahead: snapshot intraday hari T memang sudah tertutup pada close T.
 Catatan operasional: job jejak sinyal dan tabel `research.signal_log` baru
 muncul setelah `idx serve`/`idx signal-log` dijalankan; endpoint tetap aman
 (backfill malas) bila tabel belum ada.
+
+## 8. Jejak Smart Money — verdict per emiten, radar, pola, alert (2026-10-01)
+
+Menjawab satu pertanyaan pengguna: **"saat buka emiten X, apakah pemain besar
+sedang masuk/keluar hari ini dan sejak kapan?"** Semua berbasis data yang
+sudah ada (`research.latest_pit`) — **tidak ada scraping baru, tidak ada
+look-ahead** (verdict memakai jendela 10 sesi yang sudah tertutup).
+
+"Smart money" di sini = **agregat investor asing** (IDX menggabungkan semua
+firma asing; tak ada breakdown per-firma per-saham di data gratis) + pola
+harga/volume. Dilabeli jujur sebagai proksi jejak, bukan rekomendasi.
+
+### 8.1 Modul pure & kalibrasi
+
+`src/idx_scraper/smart_money.py` (pure, tanpa DB): `verdict()` (akumulasi /
+distribusi / netral dari **porsi nilai transaksi** yang dibelani asing),
+`detect_patterns()` 4 pola klasik (akumulasi diam-diam, distribusi saat naik,
+inisiasi volume, distribusi diam-diam) via `pattern_flags()` sebagai
+**single source of truth**, `consolidation_range()` (level invalidasi),
+`build_narrative()` / `build_alert_message()` (plain-language), `build_radar()`
+(rank |net rupiah| + lantai likuiditas), `collect_pattern_episodes()` +
+`pattern_track_record()` (track record + alpha vs pasar).
+
+Ambang **dikalibrasi dari data nyata**, bukan tebakan: rentang 10 sesi p25
+≈ 9,9% → "tenang" < 10%; netval10 p50 ≈ 2% / p75 ≈ 6,2% (bermakna ≥ 5%);
+aliran besar ≥ 16% (p90); spike volume ≥ 2× rata-20 (p90); lantai likuiditas
+radar Rp 500 Jt (di atas p10).
+
+### 8.2 Lapisan API & UI
+
+| Endpoint | Isi |
+|---|---|
+| `GET /api/smart-money/radar?days=` | Papan akumulasi & distribusi se-pasar (rank rupiah, lantai likuiditas) |
+| `GET /api/stocks/{code}/smart-money` | Verdict + pola + level + narasi + konteks sektor per emiten |
+| `GET /api/smart-money/track-record` | Track record 4 pola (120 sesi): % berfungsi, alpha vs pasar, t-stat |
+| `GET /api/smart-money/verdicts?codes=` | Verdict per emiten watchlist (kartu halaman Pantau) |
+
+Arsitektur tetap mengikuti konvensi repo: **pure → service (`analytics.py`,
+cache in-process) → endpoint + Pydantic → TS types + SWR hook → komponen**.
+Frontend murni presentasi; tak ada kalkulasi di web.
+
+Halaman/komponen baru (`idx-web`): `/radar` + `/radar/[code]`,
+`SmartMoneyBanner` (di atas detail emiten), `SmartMoneyTrackRecordCard`,
+`SmartMoneyWatchCard` (Pantau), entri sidebar "Radar Smart Money".
+
+### 8.3 Alert plain-language (Telegram)
+
+Worker `run_smart_money_alerts()` (`cli.py`) dipanggil dari refresh pipeline
+EOD (`do_eod=True`) dan `idx alerts`. Alur: service read-only → latch
+`SmartMoneyState` (`smart_money_state.py`) → `format_smart_money_message()` →
+Telegram. Anti-spam sama seperti `SignalState`/`RuleState`:
+
+- **Baseline dulu**: run pertama menyimpan kondisi tiap kode tanpa mengirim
+  (mencegah banjir — watchlist ~199 emiten).
+- Alert **sekali per transisi bermakna**: netral→akumulasi, netral→distribusi,
+  akumulasi↔distribusi. Kembali netral tidak dibunyikan (re-arm).
+
+### 8.4 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check` (berkas sentuh) | ✅ bersih |
+| `pytest` (backend) | ✅ 437 lulus (34+ baru utk smart money & state) |
+| `tsc --noEmit` | ✅ bersih |
+| Runtime nyata (uvicorn :8000 + Postgres) | ✅ radar/track-record/verdicts/banner 200, payload lengkap |
+| Track record (120 sesi, 1243 kejadian) | ✅ Inisiasi alpha +1,87% (t=3,5); Distribusi diam-diam berfungsi 56% |
+| Alert dry-run (watchlist nyata) | ✅ baseline 0 event → 199 kode ter-seed; simulasi flip = 1 event, pesan terbaca |
+
+### 8.5 Sisa peta jalan
+
+1. **Broker tape per saham** (per-firma per-emiten) — macet: tidak ada di
+   sumber gratis IDX. Opsi: scrape pihak ketiga / keterbukaan info afiliasi.
+2. **Alert per-atas-jendela** (mis. akumulasi 20 sesi), bila baseline 10 sesi
+   terlalu sensitif di lapangan.
+3. **Rebalancing bobot track record** bila jumlah episode per pola membesar.

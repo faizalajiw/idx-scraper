@@ -702,6 +702,76 @@ def build_narrative(
     return sentences
 
 
+# Emoji arah verdict untuk pesan alert (idem gaya SIG_EMOJI di notify.py).
+VERDICT_EMOJI = {
+    VERDICT_ACCUMULATION: "🟢",
+    VERDICT_DISTRIBUTION: "🔴",
+    VERDICT_NEUTRAL: "⚪",
+}
+
+
+def build_alert_message(
+    code: str,
+    name: str | None,
+    verdict: dict[str, Any],
+    patterns: list[dict[str, Any]],
+    rng: dict[str, Any] | None,
+    previous_side: str | None = None,
+) -> str:
+    """Pesan alert plain-language singkat (1-3 baris) untuk Telegram (pure).
+
+    Mirip :func:`build_narrative` tapi dijaga pendek supaya bisa dipindai di
+    HP. ``previous_side`` = sisi non-netral sebelumnya (``None`` = belum pernah
+    / baru). Ini membentuk kata transisi di headline — yang paling penting bagi
+    orang awam:
+
+    - baru + akumulasi      -> "mulai ditimbun asing"
+    - baru + distribusi     -> "mulai dibuang asing"
+    - balik + akumulasi     -> "berbalik: asing mulai timbun"
+    - balik + distribusi    -> "berbalik: asing mulai buang"
+    - sudah sama (tanpa transisi) -> "sedang ditimbun/dibuang" (fallback)
+
+    Streak (jika >= 3) dan catatan pola pertama menyusul. Level
+    support/resistance sengaja TIDAK masuk (panjang; ada di banner).
+    Emiten ``insufficient`` -> kalimat jujur "belum cukup data".
+    Tidak pernah raise.
+    """
+    emoji = VERDICT_EMOJI.get(verdict.get("side", ""), "")
+    label = f" {name}" if name else ""
+    head = f"{emoji} <b>{code}</b>{label}"
+
+    if verdict.get("insufficient"):
+        return f"{head} — data aliran asing belum cukup untuk verdict."
+
+    side = verdict.get("side")
+    net_sum = verdict.get("net_sum_idr")
+    buy_word = "ditimbun" if side == VERDICT_ACCUMULATION else "dibuang"
+
+    if previous_side is None:
+        trans = f"mulai {buy_word}"
+    elif previous_side != side:
+        trans = f"berbalik: asing mulai {buy_word}"
+    else:
+        trans = f"sedang {buy_word}"
+
+    money = (
+        f"net buy {_fmt_rp(net_sum)}"
+        if side == VERDICT_ACCUMULATION
+        else f"net sell {_fmt_rp(abs(net_sum) if net_sum is not None else None)}"
+    )
+    size = size_label(verdict.get("netval_pct"))
+    size_txt = f", aliran {size}" if size else ""
+    lines = [f"{head} — {trans} ({money}, 10 sesi terakhir{size_txt})."]
+
+    streak = verdict.get("streak") or 0
+    if streak >= 3 and side != VERDICT_NEUTRAL:
+        arah = "net buy" if side == VERDICT_ACCUMULATION else "net sell"
+        lines.append(f"{streak} sesi berturut-turut (arah {arah}).")
+    if patterns and patterns[0].get("note"):
+        lines.append(patterns[0]["note"])
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------ radar
 
 

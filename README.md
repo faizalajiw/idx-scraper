@@ -303,6 +303,13 @@ python -m idx_scraper.cli serve           # alert otomatis jalan selama jam burs
 Sinyal terakhir disimpan di `.signal_state.json` — alert hanya dikirim saat sinyal flip
 (mis. HOLD→BUY, BUY→SELL), jadi tidak spam berulang.
 
+Selain sinyal & aturan pantauan, worker yang sama juga mengirim **alert jejak
+smart money**: saat verdict salah satu emiten di watchlist berubah (pemain
+besar mulai masuk / mulai keluar / balik arah), sekali per transisi — pesan
+plain-language ("BMRI — berbalik: asing mulai ditimbun, net buy Rp 840 M").
+Baseline di-seed di run pertama tanpa kirim, jadi tidak ada banjir di awal.
+State-nya di `data/smart_money_state.json`.
+
 ## Frontend Dashboard
 
 Frontend Next.js ada di repo terpisah `idx-web`:
@@ -339,6 +346,8 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/quality/quarantine-reasons`, `/api/quality/coverage-gaps`,
   `/api/quality/thin-days`, `/api/quality/corp-actions`, `/api/quality/duplicates`
 - **Alert Telegram:** `/api/alerts` (GET/POST/DELETE), `/api/alerts/test`
+- **Jejak smart money:** `/api/smart-money/radar`, `/api/stocks/{code}/smart-money`,
+  `/api/smart-money/track-record`, `/api/smart-money/verdicts`
 - **Backtest:** `GET /api/backtest/config`, `POST /api/backtest/run`
 - **Utilitas:** `/health`, `POST /api/cache/clear`
 

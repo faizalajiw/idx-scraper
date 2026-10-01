@@ -1228,3 +1228,23 @@ class SmartMoneyTrackRecord(BaseModel):
     n_episodes: int = 0
     history_sessions: int | None = None
     horizon_note: str | None = None
+
+
+class SmartMoneyWatchRow(BaseModel):
+    """Verdict jejak smart money satu emiten di watchlist (kartu Pantau)."""
+
+    code: str
+    name: str | None = None
+    side: str | None = None
+    insufficient: bool = False
+    net_sum_idr: float | None = None
+    netval_pct: float | None = None
+    streak: int | None = None
+    date: str | None = None
+    patterns: list[str] = []
+
+
+class SmartMoneyWatchList(BaseModel):
+    n: int = 0
+    rows: list[SmartMoneyWatchRow] = []
+    telegram_enabled: bool = False

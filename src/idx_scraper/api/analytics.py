@@ -447,7 +447,7 @@ def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_
 _SMART_MONEY_HISTORY = 30
 
 
-def _smart_money_panel(history_days: int) -> dict[str, list[dict[str, Any]]]:
+def _smart_money_panel(history_days: int) -> dict[str, dict[str, Any]]:
     """Panel baris harian per emiten untuk N sesi terakhir (satu query).
 
     Returns ``{code: {"name": ..., "rows": [...]}}`` — baris sudah dalam
@@ -818,6 +818,86 @@ def get_smart_money_track_record() -> dict[str, Any]:
     }
     _research_cache_put(cache_key, result, ttl=3600.0)
     return result
+
+
+def get_smart_money_verdicts(codes: list[str]) -> list[dict[str, Any]]:
+    """Verdict jejak smart money untuk daftar kode (satu query, read-only).
+
+    Dipakai worker alert: di tiap refresh EOD, verdict per emitan di-watchlist
+    dihitung dari panel 30 sesi lalu diproses lewat :class:`SmartMoneyState`
+    untuk mem-filter transisi bermakna. Logika pure di ``smart_money``; fungsi
+    ini hanya query + orkestrasi. Cache 30 menit (sama dengan radar).
+
+    Returns daftar ``{code, name, verdict, patterns, range}`` untuk kode yang
+    punya data (kode tanpa data dilewati). Urutan mengikuti input.
+    """
+    from ..smart_money import (
+        consolidation_range,
+        detect_patterns,
+    )
+    from ..smart_money import (
+        verdict as _verdict,
+    )
+
+    if not codes:
+        return []
+    codes = [c.upper() for c in codes]
+
+    cache_key = f"smart_money_verdicts:{','.join(sorted(codes))}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    panel = _smart_money_panel(_SMART_MONEY_HISTORY)
+
+    out: list[dict[str, Any]] = []
+    for code in codes:
+        entry = panel.get(code)
+        if not entry or not entry["rows"]:
+            continue
+        rows = entry["rows"]
+        v = _verdict(rows)
+        patterns = detect_patterns(rows)
+        rng = consolidation_range(rows)
+        out.append(
+            {
+                "code": code,
+                "name": entry.get("name"),
+                "verdict": v,
+                "patterns": patterns,
+                "range": rng,
+            }
+        )
+    _research_cache_put(cache_key, out, ttl=1800.0)
+    return out
+
+
+def get_smart_money_watchlist(codes: list[str]) -> dict[str, Any]:
+    """Ringkasan verdict jejak smart money per emiten watchlist (halaman Pantau).
+
+    Bentuk baris yang siap dirender: ``code, name, side, insufficient,
+    net_sum_idr, netval_pct, streak, date, patterns`` (label pola). Tidak ada
+    hitungan baru — hanya memangkas ``get_smart_money_verdicts`` supaya kartu
+    UI tidak menerima struktur berat (narasi, range).
+    """
+    items = get_smart_money_verdicts(codes)
+    rows: list[dict[str, Any]] = []
+    for d in items:
+        v = d.get("verdict") or {}
+        rows.append(
+            {
+                "code": d["code"],
+                "name": d.get("name"),
+                "side": v.get("side"),
+                "insufficient": bool(v.get("insufficient")),
+                "net_sum_idr": v.get("net_sum_idr"),
+                "netval_pct": v.get("netval_pct"),
+                "streak": v.get("streak"),
+                "date": v.get("date"),
+                "patterns": [p.get("label") for p in (d.get("patterns") or [])],
+            }
+        )
+    return {"n": len(rows), "rows": rows}
 
 
 def _market_return(
