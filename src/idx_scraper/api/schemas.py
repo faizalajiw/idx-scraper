@@ -1126,3 +1126,105 @@ class BacktestResult(BaseModel):
     cost_impact: CostImpact
     equity_curve: list[EquityPoint]
     disclaimer: str
+
+
+# --------------------------------------------------------------- jejak smart money
+
+
+class SmartMoneyRadarRow(BaseModel):
+    """Satu baris radar: emiten dengan jejak aliran asing terkuat di jendela N."""
+
+    code: str
+    name: str | None = None
+    side: str  # "akumulasi" | "distribusi"
+    net_sum_idr: float | None = None
+    netval_pct: float | None = None
+    streak: int | None = None
+    window_value: float | None = None
+    date: str | None = None
+
+
+class SmartMoneyRadar(BaseModel):
+    days: int
+    date: str | None = None
+    accumulation: list[SmartMoneyRadarRow]
+    distribution: list[SmartMoneyRadarRow]
+    scanned: int
+
+
+class SmartMoneyVerdict(BaseModel):
+    side: str  # "akumulasi" | "distribusi" | "netral"
+    strength: str | None = None  # "besar" | "menengah" | None
+    streak: int | None = None
+    streak_side: str | None = None  # "net_buy" | "net_sell" | "flat"
+    net_sum_idr: float | None = None
+    netval_pct: float | None = None
+    n_net_days: int | None = None
+    date: str | None = None
+    insufficient: bool = False
+
+
+class SmartMoneyPattern(BaseModel):
+    id: str
+    label: str
+    direction: str | None = None  # "buy-side" | "sell-side"
+    note: str | None = None
+
+
+class SmartMoneyRange(BaseModel):
+    lookback: int
+    low: float | None = None
+    high: float | None = None
+    support: float | None = None
+    resistance: float | None = None
+    range_pct: float | None = None
+
+
+class SmartMoneySectorContext(BaseModel):
+    sector: str | None = None
+    comparable: bool = True
+    sector_total: int | None = None
+    accumulating: int | None = None
+    distributing: int | None = None
+    position: str | None = None
+
+
+class SmartMoneyStock(BaseModel):
+    code: str
+    name: str | None = None
+    has_data: bool = False
+    verdict: SmartMoneyVerdict | None = None
+    patterns: list[SmartMoneyPattern] = []
+    range: SmartMoneyRange | None = None
+    narrative: list[str] = []
+    sector: SmartMoneySectorContext | None = None
+    date: str | None = None
+
+
+class SmartMoneyTrackHorizon(BaseModel):
+    """Metrik satu horizon forward (5/10/21 sesi) untuk satu pola."""
+
+    n: int = 0
+    hit_rate: float | None = None
+    aligned_hit_rate: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    tstat: float | None = None
+    alpha: float | None = None
+    effective_alpha: float | None = None
+
+
+class SmartMoneyTrackPattern(BaseModel):
+    pattern: str
+    label: str
+    direction: str | None = None
+    n: int = 0
+    n_resolved: int = 0
+    horizons: dict[str, SmartMoneyTrackHorizon] = {}
+
+
+class SmartMoneyTrackRecord(BaseModel):
+    patterns: list[SmartMoneyTrackPattern] = []
+    n_episodes: int = 0
+    history_sessions: int | None = None
+    horizon_note: str | None = None

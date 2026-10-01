@@ -39,11 +39,10 @@ from .schemas import (
     DividendStock,
     ForeignFlow,
     HoldCheckResponse,
+    MarketLeaders,
     MarketNarration,
     MarketOverview,
     MarketRegime,
-    MarketLeaders,
-    TopBrokers,
     QualityOverview,
     QuarantineReason,
     QuarantineRow,
@@ -55,12 +54,16 @@ from .schemas import (
     SessionMovers,
     Signal,
     SignalTrack,
+    SmartMoneyRadar,
+    SmartMoneyStock,
+    SmartMoneyTrackRecord,
     StockBrokerActivity,
+    StockBrokerSummary,
     StockDecision,
     StockForeignFlow,
-    StockBrokerSummary,
     TechnicalChart,
     ThinDay,
+    TopBrokers,
     ValuationResponse,
     WatchlistRow,
     WatchlistUpdate,
@@ -337,6 +340,44 @@ def stock_foreign_flow(
     ``comparable`` False menandakan bucket fallback "Lainnya".
     """
     return analytics.get_stock_foreign_flow(code.upper(), days=days, peer_days=peer_days, peer_limit=peer_limit)
+
+
+@app.get("/api/smart-money/radar", response_model=SmartMoneyRadar)
+def smart_money_radar(
+    days: int = Query(default=10, ge=2, le=60, description="Jendela agregasi (hari bursa)"),
+) -> dict:
+    """Radar jejak smart money: emiten dengan aliran asing terkuat di pasar.
+
+    Dua daftar (akumulasi & distribusi) top-N berdasar |net rupiah| di
+    jendela N sesi terakhir, plus lantai likuiditas (nilai transaksi jendela
+    >= Rp 500 Jt) supaya emiten yang nyaris tak diperdagangkan tidak masuk
+    papan. Logika peringkat di modul pure ``smart_money.build_radar``.
+    """
+    return analytics.get_smart_money_radar(days=days)
+
+
+@app.get("/api/stocks/{code}/smart-money", response_model=SmartMoneyStock)
+def stock_smart_money(code: str) -> dict:
+    """Jejak smart money satu emiten: verdict, pola klasik, level, dan narasi.
+
+    Jawaban plain-language atas "pemain besar lagi masuk/keluar sejak kapan
+    dan di level mana". Verdict dari porsi nilai transaksi yang dibelani
+    asing (bukan skor kuantitatif); level = rentang konsolidasi 20 sesi;
+    konteks sektor = berapa emiten se-sektor yang searah. Cache 30 menit.
+    """
+    return analytics.get_stock_smart_money(code.upper())
+
+
+@app.get("/api/smart-money/track-record", response_model=SmartMoneyTrackRecord)
+def smart_money_track_record() -> dict:
+    """Track record pola klasik jejak smart money (120 sesi terakhir).
+
+    Berapa kali tiap pola muncul, dan forward return-nya (entry T+1) plus
+    alpha vs pasar — menjawab "pola ini terbukti tidak". Agregasi di modul
+    pure ``smart_money``; forward return + alpha dihitung di service
+    ``analytics``. Cache 1 jam.
+    """
+    return analytics.get_smart_money_track_record()
 
 
 @app.get("/api/sectors/rrg", response_model=SectorRRG)

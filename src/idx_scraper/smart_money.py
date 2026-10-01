@@ -1,0 +1,757 @@
+"""Jejak smart money — verdict, pola klasik, dan narasi plain-language per emiten.
+
+Menjawab tiga pertanyaan orang awam untuk satu emiten:
+
+1. "Pemain besar lagi masuk atau keluar?"  -> :func:`verdict`
+   (akumulasi / distribusi / netral — satu kata, bukan skor kuantitatif)
+2. "Sejak kapan dan seberapa besar?"       -> streak (hari berturut) + ukuran
+   (rupiah + porsi dari total nilai transaksi)
+3. "Patokannya di mana kalau mau ikut?"    -> :func:`consolidation_range`
+
+Kenapa modul ini pure
+---------------------
+Pola yang sama dengan ``idx_scraper.foreign_flow`` dan
+``idx_scraper.broker_flow``: semua perhitungan menerima iterable baris dan
+TANPA akses DB supaya bisa dites tanpa Postgres. Query-nya tinggal menempel di
+endpoint (``api.analytics``) yang menyiapkan baris ``{date, net_idr, value,
+close, high, low, volume}`` urut tanggal menaik.
+
+Batasannya yang harus selalu diingat UI
+---------------------------------------
+"Smart money" di sini = agregat **investor asing** (IDX menggabungkan semua
+firma asing; di data gratis tidak ada breakdown per firma per saham) + pola
+perilaku harga/volume. Labelnya apa adanya: ini jejak, bukan rekomendasi.
+
+Ambang kalibrasi (dilakukan terhadap data nyata 244 sesi bursa, 967 emiten,
+24 Sep 2025 - 30 Sep 2026 — bukan angka feeling; idiom yang sama dengan
+koreksi desain ``research.sentiment``):
+
+- range harga 10 sesi: p25 ≈ 9,9%  -> "flat" = range < 10%
+- perubahan 10 sesi:  > +8% = naik jelas (≈17% dari semua emiten-sesi)
+- volume hari ini / rata20: p90 ≈ 2,1 -> "lonjakan" = ≥ 2x
+- net asing 10 sesi / nilai transaksi 10 sesi:
+  p50|.| ≈ 2%, p75|.| ≈ 6,2%, p90|.| ≈ 16,3%
+  -> "artinya" (directional) ≥ 5%, "besar" ≥ 16%
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable, Mapping
+from typing import Any
+
+# ------------------------------------------------------------------ konstanta
+
+# Ambang dari kalibrasi data (lihat docstring modul).
+FLAT_RANGE_MAX_PCT = 10.0      # range 10 sesi di bawah ini = harga "tenang"
+RISING_MIN_PCT = 8.0           # perubahan 10 sesi di atas ini = "naik jelas"
+VOL_SPIKE_RATIO = 2.0          # volume hari ini >= 2x rata20 = lonjakan
+MEANINGFUL_NETVAL_PCT = 5.0    # net asing jml / nilai jml >= 5% = bermakna
+LARGE_NETVAL_PCT = 16.0        # >= 16% = aliran besar (p90)
+INITIATION_NET_PCT = 2.0       # inisiasi: net hari ini >= 2% nilai hari itu
+
+PRICE_WINDOW = 10              # jendela "terakhir" utk verdict & pola (sesi)
+VOLUME_BASELINE_WINDOW = 20    # baseline volume utk rasio lonjakan
+RANGE_WINDOW = 10              # jendela range utk deteksi "flat"
+MIN_WINDOW_DAYS = 5            # min. hari ber-net di jendela agar boleh verdict
+
+VERDICT_ACCUMULATION = "akumulasi"
+VERDICT_DISTRIBUTION = "distribusi"
+VERDICT_NEUTRAL = "netral"
+
+# Lantai likuiditas radar: jumlah nilai transaksi di jendela harus >= ini
+# (Rp 500 Jt — di atas p10 nilai-5-sesi ≈ Rp 180 Jt, jadi memotong emiten
+# yang paling sulit diperdagangkan tanpa membuang emiten kecil yang likuid).
+RADAR_MIN_WINDOW_VALUE = 5.0e8
+
+
+# ------------------------------------------------------------------ helper
+
+
+def _f(value: Any) -> float | None:
+    """Ambil nilai float; None/NaN/inf/invalid -> None (bukan 0)."""
+    if value is None:
+        return None
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def _clean_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Normalisasi baris + urut tanggal menaik (defensif; endpoint sudah urut).
+
+    ``date`` boleh str ISO / ``date`` / ``Timestamp`` — dinormalkan ke str ISO
+    supaya sort lexicographic selalu benar (YYYY-MM-DD).
+    """
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = r.get("date")
+        if d is None:
+            continue
+        dstr = str(d)
+        if len(dstr) >= 10:
+            dstr = dstr[:10]
+        out.append(
+            {
+                "date": dstr,
+                "net_idr": _f(r.get("net_idr")),
+                "value": _f(r.get("value")),
+                "close": _f(r.get("close")),
+                "high": _f(r.get("high")),
+                "low": _f(r.get("low")),
+                "volume": _f(r.get("volume")),
+            }
+        )
+    out.sort(key=lambda x: x["date"])
+    return out
+
+
+def _streak(rows: list[dict[str, Any]]) -> tuple[int, str]:
+    """Streak arah net asing terakhir (hari berturut-turut, sampai hari paling
+    baru). Returns ``(streak, side)``; side = ``"net_buy"``/``"net_sell"``/
+    ``"flat"``. Hari net 0 atau tanpa data memutus streak — konsisten dengan
+    ``foreign_flow.daily_flow``.
+    """
+    streak = 0
+    side = "flat"
+    for r in reversed(rows):
+        net = r["net_idr"]
+        if net is None:
+            break
+        s = 1 if net > 0 else (-1 if net < 0 else 0)
+        if s == 0:
+            break
+        if side == "flat":
+            side = "net_buy" if s > 0 else "net_sell"
+        elif (s > 0 and side == "net_sell") or (s < 0 and side == "net_buy"):
+            break
+        streak += 1
+    return streak, side
+
+
+def _window_stats(rows: list[dict[str, Any]], days: int) -> dict[str, Any]:
+    """Agregat N sesi terakhir (sesi bursa, bukan hari kalender).
+
+    ``netval_pct`` = jumlah net asing / jumlah nilai transaksi * 100 — porsi
+    nilai transaksi yang benar-benar dibeli/dijual asing di jendela. None jika
+    tidak ada nilai (tak bisa bagi). Hari tanpa net tidak dianggap net 0.
+    """
+    window = rows[-days:]
+    net_sum = sum(r["net_idr"] for r in window if r["net_idr"] is not None)
+    value_sum = sum(r["value"] for r in window if r["value"] is not None)
+    n_net = sum(1 for r in window if r["net_idr"] is not None)
+    netval_pct = (net_sum / value_sum * 100.0) if value_sum and value_sum > 0 else None
+    return {
+        "net_sum_idr": net_sum,
+        "value_sum": value_sum if value_sum > 0 else None,
+        "netval_pct": netval_pct,
+        "n_net_days": n_net,
+    }
+
+
+# ------------------------------------------------------------------ verdict
+
+
+def verdict(rows: Iterable[Mapping[str, Any]], days: int = PRICE_WINDOW) -> dict[str, Any]:
+    """Verdict jejak smart money satu emiten — satu jawaban plain-language.
+
+    Rules (terdokumentasi, tanpa angka magic):
+
+    - ``side``: ``netval_pct`` >= +5 -> ``akumulasi``; <= -5 -> ``distribusi``;
+      selain itu ``netral``. (5% = p75 |netval10| data nyata — hanya 1 dari 4
+      emiten-sesi yang sampai di situ.)
+    - ``strength``: |netval_pct| >= 16 -> ``besar`` (p90); >= 5 -> ``menengah``;
+      netral -> None.
+    - ``insufficient``: True jika < :data:`MIN_WINDOW_DAYS` hari ber-net di
+      jendela — UI wajib menampilkan "data belum cukup", bukan netral palsu.
+
+    Returns ``side, strength, streak, streak_side, net_sum_idr, netval_pct,
+    n_net_days, date, insufficient``. Tidak pernah raise — emiten tanpa data
+    menghasilkan struktur kosong yang aman di-render.
+
+    ``days``: lebar jendela agregasi (default 10). Requirement "hari
+    bernilai" berskala dengan jendela (``min(5, days)``) supaya jendela pendek
+    (mis. radar 2 hari) tidak selamanya ``insufficient``.
+    """
+    cleaned = _clean_rows(rows)
+    streak, streak_side = _streak(cleaned)
+    stats = _window_stats(cleaned, days)
+    netval = stats["netval_pct"]
+    min_days = min(MIN_WINDOW_DAYS, days)
+    insufficient = stats["n_net_days"] < min_days or netval is None
+
+    if insufficient:
+        side = VERDICT_NEUTRAL
+        strength = None
+    elif netval >= MEANINGFUL_NETVAL_PCT:
+        side = VERDICT_ACCUMULATION
+        strength = "besar" if netval >= LARGE_NETVAL_PCT else "menengah"
+    elif netval <= -MEANINGFUL_NETVAL_PCT:
+        side = VERDICT_DISTRIBUTION
+        strength = "besar" if netval <= -LARGE_NETVAL_PCT else "menengah"
+    else:
+        side = VERDICT_NEUTRAL
+        strength = None
+
+    return {
+        "side": side,
+        "strength": strength,
+        "streak": streak,
+        "streak_side": streak_side,
+        "net_sum_idr": stats["net_sum_idr"] or None,
+        "netval_pct": round(netval, 2) if netval is not None else None,
+        "n_net_days": stats["n_net_days"],
+        "date": cleaned[-1]["date"] if cleaned else None,
+        "insufficient": insufficient,
+    }
+
+
+# ------------------------------------------------------------------ pola klasik
+
+#: Empat pola yang dikenali orang awam dari buku/podcast — tiap pola bisa
+#: dijelaskan satu kalimat. Semua kondisi terdokumentasi di docstring masing-
+#: masing; tidak ada parameter tersembunyi.
+PATTERNS: tuple[str, ...] = (
+    "silent_accumulation",
+    "distribution_on_rally",
+    "initiation",
+    "silent_distribution",
+)
+
+
+def _pattern_conditions(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Blok-blok boolean yang dipakai semua pola (dihitung sekali).
+
+    Jendela: harga/range/perubahan 10 sesi terakhir, volume hari ini vs
+    rata-rata 20, net asing hari ini + jendela 10. Returns None jika history
+    terlalu pendek untuk dipercaya (butuh >= 11 baris & 5 hari ber-net).
+    """
+    if len(rows) < 11:
+        return None
+    w10 = rows[-PRICE_WINDOW:]
+    closes = [r["close"] for r in w10 if r["close"] is not None]
+    highs = [r["high"] for r in w10 if r["high"] is not None]
+    lows = [r["low"] for r in w10 if r["low"] is not None]
+    if len(closes) < MIN_WINDOW_DAYS or len(highs) < MIN_WINDOW_DAYS or len(lows) < MIN_WINDOW_DAYS:
+        return None
+
+    last = rows[-1]
+    vol_base = [r["volume"] for r in rows[-VOLUME_BASELINE_WINDOW:] if r["volume"]]
+    vol_ratio = (
+        (last["volume"] / (sum(vol_base) / len(vol_base)))
+        if last["volume"] and len(vol_base) >= 10
+        else None
+    )
+    net_today = last["net_idr"]
+    value_today = last["value"]
+    net_today_pct = (
+        (net_today / value_today * 100.0)
+        if net_today is not None and value_today and value_today > 0
+        else None
+    )
+    stats10 = _window_stats(rows, PRICE_WINDOW)
+
+    return {
+        "range_pct": (max(highs) - min(lows)) / closes[-1] * 100.0,
+        "chg10_pct": (closes[-1] / closes[0] - 1.0) * 100.0,
+        "vol_ratio": vol_ratio,
+        "net_today_pct": net_today_pct,
+        "netval10_pct": stats10["netval_pct"],
+        "net_sum_idr": stats10["net_sum_idr"],
+        "n_net_days": stats10["n_net_days"],
+    }
+
+
+def pattern_flags(
+    range_pct: float | None,
+    chg10_pct: float | None,
+    vol_ratio: float | None,
+    netval10_pct: float | None,
+) -> dict[str, bool]:
+    """Boolean 4 pola dari metrik yang sudah dihitung (pure, tanpa baris).
+
+    Ini satu-satunya sumber kebenaran syarat pola: dipakai jalur per-emiten
+    (:func:`detect_patterns`) MAUPUN jalur panel (track record — metriknya
+    dihitung vectorized, syaratnya tetap fungsi ini) supaya keduanya
+    tidak pernah berbeda definisi. Input None -> kondisi terkait False (tanpa data
+    = tanpa sinyal, bukan asumsi).
+    """
+    flat = (
+        range_pct is not None
+        and netval10_pct is not None
+        and range_pct < FLAT_RANGE_MAX_PCT
+    )
+    up = chg10_pct is not None and chg10_pct > RISING_MIN_PCT
+    down_hard = chg10_pct is not None and chg10_pct < -3.0
+    spike = vol_ratio is not None and vol_ratio >= VOL_SPIKE_RATIO
+    fb = netval10_pct is not None and netval10_pct >= MEANINGFUL_NETVAL_PCT
+    fs = netval10_pct is not None and netval10_pct <= -MEANINGFUL_NETVAL_PCT
+
+    return {
+        "silent_accumulation": flat and fb,
+        "distribution_on_rally": up and fs,
+        "initiation": bool(spike and fb and not down_hard),
+        "silent_distribution": flat and fs,
+    }
+
+
+def detect_patterns(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Deteksi pola klasik jejak smart money (pure).
+
+    Empat pola, prioritas dari terkuat (yang mensyaratkan paling banyak
+    kondisi), dan **setengah-harga datar vs naik** adalah pembeda utamanya:
+
+    - ``silent_accumulation`` (akumulasi diam-diam): harga 10 sesi terakhir
+      TENANG (range < 10%), asing net buy bermakna (netval10 >= +5%).
+      "Institusi mengumpulkan tanpa menggerakkan harga."
+    - ``distribution_on_rally`` (distribusi saat naik): harga 10 sesi
+      TERNAIK (> +8%), tapi asing net sell bermakna (netval10 <= -5%).
+      "Yang jual lebih besar dari yang beli — hati-hati euforia."
+    - ``initiation`` (inisiasi): lonjakan volume hari ini (>= 2x rata20) +
+      asing net buy bermakna di jendela 10 (+ harga tidak turun > 3% — ini
+      volume yang mendorong, bukan panic dump).
+      "Masuknya baru mulai, perhatikan momentumnya."
+    - ``silent_distribution`` (distribusi diam-diam): harga TENANG (range
+      < 10%), asing net sell bermakna (netval10 <= -5%).
+      "Pelan-pelan keluar tanpa menekan harga."
+
+    Returns daftar (bisa 0-2; inisiasi bisa berjalan berdampingan dengan
+    akumulasi) ``{id, label, direction, note}`` — ``direction`` sudah
+    berorientasi ke investor: ``"buy-side"`` / ``"sell-side"``. Tidak pernah
+    raise; history pendek -> ``[]``.
+    """
+    cleaned = _clean_rows(rows)
+    c = _pattern_conditions(cleaned)
+    if c is None or c["netval10_pct"] is None:
+        return []
+
+    flags = pattern_flags(
+        c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"]
+    )
+
+    out: list[dict[str, Any]] = []
+    if flags["silent_distribution"]:
+        out.append(
+            {
+                "id": "silent_distribution",
+                "label": "Distribusi diam-diam",
+                "direction": "sell-side",
+                "note": (
+                    f"Harga 10 sesi terakhir tenang (range {c['range_pct']:.0f}%), "
+                    "tapi asing tercatat net sell bermakna — dana keluar pelan "
+                    "tanpa menekan harga."
+                ),
+            }
+        )
+    if flags["distribution_on_rally"]:
+        out.append(
+            {
+                "id": "distribution_on_rally",
+                "label": "Distribusi saat naik",
+                "direction": "sell-side",
+                "note": (
+                    f"Harga naik {c['chg10_pct']:.0f}% dalam 10 sesi, tapi asing "
+                    "net sell bermakna — yang jual lebih besar dari yang beli; "
+                    "hati-hati euforia."
+                ),
+            }
+        )
+    if flags["silent_accumulation"]:
+        out.append(
+            {
+                "id": "silent_accumulation",
+                "label": "Akumulasi diam-diam",
+                "direction": "buy-side",
+                "note": (
+                    f"Harga 10 sesi terakhir tenang (range {c['range_pct']:.0f}%), "
+                    "sementara asing tercatat net buy bermakna — pola khas "
+                    "pengumpulan sebelum harga bergerak."
+                ),
+            }
+        )
+    if flags["initiation"]:
+        out.append(
+            {
+                "id": "initiation",
+                "label": "Inisiasi volume + asing",
+                "direction": "buy-side",
+                "note": (
+                    f"Volume hari ini {c['vol_ratio']:.1f}x rata-rata 20 sesi "
+                    "dengan asing net buy bermakna — tanda masuk yang baru "
+                    "mulai bergerak."
+                ),
+            }
+        )
+    return out
+
+
+#: Jarak minimum antar kejadian pola (sesi) agar satu episode tidak
+#: terhitung berulang kali — jendela pola selebar 10 sesi, jadi episode yang
+#: tumpang-tindih (hari-hari berdekatan) dianggap satu episode.
+EPISODE_GAP = 10
+
+
+def collect_pattern_episodes(panel: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Kumpulkan kejadian pola klasik dari panel per emiten (pure, tanpa DB).
+
+    Panel bentuk ``{code: {name, rows}}`` (baris harian urut tanggal menaik,
+    kunci ``date/close/high/low/volume/net_idr/value`` — bentuk yang sama
+    dengan jalur per-emiten). Untuk tiap emiten, tiap baris T yang punya
+    history >= 11 sesi di belakangnya diperiksa dengan ``_pattern_conditions``
+    + ``pattern_flags`` — **fungsi yang sama** dipakai ``detect_patterns``,
+    sehingga definisi pola di sini tak pernah berbeda dari jalur per-emiten.
+
+    Dedup episode: jika dua kejadian T dan T+1 (jarak < :data:`EPISODE_GAP`)
+    untuk pola yang sama, hanya yang lebih lama yang dihitung — jendela 10
+    sesi yang tumpang-tindih bukan kejadian baru.
+
+    Returns daftar ``{code, date, pattern}`` (khususnya metrik yang dibutuhkan
+    :func:`pattern_track_record`; forward return dihitung pemanggil karena
+    butuh baris *setelah* T). Tidak pernah raise; panel kosong -> ``[]``.
+    """
+    episodes: list[dict[str, Any]] = []
+    for code, entry in panel.items():
+        rows = entry.get("rows") if isinstance(entry, Mapping) else entry
+        if not rows:
+            continue
+        cleaned = _clean_rows(rows)
+        last_idx = len(cleaned) - 1
+        last_seen: dict[str, int] = {}
+        # i mulai dari PRICE_WINDOW (10) supaya prefix selalu punya >= 11 baris
+        # — syarat ``_pattern_conditions``. Tiap baris T = "hari kejadian".
+        for i in range(PRICE_WINDOW, last_idx + 1):
+            prefix = cleaned[: i + 1]
+            c = _pattern_conditions(prefix)
+            if c is None or c["netval10_pct"] is None:
+                continue
+            flags = pattern_flags(
+                c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"]
+            )
+            today = cleaned[i]["date"]
+            for pid, hit in flags.items():
+                if not hit:
+                    continue
+                prev = last_seen.get(pid)
+                if prev is not None and (i - prev) < EPISODE_GAP:
+                    continue  # masih satu episode yang sama
+                last_seen[pid] = i
+                episodes.append({"code": code, "date": today, "pattern": pid})
+    return episodes
+
+
+# ------------------------------------------------------------------ level
+
+RANGE_LOOKBACK = 20  # jendela konsolidasi untuk level pembatalan
+
+
+def consolidation_range(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Rentang konsolidasi N sesi terakhir — level pembatalan untuk ikut.
+
+    Membalas pertanyaan "kalau mau ikut, patokannya di mana?":
+
+    - ``low``/``high``: low & high N sesi terakhir (window default 20).
+    - ``support``/``resistance``: sama dengan low/high (label yang bisa
+      dipegang user awam).
+    - ``breakout_above``: ``high`` — penembusan di atasnya = konfirmasi.
+    - ``invalidation_below``: ``low`` — jebol di bawahnya = pembatalan.
+    - ``range_pct``: lebar rentang dalam % harga.
+
+    Returns None jika < 5 sesi ber-harga (histori terlalu pendek — UI tidak
+    boleh menampilkan level yang tidak bisa dihitung).
+    """
+    cleaned = _clean_rows(rows)
+    window = [
+        r
+        for r in cleaned[-RANGE_LOOKBACK:]
+        if r["close"] is not None and r["low"] is not None and r["high"] is not None
+    ]
+    if len(window) < 5:
+        return None
+    low = min(r["low"] for r in window)
+    high = max(r["high"] for r in window)
+    last_close = window[-1]["close"]
+    if last_close is None or last_close <= 0:
+        return None
+    return {
+        "lookback": len(window),
+        "low": round(low, 2),
+        "high": round(high, 2),
+        "support": round(low, 2),
+        "resistance": round(high, 2),
+        "range_pct": round((high - low) / last_close * 100.0, 2),
+    }
+
+
+# ------------------------------------------------------------------ track record
+
+
+def _mean(v: list[float]) -> float | None:
+    return sum(v) / len(v) if v else None
+
+
+def _median(v: list[float]) -> float | None:
+    s = sorted(v)
+    if not s:
+        return None
+    mid = len(s) // 2
+    return float(s[mid]) if len(s) % 2 == 1 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def _tstat(v: list[float]) -> float | None:
+    """t-stat mean-vs-nol (tanpa Newey-West: kejadian antar emiten hampir
+    independen cross-sectional — beda dengan deret waktu se-emasiten)."""
+    if len(v) < 5:
+        return None
+    m = _mean(v)
+    var = sum((x - m) ** 2 for x in v) / (len(v) - 1)
+    if var is None or var <= 0:
+        return None
+    return m / (var**0.5 / len(v) ** 0.5)
+
+
+def pattern_track_record(
+    occurrences: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Agregasi track record pola klasik dari kejadian yang sudah diberi
+    forward return (pure).
+
+    ``occurrences``: satu baris per kejadian pola ``{code, date, pattern,
+    fwd5, fwd10, fwd21, [abn5, abn10, abn21]}`` — forward return dalam
+    **persen**, entry T+1 (disiplin yang sama dengan ``research.signal_log``);
+    horizon yang belum terealisasi = None. ``abn{h}`` (opsional) = forward
+    return dikurangi return pasar equal-weight window yang sama (alpha vs
+    pasar; konvensi ``abn_k`` di ``signal_log``).
+
+    Returns daftar per pola (urutan :data:`PATTERNS`) ``{pattern, label,
+    direction, n, n_resolved, per horizon: {n, hit_rate, aligned_hit_rate,
+    mean, median, tstat, alpha, effective_alpha}}``. ``alpha`` = mean
+    ``abn{h}`` (None bila tak ada abn). Hit rate = porsi kejadian
+    terealisasi dengan forward return > 0. ``aligned_hit_rate`` &
+    ``effective_alpha`` = interpretasi searah pola: untuk pola sell-side
+    (yang "berfungsi" bila harga turun), aligned = 1 − hit_rate dan
+    effective_alpha dibalik tanda — jadi dua field ini selalu bisa dibaca
+    "seberapa sering/besar polanya bekerja sesuai ekspektasi". Pola tanpa
+    kejadian -> tidak masuk daftar (UI menampilkan "belum ada kejadian").
+    Tidak pernah raise.
+    """
+    labels = {
+        "silent_accumulation": ("Akumulasi diam-diam", "buy-side"),
+        "distribution_on_rally": ("Distribusi saat naik", "sell-side"),
+        "initiation": ("Inisiasi volume + asing", "buy-side"),
+        "silent_distribution": ("Distribusi diam-diam", "sell-side"),
+    }
+    per_pattern: dict[str, list[dict[str, Any]]] = {p: [] for p in PATTERNS}
+    for o in occurrences:
+        pid = str(o.get("pattern"))
+        if pid in per_pattern:
+            per_pattern[pid].append(o)
+
+    out: list[dict[str, Any]] = []
+    for pid in PATTERNS:
+        rows = per_pattern[pid]
+        if not rows:
+            continue
+        n = len(rows)
+        label, direction = labels.get(pid, (pid, None))
+        horizons: dict[str, Any] = {}
+        n_resolved = 0
+        for h in (5, 10, 21):
+            vals = [_f(r.get(f"fwd{h}")) for r in rows]
+            vals = [v for v in vals if v is not None]
+            abn = [_f(r.get(f"abn{h}")) for r in rows]
+            abn = [v for v in abn if v is not None]
+            n_resolved = max(n_resolved, len(vals))
+            hit = (sum(1 for v in vals if v > 0) / len(vals)) if vals else None
+            # Interpretasi mengikuti arah pola: pola sell-side "berfungsi"
+            # bila harga TURUN, jadi hit rate-nya = porsi fwd < 0, dan
+            # alpha efektif dibalik tanda. Keduanya = "seberapa sering
+            # pola ini bekerja sesuai ekspektasi", satu sumbu baca.
+            if hit is not None:
+                aligned = hit if direction == "buy-side" else 1.0 - hit
+            else:
+                aligned = None
+            eff_alpha = None
+            if abn:
+                eff_alpha = _mean(abn) if direction == "buy-side" else -_mean(abn)
+            horizons[f"fwd{h}"] = {
+                "n": len(vals),
+                "hit_rate": hit,
+                "aligned_hit_rate": aligned,
+                "mean": _mean(vals),
+                "median": _median(vals),
+                "tstat": _tstat(vals),
+                "alpha": _mean(abn),
+                "effective_alpha": eff_alpha,
+            }
+        out.append(
+            {
+                "pattern": pid,
+                "label": label,
+                "direction": direction,
+                "n": n,
+                "n_resolved": n_resolved,
+                "horizons": horizons,
+            }
+        )
+    return out
+
+
+# ------------------------------------------------------------------ narasi
+
+#: Band label untuk "artinya seberapa" — ambang dari kalibrasi data (lihat
+#: docstring modul).
+SIZE_BANDS = (
+    (LARGE_NETVAL_PCT, "besar"),
+    (MEANINGFUL_NETVAL_PCT, "bermakna"),
+)
+
+
+def size_label(netval_pct: float | None) -> str | None:
+    """Label ukuran aliran dalam kata: ``besar`` / ``bermakna`` / None."""
+    if netval_pct is None:
+        return None
+    a = abs(netval_pct)
+    for thr, label in SIZE_BANDS:
+        if a >= thr:
+            return label
+    return None
+
+
+def _fmt_rp(v: float | None) -> str:
+    """Format rupiah ringkas (Rp ... T / M / Jt) — idem ``analytics._fmt_rp``."""
+    if v is None:
+        return "-"
+    a = abs(v)
+    if a >= 1e12:
+        return f"Rp {v / 1e12:.2f} T"
+    if a >= 1e9:
+        return f"Rp {v / 1e9:.1f} M"
+    return f"Rp {v / 1e6:.1f} Jt"
+
+
+def build_narrative(
+    code: str,
+    verdict: dict[str, Any],
+    patterns: list[dict[str, Any]],
+    rng: dict[str, Any] | None,
+) -> list[str]:
+    """Narasi plain-language 2-4 kalimat untuk banner "Jejak Smart Money".
+
+    Prinsip: **verdict dulu, angka belakangan** — orang awam membaca satu
+    baris dan sudah tahu arah + durasi; detail menyusul. Kalimat:
+
+    1. Arah + durasi + ukuran:
+       "BBCA — Sedang ditimbun asing (10 sesi terakhir): net buy Rp 1,2 T,
+       setara 14% dari total nilai transaksi."
+    2. Streak (hanya jika >= 3, biar tidak bising).
+    3. Catatan pola (hanya pola pertama — yang paling banyak syaratnya).
+    4. Level (hanya jika ada range): "Harga 20 sesi terakhir terkurung
+       9.200-9.500; tembus di atas 9.500 = konfirmasi, jebol 9.200 = batal."
+
+    Emiten dengan verdict ``insufficient`` -> satu kalimat jujur "belum
+    cukup data". Tidak pernah raise.
+    """
+    sentences: list[str] = []
+    side = verdict.get("side")
+    net_sum = verdict.get("net_sum_idr")
+    netval = verdict.get("netval_pct")
+    streak = verdict.get("streak") or 0
+
+    if verdict.get("insufficient"):
+        return [
+            (
+                f"{code} — Data aliran asing belum cukup untuk verdict "
+                "(butuh >= 5 sesi bernilai)."
+            )
+        ]
+
+    if side == VERDICT_ACCUMULATION:
+        head = "Sedang ditimbun asing"
+        money = f"net buy {_fmt_rp(net_sum)}"
+    elif side == VERDICT_DISTRIBUTION:
+        head = "Sedang dibuang asing"
+        money = f"net sell {_fmt_rp(abs(net_sum) if net_sum is not None else None)}"
+    else:
+        head = "Arus asing seimbang"
+        money = f"net asing {_fmt_rp(net_sum)}"
+
+    size = size_label(netval)
+    size_txt = f", aliran {size}" if size else ""
+    sentences.append(
+        f"{code} — {head} (10 sesi terakhir): {money} pada nilai transaksi"
+        f"{size_txt}."
+    )
+
+    if streak >= 3 and side != VERDICT_NEUTRAL:
+        arah = "net buy" if (side == VERDICT_ACCUMULATION) else "net sell"
+        sentences.append(f"Terjadi {streak} sesi berturut-turut (arah {arah}).")
+
+    if patterns:
+        sentences.append(patterns[0]["note"])
+
+    if rng:
+        sentences.append(
+            f"Harga {rng['lookback']} sesi terakhir bergerak di rentang "
+            f"{rng['low']:.0f}-{rng['high']:.0f}; penembusan di atas "
+            f"{rng['resistance']:.0f} mengonfirmasi arah, jebol di bawah "
+            f"{rng['support']:.0f} membatalkannya. Ini referensi level, "
+            "bukan rekomendasi."
+        )
+    return sentences
+
+
+# ------------------------------------------------------------------ radar
+
+
+def build_radar(
+    emitters: Mapping[str, Mapping[str, Any]],
+    days: int = PRICE_WINDOW,
+    min_window_value: float = RADAR_MIN_WINDOW_VALUE,
+) -> list[dict[str, Any]]:
+    """Radar smart money: peringkat emiten dengan jejak aliran terkuat (pure).
+
+    ``emitters``: ``{code: {"name": ..., "rows": [...]}}`` — ``rows`` adalah
+    baris harian (sama seperti :func:`verdict`) N sesi terakhir, urut
+    menaik. Untuk tiap emiten:
+
+    1. ``verdict(rows, days)`` — harus TIDAK ``insufficient`` dan
+       ``side``-nya bukan netral.
+    2. Lantai likuiditas: ``window_value`` (jumlah nilai transaksi di
+       jendela) >= ``min_window_value`` (default Rp 500 Jt — di atas p10
+       data nyata, jadi memotong emiten yang nyaris tak diperdagangkan).
+
+    Returns daftar baris ``{code, name, side, net_sum_idr, netval_pct,
+    streak, window_value, date}`` — **akumulasi & distribusi campur**,
+    urut menurun berdasar |net_sum_idr| (uang, bukan persentase: emiten
+    dengan net 2% dari Rp 10 T lebih besar maknanya dari 20% dari Rp 50 M).
+    Endpoint mem-pisah ke dua daftar (in/out) dan memotong top-N.
+    """
+    out: list[dict[str, Any]] = []
+    for code, info in emitters.items():
+        rows = info.get("rows") or []
+        v = verdict(rows, days=days)
+        if v["insufficient"] or v["side"] == VERDICT_NEUTRAL:
+            continue
+        stats = _window_stats(_clean_rows(rows), days)
+        wv = stats["value_sum"]
+        if not wv or wv < min_window_value:
+            continue
+        out.append(
+            {
+                "code": code,
+                "name": info.get("name"),
+                "side": v["side"],
+                "net_sum_idr": v["net_sum_idr"],
+                "netval_pct": v["netval_pct"],
+                "streak": v["streak"],
+                "window_value": wv,
+                "date": v["date"],
+            }
+        )
+    out.sort(key=lambda r: abs(r["net_sum_idr"] or 0.0), reverse=True)
+    return out
+
+
+# --- APPEND-3 ---
