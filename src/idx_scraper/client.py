@@ -197,6 +197,19 @@ class IDXClient:
             return []
         return raw["data"]
 
+    def fetch_company_profile(self, code: str) -> dict[str, Any] | None:
+        """Profil emiten + komposisi pemegang saham (GetCompanyProfilesDetail).
+
+        Gratis & per-emiten (beda dari GetBrokerSummary yang seluruh pasar).
+        Payload berisi kunci ``PemegangSaham`` (daftar pemilik: nama, kategori,
+        jumlah lembar, persen, flag pengendali), ``Direktur``/``Komisaris``,
+        ``Dividen``, dll. Parsing + storage ada di ``ownership_store``.
+        """
+        raw = self._get_json(
+            f"/primary/ListedCompany/GetCompanyProfilesDetail?KodeEmiten={code}"
+        )
+        return raw if isinstance(raw, dict) else None
+
     def close(self) -> None:
         if self.session is not None:
             self.session.close()

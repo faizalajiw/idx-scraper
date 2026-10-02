@@ -900,6 +900,112 @@ def get_smart_money_watchlist(codes: list[str]) -> dict[str, Any]:
     return {"n": len(rows), "rows": rows}
 
 
+def get_stock_ownership(code: str) -> dict[str, Any]:
+    """Kepemilikan emiten + aksi pemilik (gratis, keterbukaan IDX).
+
+    Baca ``research.ownership``: snapshot terbaru (komposisi pemilik + free
+    float) dan snapshot sebelumnya untuk diff **aksi pemilik** (siapa
+    menambah/mengurangi/masuk/keluar). Logika derive pure di
+    ``ownership.py``. Cache 1 jam (data berubah lambat / bulanan).
+
+    Returns ``{code, has_data, as_of, prev_date, holders, free_float_pct,
+    controller, changes}``. Tidak pernah raise; tabel belum ada -> has_data
+    False.
+    """
+    from ..ownership import controller_names, free_float_pct, owner_changes
+
+    code = code.upper()
+    cache_key = f"ownership:{code}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    empty: dict[str, Any] = {
+        "code": code,
+        "has_data": False,
+        "as_of": None,
+        "prev_date": None,
+        "holders": [],
+        "free_float_pct": None,
+        "controller": [],
+        "changes": [],
+    }
+
+    with get_cursor() as cur:
+        cur.execute("select to_regclass('research.ownership') as t")
+        row = cur.fetchone()
+        if row is None or row["t"] is None:
+            _research_cache_put(cache_key, empty, ttl=600.0)
+            return empty
+
+        cur.execute(
+            "select max(snapshot_date) as d from research.ownership where code = %s",
+            (code,),
+        )
+        latest = cur.fetchone()
+        latest_date = latest["d"] if latest else None
+        if latest_date is None:
+            _research_cache_put(cache_key, empty, ttl=600.0)
+            return empty
+
+        cur.execute(
+            """select holder_name, category, shares, pct, is_controller
+               from research.ownership
+               where code = %s and snapshot_date = %s
+               order by pct desc nulls last""",
+            (code, latest_date),
+        )
+        holders = [
+            {
+                "holder_name": r["holder_name"],
+                "category": r["category"],
+                "shares": _f(r["shares"]),
+                "pct": _f(r["pct"]),
+                "is_controller": bool(r["is_controller"]),
+            }
+            for r in cur.fetchall()
+        ]
+
+        cur.execute(
+            """select max(snapshot_date) as d from research.ownership
+               where code = %s and snapshot_date < %s""",
+            (code, latest_date),
+        )
+        prev_row = cur.fetchone()
+        prev_date = prev_row["d"] if prev_row else None
+        prev_holders: list[dict[str, Any]] = []
+        if prev_date is not None:
+            cur.execute(
+                """select holder_name, category, shares, pct, is_controller
+                   from research.ownership
+                   where code = %s and snapshot_date = %s""",
+                (code, prev_date),
+            )
+            prev_holders = [
+                {
+                    "holder_name": r["holder_name"],
+                    "category": r["category"],
+                    "shares": _f(r["shares"]),
+                    "pct": _f(r["pct"]),
+                    "is_controller": bool(r["is_controller"]),
+                }
+                for r in cur.fetchall()
+            ]
+
+    out = {
+        "code": code,
+        "has_data": bool(holders),
+        "as_of": str(latest_date),
+        "prev_date": str(prev_date) if prev_date is not None else None,
+        "holders": holders,
+        "free_float_pct": free_float_pct(holders),
+        "controller": controller_names(holders),
+        "changes": owner_changes(prev_holders, holders) if prev_date is not None else [],
+    }
+    _research_cache_put(cache_key, out, ttl=3600.0)
+    return out
+
+
 def _market_return(
     closes: dict[str, list[dict[str, Any]]],
     idx: dict[tuple[str, str], int],

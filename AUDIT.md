@@ -311,3 +311,71 @@ Telegram. Anti-spam sama seperti `SignalState`/`RuleState`:
 2. **Alert per-atas-jendela** (mis. akumulasi 20 sesi), bila baseline 10 sesi
    terlalu sensitif di lapangan.
 3. **Rebalancing bobot track record** bila jumlah episode per pola membesar.
+
+## 9. Broker tape per saham — ditutup; diganti "Pemilik & Aksi Pemilik" (2026-10-01)
+
+### 9.1 Hasil penyelidikan (empiris, bukan asumsi)
+
+`GetBrokerSummary` (sumber `research.broker_daily`) diuji dengan parameter
+per-saham: `?stockCode=BBCA` dan `?emitenCode=BBCA` mengembalikan **88 baris
+identik** dengan tanpa parameter — parameternya **diam-diam diabaikan**.
+`GetBrokerSummaryByStock` → **503** (tak ada). Halaman broker IDX sendiri hanya
+menampilkan tabel 88 firma **seluruh pasar**. Kesimpulan: **IDX tidak
+menyediakan tape broker per saham di endpoint publik gratis** (menguatkan
+catatan README). Jalur berbayar yang ada: Index Alpha (5 request/hari gratis,
+mulai Rp 200rb/bln, data dari 2025-01-01), idxalpha.com (Rp 350rb/bln),
+Stockbit PRO (Bandar Detector, Rp 200rb/bln).
+
+### 9.2 Yang dikerjakan sebagai gantinya (gratis)
+
+`/primary/ListedCompany/GetCompanyProfilesDetail?KodeEmiten=` ternyata
+mengembalikan **`PemegangSaham`** per emiten (nama, kategori, lembar, persen,
+flag `Pengendali`) — gratis, pakai transport yang sudah ada. Fitur baru:
+**Pemilik & Aksi Pemilik**.
+
+- `ownership.py` (pure): `parse_shareholders`, `free_float_pct`,
+  `controller_names`, `owner_changes` (diff dua snapshot -> tambah/kurang/
+  baru/keluar, agregat masyarakat & treasury dikecualikan).
+- `ownership_store.py`: tabel `research.ownership` (snapshot per tanggal) +
+  upsert idempoten.
+- `client.fetch_company_profile`; CLI `idx ownership [--codes|--all|--date]`.
+- `analytics.get_stock_ownership` + `GET /api/stocks/{code}/ownership`.
+- UI: kartu **Pemilik & Aksi Pemilik** di detail emiten (free float, pengendali,
+  daftar pemilik, perubahan porsi).
+
+**Snapshot, bukan deret waktu**: IDX hanya memberi komposisi terkini, jadi
+"aksi pemilik" muncul setelah ada dua snapshot di tanggal berbeda — jalankan
+`idx ownership` berkala (mis. bulanan, sejalan laporan KSEI).
+
+### 9.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check` (berkas sentuh) | ✅ bersih |
+| `pytest` (backend) | ✅ lulus (+12 test ownership) |
+| `tsc --noEmit` | ✅ bersih |
+| Runtime nyata | ✅ `idx ownership --codes ...` -> 70 baris (4/6 emiten; 2 kena 403 transien, dilewati) |
+| Endpoint | ✅ `GET /api/stocks/BMRI/ownership` 200 — free float 40,46%, pengendali terisi |
+| Diff aksi pemilik (2 snapshot) | ✅ Danantara +1,48% (tambah), INA −0,60% (kurang), PT lama (keluar) |
+
+### 9.4 Sisa peta jalan
+
+1. ~~**Snapshot berkala otomatis**~~ — **selesai (2026-10-02)**: job
+   `ownership_weekly` (Senin 06:45 WIB, `_job_ownership`) snapshot watchlist ke
+   `research.ownership`; helper `snapshot_ownership()` dipakai bersama CLI &
+   scheduler, jadwal via `_next_weekday_at()` (interval 1 minggu).
+2. **Free float sebagai penyebut** aliran asing (net asing ÷ free float) —
+   ukuran institusional yang lebih tajam dari ÷ nilai transaksi.
+3. **Tape broker per saham** tetap butuh vendor berbayar (lihat 9.1).
+
+### 9.5 Update data 2026-10-02
+
+| Pemeriksaan | Hasil |
+|---|---|
+| EOD saham 2026-10-01 & 2026-10-02 | ✅ `raw_eod` + `prices_pit` s/d 2026-10-02 (963 emiten) |
+| Close resmi IHSG | ✅ COMPOSITE 6.036,888 (2026-10-02) di `index_summary_daily` + `index_quotes` |
+| Broker summary | ✅ `broker_daily` 2026-09-30 & 2026-10-02 (88 firma) |
+| Jejak sinyal | ✅ `signal_log` s/d 2026-10-02 |
+| Regime | ✅ `regime_daily` 2026-10-02 TRENDING_DOWN (ADX 31,9) |
+| IC | ✅ `factor_ic_history` run 2026-10-02 (bobot kosong — belum lolos gate) |
+| Ownership | ✅ snapshot 2026-10-02 (ANTM/BMRI/EMAS/TLKM), pembanding 2026-10-01 |

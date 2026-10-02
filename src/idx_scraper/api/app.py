@@ -62,6 +62,7 @@ from .schemas import (
     StockBrokerSummary,
     StockDecision,
     StockForeignFlow,
+    StockOwnership,
     TechnicalChart,
     ThinDay,
     TopBrokers,
@@ -367,6 +368,19 @@ def stock_smart_money(code: str) -> dict:
     konteks sektor = berapa emiten se-sektor yang searah. Cache 30 menit.
     """
     return analytics.get_stock_smart_money(code.upper())
+
+
+@app.get("/api/stocks/{code}/ownership", response_model=StockOwnership)
+def stock_ownership(code: str) -> dict:
+    """Kepemilikan emiten + aksi pemilik (gratis, keterbukaan IDX).
+
+    Komposisi pemegang saham terkini (termasuk pengendali & free float) dan
+    perubahan porsi vs snapshot sebelumnya. Sumber: ``research.ownership``
+    (diisi ``idx ownership``). Free float di sini juga bahan untuk menakar
+    seberapa besar aliran asing relatif terhadap saham yang benar-benar
+    beredar.
+    """
+    return analytics.get_stock_ownership(code.upper())
 
 
 @app.get("/api/smart-money/track-record", response_model=SmartMoneyTrackRecord)

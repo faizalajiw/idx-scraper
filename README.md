@@ -148,6 +148,7 @@ python -m idx_scraper.cli signals           # show BUY/SELL signals from stored 
 python -m idx_scraper.cli signal-log        # backfill + tampilkan track record sinyal (jejak sinyal)
 python -m idx_scraper.cli ic [--days N]     # analisis IC + simpan bobot faktor ke research.factor_ic_history
 python -m idx_scraper.cli alerts [--test]   # kirim alert Telegram utk sinyal berubah
+python -m idx_scraper.cli ownership [--codes AA,BB] [--all] [--date YYYY-MM-DD]  # snapshot pemegang saham (aksi pemilik)
 python -m idx_scraper.cli watchlist         # fetch current prices for watchlist
 python -m idx_scraper.cli source [YAHOO|IDX]  # lihat / set sumber data live
 ```
@@ -209,6 +210,7 @@ summary, index EOD close → clear cache API (`/api/cache/clear`).
 | **LiveCapture thread** | Rolling sweep, 1000ms/req per kode | Poll `GetTradingInfoDaily?code=X` untuk 60 likuid + 20 movers → tulis ke `intraday_ticks`. Hanya jalan saat jam bursa + IDX source aktif. Backoff otomatis kalau kena 429 (rate limit IDX). |
 | `alerts` | 300 detik (5 menit) | Cek sinyal BUY/SELL yang berubah + evaluasi aturan pantauan → kirim alert ke Telegram. Hanya saat jam bursa. |
 | `daily_ic` | Sen–Jum 06:30 WIB | IC analysis (factor weight) → simpan ke `factor_ic_history`. Bobot composite hold-check otomatis ikut hasil terbaru. |
+| `ownership_weekly` | Senin 06:45 WIB | Snapshot pemegang saham watchlist → `research.ownership`. Di luar jam bursa (tidak berebut profil Cloudflare dengan EOD fetch). Karena IDX hanya memberi komposisi terkini, snapshot mingguan inilah yang membuat **aksi pemilik** (siapa menambah/mengurangi) bisa dihitung dari selisih dua tanggal. |
 | **Startup catchup** | Sekali saat boot | Kalau EOD hari ini belum ada + pasar sudah tutup + hari kerja → auto-jalankan full pipeline refresh. Mencegah data stale kalau scheduler di-restart kelewatan jadwal. |
 
 ### 4. Auto-start saat laptop nyala (Windows)
@@ -333,7 +335,8 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
 - **Watchlist & sinyal:** `/api/watchlist` (GET/POST), `/api/signals`,
   `/api/signals/track` (track record sinyal), `/api/hold-check`
 - **Per-emiten:** `/api/stocks/{code}/history`, `/api/stocks/{code}/technical`,
-  `/api/stocks/{code}/brokers`, `/api/stocks/{code}/events`, `/api/stocks/{code}/dividends`
+  `/api/stocks/{code}/brokers`, `/api/stocks/{code}/events`, `/api/stocks/{code}/dividends`,
+  `/api/stocks/{code}/ownership` (kepemilikan + aksi pemilik, gratis)
 - **Analitik:** `/api/screener` (+ filter `min_broker_score`), `/api/valuation`,
   `/api/foreign-flow`,
   `/api/sectors`, `/api/sectors/rrg`, `/api/sectors/rotation`, `/api/sentiment`,

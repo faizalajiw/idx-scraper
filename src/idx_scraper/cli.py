@@ -235,6 +235,44 @@ def _job_monthly_ic() -> None:
         print(f"[err] IC bulanan: {e}", file=sys.stderr)
 
 
+def _job_ownership() -> None:
+    """Snapshot pemegang saham watchlist -> research.ownership (mingguan).
+
+    IDX hanya memberi komposisi terkini, jadi "aksi pemilik" (siapa menambah /
+    mengurangi) baru bisa dihitung setelah ada dua snapshot di tanggal berbeda.
+    Job ini menjaga pembanding itu tetap ada tanpa perlu diingat manual.
+    """
+    codes = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
+    if not codes:
+        return
+    try:
+        client = IDXClient()
+        try:
+            ok, total = snapshot_ownership(codes, None, client)
+        finally:
+            client.close()
+        print(
+            f"[{datetime.now(WIB).isoformat()}] ownership snapshot — "
+            f"{ok}/{len(codes)} emiten, {total} baris"
+        )
+    except Exception as e:
+        print(f"[err] ownership snapshot: {e}", file=sys.stderr)
+
+
+def _next_weekday_at(dow: int, hour: int, minute: int) -> datetime:
+    """Datetime WIB berikutnya yang jatuh pada ``dow`` (0=Senin) pukul hh:mm.
+
+    Dipakai agar job ber-interval panjang (mingguan/bulanan) tetap berjalan
+    sekali saat boot, tanpa menyimpan state terakhir jalan.
+    """
+    now = datetime.now(WIB)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days_ahead = (dow - now.weekday()) % 7
+    if days_ahead == 0 and target <= now:
+        days_ahead = 7
+    return target + timedelta(days=days_ahead)
+
+
 def _job_broker_eod() -> None:
     """Broker summary EOD (bandarmologi) -> research.broker_daily, 16:30 WIB.
 
@@ -534,6 +572,82 @@ def cmd_signals(args) -> None:
         storage.close()
 
 
+def snapshot_ownership(
+    codes: list[str], snap: str | None = None, client: IDXClient | None = None
+) -> tuple[int, int]:
+    """Snapshot komposisi pemegang saham ``codes`` -> ``research.ownership``.
+
+    Inti bersama CLI (``idx ownership``) dan scheduler (``_job_ownership``):
+    satu snapshot per ``snapshot_date`` (default hari ini WIB). Returns
+    ``(emiten berdata, total baris)``. Idempoten — upsert per (snapshot_date,
+    code, holder_name, category), jadi menjalankan ulang di hari yang sama aman
+    dan emiten tanpa data tidak menimpa snapshot lama.
+    """
+    import psycopg
+
+    from .ownership_store import snapshot_from_profile
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        return 0, 0
+    if not codes:
+        return 0, 0
+
+    own_client = client is None
+    client = client or IDXClient()
+    ok = total = 0
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            for i, code in enumerate(codes, 1):
+                try:
+                    prof = client.fetch_company_profile(code)
+                except Exception as e:
+                    print(f"[warn] profil {code}: {e}", file=sys.stderr)
+                    prof = None
+                n = snapshot_from_profile(cur, code, prof, snap)
+                if n:
+                    ok += 1
+                total += n
+                if i % 25 == 0:
+                    print(f"  {i}/{len(codes)} — {total} baris")
+    finally:
+        if own_client:
+            client.close()
+    return ok, total
+
+
+def cmd_ownership(args) -> None:
+    """Snapshot komposisi pemegang saham -> research.ownership.
+
+    Sumber gratis per-emiten (``GetCompanyProfilesDetail``). Jalankan berkala
+    (mingguan/bulanan) supaya aksi pemilik — siapa menambah/mengurangi — bisa
+    dihitung dari selisih dua snapshot. Scheduler juga menjalankannya otomatis
+    tiap Senin 06:45 WIB untuk emiten watchlist (lihat ``_job_ownership``).
+    """
+    client = IDXClient()
+    snap = getattr(args, "date", None)
+    try:
+        if getattr(args, "all", False):
+            codes = [
+                str(s.get("Code")).upper()
+                for s in client.fetch_securities_stock()
+                if s.get("Code")
+            ]
+        elif getattr(args, "codes", None):
+            codes = [c.strip().upper() for c in args.codes.split(",") if c.strip()]
+        else:
+            codes = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
+        if not codes:
+            print("tidak ada kode untuk di-snapshot")
+            return
+        print(f"snapshot kepemilikan {len(codes)} emiten...")
+        ok, total = snapshot_ownership(codes, snap, client)
+        print(f"ownership done — {ok}/{len(codes)} emiten, {total} baris")
+    finally:
+        client.close()
+
+
 def cmd_alerts(args) -> None:
     """Scan sinyal dan kirim alert Telegram untuk sinyal yang berubah.
 
@@ -755,6 +869,15 @@ def cmd_serve(args) -> None:
         _job_monthly_ic, "cron", day_of_week="mon-fri", hour=6, minute=30,
         id="daily_ic",
     )
+    # Snapshot pemegang saham — Senin 06:45 WIB (di luar jam bursa, supaya tidak
+    # berebut profil Cloudflare dengan EOD fetch). Interval 1 minggu dengan
+    # start_date Senin berikutnya; dengan begitu tetap ada satu run saat boot
+    # tanpa menunggu cron harian.
+    scheduler.add_job(
+        _job_ownership, "interval", weeks=1,
+        start_date=_next_weekday_at(0, 6, 45),
+        id="ownership_weekly", replace_existing=True,
+    )
     # Live per-emiten capture — GetStockSummary whole-market is EOD-only, so the
     # live feed is polled one code at a time. Runs as a rolling background sweep
     # that self-gates on market hours and the IDX source.
@@ -794,6 +917,7 @@ def cmd_serve(args) -> None:
           f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
     print("refresh pipeline 8 menu — Sen-Jum 08:45, Sen-Kam 12:00 / Jum 11:30, "
           "Sen-Jum 16:05 & 16:20; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
+    print("ownership snapshot — Senin 06:45 WIB (watchlist)")
 
     # --- Startup catchup: if today's EOD data is missing, run it now -------
     # Prevents missed refreshes when scheduler restarts after the cron window.
@@ -880,6 +1004,10 @@ def main() -> None:
     p_slog.add_argument("--months", type=int, default=18, help="panjang histori (default: 18 bulan)")
     p_slog.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
+    p_own = sub.add_parser("ownership", help="snapshot komposisi pemegang saham (aksi pemilik)")
+    p_own.add_argument("--codes", help="daftar kode dipisah koma (default: watchlist .env)")
+    p_own.add_argument("--all", action="store_true", help="semua emiten tercatat (berat, ±950 request)")
+    p_own.add_argument("--date", help="tanggal snapshot ISO YYYY-MM-DD (default: hari ini)")
     sub.add_parser("serve", help="start continuous polling loop")
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
     p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
@@ -910,6 +1038,8 @@ def main() -> None:
         finally:
             client.close()
             storage.close()
+    elif args.command == "ownership":
+        cmd_ownership(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "source":
