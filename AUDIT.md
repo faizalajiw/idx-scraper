@@ -379,3 +379,30 @@ flag `Pengendali`) — gratis, pakai transport yang sudah ada. Fitur baru:
 | Regime | ✅ `regime_daily` 2026-10-02 TRENDING_DOWN (ADX 31,9) |
 | IC | ✅ `factor_ic_history` run 2026-10-02 (bobot kosong — belum lolos gate) |
 | Ownership | ✅ snapshot 2026-10-02 (ANTM/BMRI/EMAS/TLKM), pembanding 2026-10-01 |
+
+### 9.6 Rework lint & pelengkap skema (2026-10-03)
+
+`ruff check src tests scripts` (gerbang CI) dilaporkan **7 error** — ternyata
+semua **pra-ada** (bukan dari fitur ownership; diverifikasi dengan menjalankan
+ruff pada `be6af66` dan berkas historis). Dibersihkan semua:
+
+| Berkas | Kode | Perbaikan |
+|---|---|---|
+| `src/idx_scraper/cli.py` | `C408` | `dict(...)` → dict literal (job `_refresh`). |
+| `src/idx_scraper/cli.py` | `F541` | Hapus prefiks `f` pada print catchup tanpa placeholder. |
+| `scripts/backfill_index_eod_idx.py` | `UP037` | Hilangkan kutip anotasi return (file sudah `from __future__ import annotations`). |
+| `scripts/backfill_index_eod_idx.py` | `S110` | Tutup sesi IDX `try/except/pass` memang best-effort → tambah `S110` ke per-file-ignores `scripts/*.py` (sejajar `BLE001`/`S112` yang sudah ada). |
+| `src/idx_scraper/research/broker_activity.py` | `UP035` | `Iterable` pindah ke `collections.abc`. |
+| `tests/test_broker_activity.py` | `I001` | Autofix urutan import (`BREADTH_THRESHOLD` sebelum `BROKER_FACTORS`). |
+| `tests/test_broker_activity.py` | `F841` | `hist_a` ternyata memang tak terpakai → tambahkan asersi `[50.0, 50.0]` (tes jadi menguji winner **dan** loser sesuai namanya). |
+
+Pelengkap skema: DDL `research.ownership` kini juga ada di
+`sql/research_schema.sql` (bagian 9) — sebelumnya hanya di
+`ownership_store.py`, padahal docstring-nya menjanjikan mirror.
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src tests scripts` | ✅ bersih (0 error) |
+| `pytest` (backend) | ✅ lulus semua |
+| `tsc --noEmit` + `next build` (frontend) | ✅ bersih, 22 route |
+| `GET /api/stocks/BMRI/ownership` | ✅ 200 — snapshot 2026-10-02 vs 2026-10-01 |

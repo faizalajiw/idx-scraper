@@ -11,9 +11,9 @@ import pandas as pd
 import pytest
 
 from idx_scraper.research.broker_activity import (
+    BREADTH_THRESHOLD,
     BROKER_FACTORS,
     BROKER_MAX_ADJUSTMENT,
-    BREADTH_THRESHOLD,
     ROTATION_DELTA_EPS,
     apply_broker_layer,
     composite_score_history,
@@ -425,6 +425,7 @@ def test_history_tracks_the_winner_and_loser_differently():
     hist_b = composite_score_history(
         _two_day_panel(), [_selected("flow_net_5d", 1.0)], "BBBB"
     )
+    assert hist_a["score"].tolist() == [50.0, 50.0]
     assert hist_b["score"].tolist() == [100.0, 100.0]
     # Arah negatif membalik urutannya.
     flipped = composite_score_history(

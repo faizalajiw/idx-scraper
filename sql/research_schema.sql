@@ -199,3 +199,27 @@ CREATE TABLE IF NOT EXISTS research.broker_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_daily_broker
     ON research.broker_daily (broker_code, trade_date);
+
+-- ----------------------------------------------------------------------------
+-- 9) OWNERSHIP — snapshot komposisi pemegang saham per tanggal (keterbukaan IDX).
+--    Sumber: /primary/ListedCompany/GetCompanyProfilesDetail (kunci
+--    PemegangSaham) via CLI/scheduler `idx ownership`. IDX hanya memberi
+--    komposisi terkini, jadi "aksi pemilik" (siapa menambah/mengurangi porsi)
+--    dihitung dari diff snapshot terbaru vs sebelumnya — jalankan berkala.
+--    Upsert idempoten per (snapshot_date, code, holder_name, category);
+--    mirror dari DDL di src/idx_scraper/ownership_store.py.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS research.ownership (
+    snapshot_date DATE        NOT NULL,
+    code          TEXT        NOT NULL,
+    holder_name   TEXT        NOT NULL,
+    category      TEXT,
+    shares        NUMERIC(30,4),
+    pct           NUMERIC(12,6),
+    is_controller BOOLEAN     NOT NULL DEFAULT false,
+    source        TEXT        NOT NULL DEFAULT 'IDX',
+    captured_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (snapshot_date, code, holder_name, category)
+);
+CREATE INDEX IF NOT EXISTS idx_ownership_code
+    ON research.ownership (code, snapshot_date DESC);

@@ -43,8 +43,8 @@ DataFrame), supaya bisa dites tanpa Postgres: pola yang sama dengan
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Mapping
-from typing import Any, Iterable
+from collections.abc import Collection, Iterable, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd

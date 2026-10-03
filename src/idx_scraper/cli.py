@@ -824,8 +824,12 @@ def cmd_serve(args) -> None:
     #   - Sab-Min 08:45 & 16:00        -> recompute + clear cache (tanpa EOD)
     # ------------------------------------------------------------------
     def _refresh(label: str, do_eod: bool):
-        return dict(func=_job_pipeline_refresh, trigger="cron",
-                    args=[client, storage], kwargs={"label": label, "do_eod": do_eod})
+        return {
+            "func": _job_pipeline_refresh,
+            "trigger": "cron",
+            "args": [client, storage],
+            "kwargs": {"label": label, "do_eod": do_eod},
+        }
 
     # Pra-pembukaan Sen-Jum 08:45 — recompute + clear cache (belum ada EOD baru).
     scheduler.add_job(
@@ -965,7 +969,7 @@ def cmd_serve(args) -> None:
                     _job_index_eod_close()
                     _clear_api_cache()
                 else:
-                    print(f"[catchup] data EOD hari ini sudah lengkap (saham OK, index OK)")
+                    print("[catchup] data EOD hari ini sudah lengkap (saham OK, index OK)")
             else:
                 print(f"[catchup] check EOD selesai "
                       f"(pasar {'sudah tutup' if past_close else 'belum tutup'}, "

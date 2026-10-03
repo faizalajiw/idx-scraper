@@ -37,7 +37,7 @@ WIB = timezone(timedelta(hours=7))
 CLOSE_T = time(16, 0, 0)
 
 
-def _fetch_composite_idx() -> "tuple[float, float | None, float | None] | None":
+def _fetch_composite_idx() -> tuple[float, float | None, float | None] | None:
     """Return (close_today, change, percent) COMPOSITE dari IDX live, atau None."""
     client = IDXClient()
     try:
