@@ -320,6 +320,14 @@ terbaca di 21 hari (55%); distribusi diam-diam justru paling jelas di 5 hari
 (64%). Verdict juga menyebut **tanggal mulai** streak ("net sell sejak 18 Sep
 2026"), bukan cuma jumlah sesinya.
 
+Verdict juga dibandingkan dengan **pasar**: berapa emiten ber-verdict yang searah
+(mis. "searah mayoritas pasar — 58% emiten juga sedang dibuang asing, jadi ini
+belum tentu ciri khas emiten ini"). Penyebutnya hanya emiten yang punya arah
+(netral & data kurang tidak ikut), dan seluruh pasar dihitung **tanpa** lantai
+likuiditas supaya angkanya jujur. Tiap pola juga membawa kata **keyakinan**
+(tinggi/sedang/lemah, dari nilai t — kekuatan bukti, bukan arah pasar), dan pola
+dengan bukti terkuat tampil lebih dulu.
+
 ## Frontend Dashboard
 
 Frontend Next.js ada di repo terpisah `idx-web`:

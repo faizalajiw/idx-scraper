@@ -14,10 +14,13 @@ from idx_scraper.smart_money import (
     collect_pattern_episodes,
     consolidation_range,
     detect_patterns,
+    market_breadth,
+    market_context_sentence,
     pattern_evidence_sentence,
     pattern_history,
     pattern_track_record,
     patterns_history,
+    rank_patterns,
     size_label,
     verdict,
 )
@@ -710,7 +713,10 @@ def test_verdict_streak_start_date_none_when_flat_only():
 
 
 def _track_row(pid: str, **horizons) -> dict:
-    """Entri tiruan keluaran ``pattern_track_record``."""
+    """Entri tiruan keluaran ``pattern_track_record``.
+
+    Nilai per horizon: ``(n, aligned_hit_rate[, tstat[, effective_alpha]])``.
+    """
     clean = {}
     for key, val in horizons.items():
         clean[key] = {
@@ -719,9 +725,9 @@ def _track_row(pid: str, **horizons) -> dict:
             "aligned_hit_rate": val[1],
             "mean": None,
             "median": None,
-            "tstat": 2.0,
+            "tstat": val[2] if len(val) > 2 else 2.0,
             "alpha": None,
-            "effective_alpha": 1.0,
+            "effective_alpha": val[3] if len(val) > 3 else 1.0,
         }
     return {
         "pattern": pid,
@@ -856,3 +862,167 @@ def test_build_narrative_without_history_still_works():
 
 def test_min_history_n_threshold_is_documented_constant():
     assert MIN_HISTORY_N == 30
+
+
+# --------------------------------------------------------------------------- #
+# urutan tampil: kekuatan bukti, bukan urutan deteksi
+# --------------------------------------------------------------------------- #
+
+
+def test_rank_patterns_puts_evidenced_first_then_confidence_then_effect():
+    pats = [{"id": "no_history"}, {"id": "weak"}, {"id": "strong"}]
+    hist = {
+        "weak": {"confidence": "sedang", "edge_pct": 0.4},
+        "strong": {"confidence": "tinggi", "edge_pct": 2.6},
+    }
+    assert [p["id"] for p in rank_patterns(pats, hist)] == ["strong", "weak", "no_history"]
+
+
+def test_rank_patterns_breaks_ties_by_effect_size():
+    pats = [{"id": "small"}, {"id": "big"}]
+    hist = {
+        "small": {"confidence": "tinggi", "edge_pct": 0.5},
+        "big": {"confidence": "tinggi", "edge_pct": 3.0},
+    }
+    assert [p["id"] for p in rank_patterns(pats, hist)] == ["big", "small"]
+
+
+def test_rank_patterns_is_stable_without_history():
+    pats = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    assert [p["id"] for p in rank_patterns(pats, {})] == ["a", "b", "c"]
+    assert rank_patterns([], {"x": {"confidence": "tinggi"}}) == []
+
+
+# --------------------------------------------------------------------------- #
+# keyakinan (|t|) & besar efek
+# --------------------------------------------------------------------------- #
+
+
+def test_pattern_history_confidence_and_edge_pct():
+    row = _track_row(
+        "silent_distribution",
+        fwd5=(484, 0.636, -0.25, -0.44),
+        fwd21=(284, 0.511, 3.33, -1.26),
+    )
+    h = pattern_history(row)
+    assert h is not None
+    assert h["horizon"] == "fwd5"  # horizon terbaik menurut rate
+    assert h["confidence"] == "tinggi"  # |t| terbaik lintas horizon = 3.33
+    assert h["best_tstat"] == 3.33
+    assert h["edge_pct"] == 0.44  # |alpha| di horizon terpilih, selalu positif
+
+
+def test_pattern_history_confidence_ignores_thin_horizons():
+    # |t| besar dari sampel tipis tidak boleh menentukan kata keyakinan.
+    row = _track_row("x", fwd5=(9, 0.9, 9.9), fwd10=(50, 0.55, 1.2))
+    h = pattern_history(row)
+    assert h is not None
+    assert h["best_tstat"] == 1.2
+    assert h["confidence"] == "sedang"
+
+
+def test_pattern_history_confidence_lemah_without_significant_tstat():
+    row = _track_row("x", fwd5=(100, 0.55, 0.3))
+    h = pattern_history(row)
+    assert h is not None
+    assert h["confidence"] == "lemah"
+
+
+# --------------------------------------------------------------------------- #
+# konteks pasar
+# --------------------------------------------------------------------------- #
+
+
+def _panel_with(acc: int, dist: int, neutral: int, thin: int = 0) -> dict:
+    """Panel uji: n emiten akumulasi / distribusi / netral / data kurang."""
+    panel: dict[str, dict] = {}
+    for i in range(acc):
+        panel[f"ACC{i}"] = {"name": f"ACC{i}", "rows": _flat_rows(11, net=100.0, value=1000.0)}
+    for i in range(dist):
+        panel[f"DIS{i}"] = {"name": f"DIS{i}", "rows": _flat_rows(11, net=-100.0, value=1000.0)}
+    for i in range(neutral):
+        panel[f"NEU{i}"] = {"name": f"NEU{i}", "rows": _flat_rows(11, net=10.0, value=1000.0)}
+    for i in range(thin):
+        panel[f"THIN{i}"] = {"name": f"THIN{i}", "rows": _flat_rows(2, net=100.0, value=1000.0)}
+    return panel
+
+
+def test_market_breadth_counts_sides_and_share():
+    b = market_breadth(_panel_with(acc=1, dist=2, neutral=1, thin=1))
+    assert b is not None
+    assert b["total"] == 5
+    assert (b["accumulating"], b["distributing"], b["neutral"], b["insufficient"]) == (1, 2, 1, 1)
+    # penyebut "sided" = 3 (netral & data kurang keluar) -> 2/3
+    assert b["sided"] == 3
+    assert b["distributing_share"] == 66.7
+    # porsi terhadap SEMUA emiten ber-data -> 2/5
+    assert b["distributing_pct"] == 40.0
+    assert b["date"] == "2026-09-11"
+
+
+def test_market_breadth_none_when_no_emitters():
+    assert market_breadth({}) is None
+    assert market_breadth({"X": {"name": "X", "rows": []}}) is None
+
+
+def test_market_breadth_share_none_when_all_neutral():
+    b = market_breadth(_panel_with(acc=0, dist=0, neutral=3))
+    assert b is not None
+    assert b["sided"] == 0
+    assert b["distributing_share"] is None
+
+
+def test_market_context_sentence_with_tide_is_honest():
+    # 66,7% emiten ber-verdict dibuang asing -> distribusi = searah mayoritas
+    b = {"distributing_share": 66.7}
+    s = market_context_sentence("distribusi", b)
+    assert s is not None
+    assert "searah mayoritas pasar" in s
+    assert "67%" in s
+    assert "belum tentu ciri khas" in s
+
+
+def test_market_context_sentence_against_tide():
+    b = {"distributing_share": 30.0}
+    s = market_context_sentence("distribusi", b)
+    assert s is not None
+    assert "melawan arus pasar" in s
+    # akumulasi melihat sisi sebaliknya: 70% ditimbun -> searah mayoritas
+    s_acc = market_context_sentence("akumulasi", b)
+    assert s_acc is not None
+    assert "searah mayoritas pasar" in s_acc and "70%" in s_acc
+
+
+def test_market_context_sentence_neutral_side_describes_split():
+    s = market_context_sentence("netral", {"distributing_share": 61.2})
+    assert s is not None
+    assert "terbelah" in s
+    assert "searah" not in s and "melawan" not in s
+
+
+def test_market_context_sentence_none_without_breadth():
+    assert market_context_sentence("distribusi", None) is None
+    assert market_context_sentence("distribusi", {}) is None
+    assert market_context_sentence("distribusi", {"distributing_share": None}) is None
+
+
+def test_build_narrative_includes_market_context():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    v = verdict(rows)
+    pats = detect_patterns(rows)
+    out = build_narrative("BBCA", v, pats, None, market={"distributing_share": 30.0})
+    joined = " ".join(out)
+    # akumulasi, hanya 30% pasar dibuang -> 70% ditimbun -> searah mayoritas
+    assert "Konteks pasar" in joined
+    assert "70% emiten ber-verdict juga sedang ditimbun asing" in joined
+    # ditempatkan setelah kalimat bukti pola, dan jadi kalimat terakhir bila
+    # tidak ada level (rng=None di uji ini)
+    assert out[-1].startswith("Konteks pasar")
+
+
+def test_build_narrative_without_market_has_no_market_line():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    v = verdict(rows)
+    pats = detect_patterns(rows)
+    joined = " ".join(build_narrative("BBCA", v, pats, None))
+    assert "Konteks pasar" not in joined

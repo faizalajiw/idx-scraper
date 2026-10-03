@@ -1193,6 +1193,9 @@ class SmartMoneyPatternHistory(BaseModel):
     tstat: float | None = None
     effective_alpha: float | None = None
     reliable: bool = True
+    confidence: str | None = None  # "tinggi" | "sedang" | "lemah" (dari |t|)
+    best_tstat: float | None = None
+    edge_pct: float | None = None  # |effective_alpha| di horizon terpilih
     horizons: dict[str, SmartMoneyHorizonStats] = {}
 
 
@@ -1222,6 +1225,27 @@ class SmartMoneySectorContext(BaseModel):
     position: str | None = None
 
 
+class SmartMoneyMarketContext(BaseModel):
+    """Sebaran verdict seluruh pasar — pembanding verdict satu emiten.
+
+    ``distributing_share`` = porsi distribusi di antara emiten yang PUNYA arah
+    (netral & data kurang keluar dari penyebut); itu pembanding yang benar
+    untuk sebuah verdict. ``position`` = kalimat plain-language siap tampil.
+    """
+
+    date: str | None = None
+    total: int | None = None
+    accumulating: int | None = None
+    distributing: int | None = None
+    neutral: int | None = None
+    insufficient: int | None = None
+    sided: int | None = None
+    accumulating_pct: float | None = None
+    distributing_pct: float | None = None
+    distributing_share: float | None = None
+    position: str | None = None
+
+
 class SmartMoneyStock(BaseModel):
     code: str
     name: str | None = None
@@ -1231,6 +1255,7 @@ class SmartMoneyStock(BaseModel):
     range: SmartMoneyRange | None = None
     narrative: list[str] = []
     sector: SmartMoneySectorContext | None = None
+    market: SmartMoneyMarketContext | None = None
     date: str | None = None
 
 

@@ -526,6 +526,29 @@ def get_smart_money_radar(days: int = 10) -> dict[str, Any]:
 _RADAR_TOP_N = 15
 
 
+def get_smart_money_breadth() -> dict[str, Any] | None:
+    """Sebaran verdict SELURUH pasar (jendela 10 sesi) — pembanding verdict.
+
+    Dipakai jalur per-emiten untuk menjawab "emiten ini istimewa atau ikut
+    arus?". Memakai panel pasar yang sama dengan radar (satu query), tanpa
+    lantai likuiditas, dan aturan verdict yang sama dengan per-emiten. Cache
+    30 menit — harian, dan query-nya pasar-lebar, jadi jalur per-emiten tidak
+    boleh membayarnya berulang.
+    """
+    from ..smart_money import market_breadth
+
+    cache_key = "smart_money_breadth"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    panel = _smart_money_panel(_SMART_MONEY_HISTORY)
+    out = market_breadth(panel)
+    if out is not None:
+        _research_cache_put(cache_key, out, ttl=1800.0)
+    return out
+
+
 def get_stock_smart_money(code: str) -> dict[str, Any]:
     """Jejak smart money satu emiten: verdict + pola + level + narasi.
 
@@ -544,7 +567,9 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
         build_narrative,
         consolidation_range,
         detect_patterns,
+        market_context_sentence,
         patterns_history,
+        rank_patterns,
     )
     from ..smart_money import (
         verdict as _verdict,
@@ -622,7 +647,22 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
     except Exception:  # graceful degradation — banner tetap hidup
         hist = {}
 
-    narrative = build_narrative(code, v, pats, rng, pattern_history=hist)
+    # Urutan tampil ikut kekuatan bukti: pola dengan catatan paling bisa
+    # dipercaya tampil lebih dulu, bukan pola yang kebetulan diperiksa dulu.
+    pats = rank_patterns(pats, hist)
+
+    # Konteks pasar: pembanding supaya verdict tidak dibaca sebagai ciri khas
+    # emiten padahal cuma cermin pasar (hari ini mayoritas pasar bisa net sell).
+    breadth: dict[str, Any] | None = None
+    try:
+        breadth = get_smart_money_breadth()
+    except Exception as e:  # graceful degradation — banner tetap hidup
+        print(f"[warn] konteks pasar dilewati di smart-money: {e}", file=sys.stderr)
+        breadth = None
+
+    narrative = build_narrative(
+        code, v, pats, rng, pattern_history=hist, market=breadth
+    )
 
     # Konteks sektor: verifikasi apakah emiten ini "janggal" dibanding
     # se-sektor (berapa yang akumulasi vs distribusi di jendela sama).
@@ -648,6 +688,11 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
             "comparable": sector != FALLBACK_SECTOR,
             **sector_ctx,
         } if sector_ctx is not None else None,
+        "market": (
+            {**breadth, "position": market_context_sentence(v["side"], breadth)}
+            if breadth
+            else None
+        ),
         "date": v["date"],
     }
     _research_cache_put(cache_key, out, ttl=1800.0)

@@ -477,3 +477,70 @@ cuma integer `streak`, tanpa tanggal.
    (2026-09-25..10-02) sehingga tren broker belum bisa diklaim; intraday praktis
    kosong (`intraday_ticks` 528 baris, `intraday_ticks_2026_10` 0 baris) — fitur
    intraday tidak boleh dijanjikan sebelum pengumpulannya dibereskan.
+
+## 11. Verdict dalam konteks pasar + pola diurut ikut kekuatan bukti (2026-10-03)
+
+### 11.1 Masalah
+
+1. **Verdict tanpa pembanding.** BMRI/BBRI/GOTO semuanya "distribusi besar" di
+   hari yang sama. Tanpa angka pasar, pembaca menyimpulkan itu ciri khas
+   masing-masing emiten — padahal bisa jadi cuma cermin pasar.
+2. **Semua pola diperlakukan sama.** Track record menunjukkan kekuatannya tidak
+   sama: `initiation` punya alpha terkuat (+1,09% / +2,02% / +2,58% pada
+   5/10/21 hari, t=2,3–3,5), sementara `silent_accumulation` bahkan negatif di
+   5 hari. Urutan tampil (dan pola mana yang jadi kalimat utama narasi)
+   sebaiknya ikut bukti, bukan ikut urutan pemeriksaan di kode.
+
+### 11.2 Yang dikerjakan
+
+- `smart_money.market_breadth` (pure): sebaran verdict SELURUH pasar di jendela
+  yang sama, memakai `verdict` yang sama dengan jalur per-emiten dan **tanpa
+  lantai likuiditas** (beda dari `build_radar` yang memotong emiten tipis untuk
+  papan peringkat) — supaya penyebutnya jujur. Menyediakan dua penyebut:
+  `*_pct` terhadap semua emiten ber-data, dan `distributing_share` terhadap
+  emiten yang **punya arah** (netral & data kurang keluar) — pembanding yang
+  benar untuk sebuah verdict.
+- `smart_money.market_context_sentence` (pure): kalimat plain-language, dan
+  verdict yang **searah mayoritas pasar dinyatakan apa adanya** ("…jadi ini
+  belum tentu ciri khas emiten ini") — menyembunyikannya akan membuat fitur
+  terdengar lebih pintar dari kenyataan.
+- `analytics.get_smart_money_breadth` (cache 30 menit, panel pasar yang sama
+  dengan radar) + `market` di payload `SmartMoneyStock`; kalimatnya masuk narasi
+  sebagai butir 5, angka mentahnya (X dibuang vs Y ditimbun) jadi baris
+  "Konteks pasar" di banner.
+- `smart_money.pattern_history` menambah `confidence` (dari |t| **terbaik** lintas
+  horizon yang sampelnya >= `MIN_HISTORY_N`; ambang 2 = tinggi, 1 = sedang),
+  `best_tstat`, dan `edge_pct` (|effective_alpha|). Sengaja dipisah dari horizon
+  terpilih: "seberapa sering arahnya benar" dan "seberapa yakin ini bukan
+  kebetulan" adalah dua pertanyaan berbeda — dan horizon dengan hit rate lebih
+  rendah bisa justru lebih meyakinkan.
+- `smart_money.rank_patterns` (pure): pola ber-catatan selalu di depan pola tanpa
+  catatan ("belum ada bukti" ≠ "terbukti lemah"), lalu keyakinan, lalu besar
+  efek; stabil pada urutan deteksi untuk kunci yang sama.
+- UI: baris "Konteks pasar: N dibuang vs M ditimbun — X% dari yang punya arah
+  sedang dibuang" + "keyakinan tinggi/sedang/lemah" pada tiap pola.
+
+### 11.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src/ tests/` | ✅ bersih |
+| `pytest tests/` | ✅ 483 lulus (test_smart_money.py 64 → 79) |
+| `tsc --noEmit` | ✅ bersih |
+| Breadth pasar (live) | ✅ 963 emiten ber-data: 152 dibuang / 112 ditimbun dari 264 yang punya arah → `distributing_share` 57,6% |
+| BMRI (distribusi) | ✅ narasi: "searah mayoritas pasar — 58% emiten ber-verdict juga sedang dibuang asing, jadi ini belum tentu ciri khas emiten ini" |
+| EMAS (akumulasi) | ✅ narasi: "melawan arus pasar — hanya 42% emiten ber-verdict yang sedang ditimbun asing" |
+| Keyakinan pola (live) | ✅ BMRI `silent_distribution` keyakinan **tinggi** (\|t\|max 3,33, edge 0,44); EMAS `silent_accumulation` keyakinan **tinggi** (\|t\|max 3,98, edge 0,48) |
+| Browser `/stock/BMRI` | ✅ baris konteks pasar + "64% sesuai arah · n=484 · keyakinan tinggi" ter-render |
+| Urutan pola (live) | ⚠️ **tidak teruji hari ini**: 0 dari 963 emiten memicu >=2 pola. Historis: 35 dari 1.252 hari-emiten (2,8%), hampir selalu `initiation` + `silent_accumulation`. Logikanya ditutup 3 unit test (`rank_patterns`) |
+
+### 11.4 Sisa peta jalan
+
+1. **Data tipis** (masih): `broker_daily` 6 hari bursa, intraday kosong,
+   `ownership` 4 emiten — lihat 10.4 butir 3 dan 9.4.
+2. **`initiation` belum dipromosikan di level halaman** — ia pola dengan bukti
+   terkuat, tapi baru muncul kalau volumenya melonjak; papan "pola terkuat hari
+   ini" di `/radar` akan membuatnya terlihat tanpa menunggu.
+3. **`confidence` belum dipakai di kartu track record `/radar`** — masih hanya di
+   banner emiten; menyatukan keduanya akan menghapus dua cara membaca angka yang
+   sama.

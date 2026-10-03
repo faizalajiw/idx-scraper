@@ -614,6 +614,26 @@ def pattern_track_record(
 #: apa. Horizon di bawah ambang ini tetap dikirim, tapi ditandai tidak reliable.
 MIN_HISTORY_N = 30
 
+#: Ambang |t-stat| -> kata keyakinan. 2 ≈ batas konvensional "bukan kebetulan",
+#: 1 = indikasi lemah. Menjawab "seberapa yakin ini bukan noise" — pertanyaan
+#: berbeda dari "seberapa sering arahnya benar" (aligned_hit_rate).
+CONFIDENCE_BANDS = ((2.0, "tinggi"), (1.0, "sedang"))
+
+#: Urutan kata keyakinan untuk pengurutan (kecil = lebih dulu).
+_CONFIDENCE_ORDER = {"tinggi": 0, "sedang": 1, "lemah": 2}
+
+
+def _confidence_word(tstat: Any) -> str:
+    """``|t| >= 2`` -> ``tinggi``, ``>= 1`` -> ``sedang``, selain itu ``lemah``."""
+    t = _f(tstat)
+    if t is None:
+        return "lemah"
+    for threshold, word in CONFIDENCE_BANDS:
+        if abs(t) >= threshold:
+            return word
+    return "lemah"
+
+
 #: Nama horizon (kunci dari ``pattern_track_record``) -> jumlah hari bursa.
 HORIZON_DAYS = {"fwd5": 5, "fwd10": 10, "fwd21": 21}
 
@@ -682,6 +702,28 @@ def pattern_history(
                 "horizon_days": HORIZON_DAYS.get(str(hkey)),
             }
 
+    # Keyakinan memakai |t| TERBAIK di antara horizon yang sampelnya layak —
+    # menjawab "seberapa yakin ini bukan kebetulan", pertanyaan berbeda dari
+    # "seberapa sering arahnya benar" (yang dijawab horizon terpilih di atas).
+    # Bisa jadi horizon dengan hit rate lebih rendah justru lebih meyakinkan
+    # (menang sering sedikit, tapi besar) — dan itu memang informasi berguna.
+    best_t: float | None = None
+    for hstats in horizons.values():
+        if not isinstance(hstats, Mapping):
+            continue
+        if int(_f(hstats.get("n")) or 0) < MIN_HISTORY_N:
+            continue
+        t = _f(hstats.get("tstat"))
+        if t is None:
+            continue
+        if best_t is None or abs(t) > abs(best_t):
+            best_t = t
+    if best_t is None:
+        fallback_t = _f(stats.get("tstat"))
+        best_t = float(fallback_t) if fallback_t is not None else None
+
+    edge = _f(stats.get("effective_alpha"))
+
     return {
         "n": row.get("n"),
         "n_resolved": row.get("n_resolved"),
@@ -693,6 +735,9 @@ def pattern_history(
         "tstat": stats.get("tstat"),
         "effective_alpha": stats.get("effective_alpha"),
         "reliable": reliable,
+        "confidence": _confidence_word(best_t),
+        "best_tstat": best_t,
+        "edge_pct": abs(edge) if edge is not None else None,
         "horizons": clean,
     }
 
@@ -770,6 +815,149 @@ def pattern_evidence_sentence(
     )
 
 
+def rank_patterns(
+    patterns: Iterable[Mapping[str, Any]],
+    histories: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Urutkan pola terdeteksi menurut KEKUATAN BUKTI, bukan urutan deteksi (pure).
+
+    Satu emiten bisa memicu dua pola sekaligus. Yang tampil lebih dulu
+    sebaiknya yang catatannya paling bisa dipercaya, bukan yang kebetulan
+    diperiksa lebih dulu. Kunci berurutan:
+
+    1. punya catatan track record atau tidak — pola tanpa catatan SELALU di
+       belakang, karena "belum ada bukti" bukan "terbukti lemah";
+    2. kata keyakinan (|t| terbaik lintas horizon layak);
+    3. besar efek (|effective_alpha| di horizon terpilih).
+
+    Stabil: pola dengan kunci sama tetap pada urutan deteksinya. Tidak pernah
+    raise; daftar kosong -> ``[]``.
+    """
+    items = [dict(p) for p in patterns]
+    hists = histories or {}
+
+    def _key(pair: tuple[int, dict[str, Any]]) -> tuple[int, int, float, int]:
+        i, p = pair
+        h = hists.get(str(p.get("id"))) or {}
+        if not h:
+            return (1, 9, 0.0, i)
+        conf = _CONFIDENCE_ORDER.get(str(h.get("confidence")), 9)
+        edge = _f(h.get("edge_pct")) or 0.0
+        return (0, conf, -edge, i)
+
+    return [p for _, p in sorted(enumerate(items), key=_key)]
+
+
+# ------------------------------------------------------------------ konteks pasar
+
+
+def market_breadth(
+    emitters: Mapping[str, Mapping[str, Any]],
+    days: int = PRICE_WINDOW,
+) -> dict[str, Any] | None:
+    """Sebaran verdict SELURUH pasar di jendela yang sama (pure).
+
+    Tanpa pembanding, verdict "distribusi besar" di hari ketika mayoritas
+    pasar dibuang asing terbaca seperti ciri khas emiten — padahal cuma cermin
+    pasar. Fungsi ini yang menyediakan penyebutnya.
+
+    Aturan verdict-nya SAMA PERSIS dengan jalur per-emiten (``verdict``,
+    fungsi yang sama) dan **tanpa lantai likuiditas** — beda dari
+    ``build_radar`` yang memotong emiten tipis untuk papan peringkat. Di sini
+    semua emiten ber-data dihitung, supaya penyebutnya jujur.
+
+    Returns ``{date, total, accumulating, distributing, neutral, insufficient,
+    accumulating_pct, distributing_pct, distributing_share}`` atau None bila
+    tak ada emiten ber-data. ``*_pct`` = porsi terhadap seluruh emiten ber-data;
+    ``distributing_share`` = porsi distribusi di antara emiten yang PUNYA arah
+    (netral/insufficient keluar dari penyebut) — itu pembanding yang benar
+    untuk sebuah verdict, karena "mayoritas pasar" harus dibaca dari emiten
+    yang memang bersuara.
+    """
+    acc = dist = neu = ins = 0
+    date: str | None = None
+    for info in emitters.values():
+        rows = (info or {}).get("rows") or []
+        if not rows:
+            continue
+        v = verdict(rows, days=days)
+        d = v.get("date")
+        if d:
+            date = d if date is None else max(date, str(d))
+        if v["insufficient"]:
+            ins += 1
+        elif v["side"] == VERDICT_ACCUMULATION:
+            acc += 1
+        elif v["side"] == VERDICT_DISTRIBUTION:
+            dist += 1
+        else:
+            neu += 1
+    total = acc + dist + neu + ins
+    if total == 0:
+        return None
+    sided = acc + dist
+    return {
+        "date": date,
+        "total": total,
+        "accumulating": acc,
+        "distributing": dist,
+        "neutral": neu,
+        "insufficient": ins,
+        "accumulating_pct": round(acc / total * 100.0, 1),
+        "distributing_pct": round(dist / total * 100.0, 1),
+        "distributing_share": round(dist / sided * 100.0, 1) if sided else None,
+        "sided": sided,
+    }
+
+
+def market_context_sentence(
+    side: str,
+    breadth: Mapping[str, Any] | None,
+) -> str | None:
+    """Kalimat pembanding pasar untuk verdict satu emiten (plain-language).
+
+    Menjawab "emiten ini istimewa atau ikut arus?". Verdict yang searah
+    mayoritas pasar dinyatakan apa adanya — itu bukan sinyal khas emiten, dan
+    menyembunyikannya membuat fitur ini terdengar lebih pintar dari kenyataan.
+    """
+    if not breadth:
+        return None
+    share = _f(breadth.get("distributing_share"))
+    if share is None:
+        return None
+    dist_pct = share
+    acc_pct = 100.0 - dist_pct
+    if side == VERDICT_DISTRIBUTION:
+        if dist_pct >= 50.0:
+            body = (
+                f"searah mayoritas pasar — {dist_pct:.0f}% emiten ber-verdict "
+                "juga sedang dibuang asing, jadi ini belum tentu ciri khas "
+                "emiten ini"
+            )
+        else:
+            body = (
+                f"melawan arus pasar — hanya {dist_pct:.0f}% emiten ber-verdict "
+                "yang sedang dibuang asing"
+            )
+    elif side == VERDICT_ACCUMULATION:
+        if acc_pct >= 50.0:
+            body = (
+                f"searah mayoritas pasar — {acc_pct:.0f}% emiten ber-verdict "
+                "juga sedang ditimbun asing"
+            )
+        else:
+            body = (
+                f"melawan arus pasar — hanya {acc_pct:.0f}% emiten ber-verdict "
+                "yang sedang ditimbun asing"
+            )
+    else:
+        return (
+            f"Arus asing pasar terbelah: {dist_pct:.0f}% emiten ber-verdict "
+            f"dibuang, {acc_pct:.0f}% ditimbun."
+        )
+    return f"Konteks pasar: {body}."
+
+
 # ------------------------------------------------------------------ narasi
 
 #: Band label untuk "artinya seberapa" — ambang dari kalibrasi data (lihat
@@ -832,6 +1020,7 @@ def build_narrative(
     patterns: list[dict[str, Any]],
     rng: dict[str, Any] | None,
     pattern_history: Mapping[str, Any] | None = None,
+    market: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Narasi plain-language 2-4 kalimat untuk banner "Jejak Smart Money".
 
@@ -847,7 +1036,10 @@ def build_narrative(
     4. Arti historis pola itu (hanya bila track record-nya tersedia):
        seberapa sering pola ini diikuti arah yang diharapkan dan **di
        horizon berapa** — satu pola bercerita 5 hari, yang lain 3 minggu.
-    5. Level (hanya jika ada range): "Harga 20 sesi terakhir terkurung
+    5. Konteks pasar (hanya bila sebaran pasar tersedia): apakah verdict ini
+       searah mayoritas pasar atau melawan arus — supaya verdict tidak dibaca
+       sebagai sinyal khas emiten padahal cuma cermin pasar.
+    6. Level (hanya jika ada range): "Harga 20 sesi terakhir terkurung
        9.200-9.500; tembus di atas 9.500 = konfirmasi, jebol 9.200 = batal."
 
     Emiten dengan verdict ``insufficient`` -> satu kalimat jujur "belum
@@ -905,6 +1097,10 @@ def build_narrative(
             )
             if evidence:
                 sentences.append(evidence)
+
+    market_line = market_context_sentence(str(side), market)
+    if market_line:
+        sentences.append(market_line)
 
     if rng:
         sentences.append(
