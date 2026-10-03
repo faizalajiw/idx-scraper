@@ -1157,6 +1157,7 @@ class SmartMoneyVerdict(BaseModel):
     strength: str | None = None  # "besar" | "menengah" | None
     streak: int | None = None
     streak_side: str | None = None  # "net_buy" | "net_sell" | "flat"
+    streak_start_date: str | None = None  # sesi pertama streak berjalan
     net_sum_idr: float | None = None
     netval_pct: float | None = None
     n_net_days: int | None = None
@@ -1164,11 +1165,43 @@ class SmartMoneyVerdict(BaseModel):
     insufficient: bool = False
 
 
+class SmartMoneyHorizonStats(BaseModel):
+    """Statistik satu horizon (5/10/21 hari bursa) untuk satu pola."""
+
+    n: int = 0
+    aligned_hit_rate: float | None = None
+    tstat: float | None = None
+    effective_alpha: float | None = None
+    horizon_days: int | None = None
+
+
+class SmartMoneyPatternHistory(BaseModel):
+    """Arti historis satu pola: seberapa sering bekerja, di horizon berapa.
+
+    ``horizon``/``horizon_days`` = horizon dengan bukti terbaik (sampel >=
+    ``MIN_HISTORY_N``). ``reliable`` False = horizon terbaik pun masih sampel
+    kecil, jadi angkanya indikatif dan UI wajib mengatakannya.
+    """
+
+    n: int | None = None
+    n_resolved: int | None = None
+    window_sessions: int | None = None
+    horizon: str | None = None
+    horizon_days: int | None = None
+    aligned_hit_rate: float | None = None
+    n_resolved_horizon: int | None = None
+    tstat: float | None = None
+    effective_alpha: float | None = None
+    reliable: bool = True
+    horizons: dict[str, SmartMoneyHorizonStats] = {}
+
+
 class SmartMoneyPattern(BaseModel):
     id: str
     label: str
     direction: str | None = None  # "buy-side" | "sell-side"
     note: str | None = None
+    history: SmartMoneyPatternHistory | None = None
 
 
 class SmartMoneyRange(BaseModel):

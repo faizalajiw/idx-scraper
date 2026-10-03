@@ -544,6 +544,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
         build_narrative,
         consolidation_range,
         detect_patterns,
+        patterns_history,
     )
     from ..smart_money import (
         verdict as _verdict,
@@ -599,7 +600,29 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
     v = _verdict(panel_rows)
     pats = detect_patterns(panel_rows)
     rng = consolidation_range(panel_rows)
-    narrative = build_narrative(code, v, pats, rng)
+
+    # Arti historis: pola yang muncul HARI INI ditempeli track record-nya,
+    # supaya label ("Distribusi diam-diam") jadi klaim yang bisa dicek, dan
+    # horizon-nya ikut terbawa — pola akumulasi bercerita ~1 bulan, pola
+    # distribusi ~1 minggu. Track record di-cache 1 jam (hitungan mahal).
+    # Kegagalan di sini tidak boleh mematikan banner: pola tetap tampil,
+    # hanya tanpa klaim historis.
+    hist: dict[str, Any] = {}
+    try:
+        tr = get_smart_money_track_record()
+        hist = patterns_history(
+            pats,
+            tr.get("patterns") or [],
+            window_sessions=tr.get("history_sessions"),
+        )
+        for p in pats:
+            h = hist.get(str(p.get("id")))
+            if h is not None:
+                p["history"] = h
+    except Exception:  # graceful degradation — banner tetap hidup
+        hist = {}
+
+    narrative = build_narrative(code, v, pats, rng, pattern_history=hist)
 
     # Konteks sektor: verifikasi apakah emiten ini "janggal" dibanding
     # se-sektor (berapa yang akumulasi vs distribusi di jendela sama).

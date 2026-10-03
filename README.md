@@ -312,6 +312,14 @@ plain-language ("BMRI — berbalik: asing mulai ditimbun, net buy Rp 840 M").
 Baseline di-seed di run pertama tanpa kirim, jadi tidak ada banjir di awal.
 State-nya di `data/smart_money_state.json`.
 
+Tiap pola di banner emiten ikut membawa **rekam jejaknya**: horizon tempat pola
+itu punya catatan terbaik ("cerita 5 hari" / "cerita 21 hari") dan berapa persen
+arah harga benar-benar sesuai pola. Horizon selalu disebut karena tidak seragam —
+akumulasi diam-diam nyaris tak berarti dalam 5 hari (41% sesuai arah) dan baru
+terbaca di 21 hari (55%); distribusi diam-diam justru paling jelas di 5 hari
+(64%). Verdict juga menyebut **tanggal mulai** streak ("net sell sejak 18 Sep
+2026"), bukan cuma jumlah sesinya.
+
 ## Frontend Dashboard
 
 Frontend Next.js ada di repo terpisah `idx-web`:

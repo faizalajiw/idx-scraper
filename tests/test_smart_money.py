@@ -8,12 +8,16 @@ sebagai porsi nilai transaksi (p50|.| ≈ 2%, ambang bermakna 5%).
 from __future__ import annotations
 
 from idx_scraper.smart_money import (
+    MIN_HISTORY_N,
     build_alert_message,
     build_narrative,
     collect_pattern_episodes,
     consolidation_range,
     detect_patterns,
+    pattern_evidence_sentence,
+    pattern_history,
     pattern_track_record,
+    patterns_history,
     size_label,
     verdict,
 )
@@ -672,3 +676,183 @@ def test_alert_message_insufficient_is_honest():
     assert v["insufficient"] is True
     msg = build_alert_message("NEW", None, v, [], None, None)
     assert "belum cukup" in msg
+
+
+# --------------------------------------------------------------------------- #
+# sejak kapan (streak start date)
+# --------------------------------------------------------------------------- #
+
+
+def test_verdict_streak_start_date_is_first_session_of_streak():
+    rows = _flat_rows(20, net=100.0, value=1000.0)  # semua net buy
+    v = verdict(rows)
+    assert v["streak"] == 20
+    assert v["streak_start_date"] == "2026-09-01"
+
+
+def test_verdict_streak_start_date_is_none_without_streak():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    rows[-1] = _row(rows[-1]["date"], -100.0)  # hari terakhir membalik arah
+    v = verdict(rows)
+    assert v["streak"] == 1
+    assert v["streak_start_date"] == "2026-09-20"
+
+
+def test_verdict_streak_start_date_none_when_flat_only():
+    v = verdict(_flat_rows(20, net=None, value=1000.0))
+    assert v["streak"] == 0
+    assert v["streak_start_date"] is None
+
+
+# --------------------------------------------------------------------------- #
+# arti historis pola (track record -> horizon + angka)
+# --------------------------------------------------------------------------- #
+
+
+def _track_row(pid: str, **horizons) -> dict:
+    """Entri tiruan keluaran ``pattern_track_record``."""
+    clean = {}
+    for key, val in horizons.items():
+        clean[key] = {
+            "n": val[0],
+            "hit_rate": None,
+            "aligned_hit_rate": val[1],
+            "mean": None,
+            "median": None,
+            "tstat": 2.0,
+            "alpha": None,
+            "effective_alpha": 1.0,
+        }
+    return {
+        "pattern": pid,
+        "label": "Distribusi diam-diam",
+        "direction": "sell-side",
+        "n": 553,
+        "n_resolved": 484,
+        "horizons": clean,
+    }
+
+
+def test_pattern_history_prefers_the_horizon_with_best_evidence():
+    # Distribusi: kuat di 5 hari (63,6%), melemah di 21 hari (51,1%) ->
+    # horizon terpilih harus 5 hari, bukan yang terpanjang.
+    row = _track_row(
+        "silent_distribution",
+        fwd5=(484, 0.636),
+        fwd10=(419, 0.580),
+        fwd21=(284, 0.511),
+    )
+    h = pattern_history(row, window_sessions=120)
+    assert h is not None
+    assert h["horizon"] == "fwd5"
+    assert h["horizon_days"] == 5
+    assert h["aligned_hit_rate"] == 0.636
+    assert h["n_resolved_horizon"] == 484
+    assert h["reliable"] is True
+    assert h["window_sessions"] == 120
+
+
+def test_pattern_history_flags_small_sample_as_unreliable():
+    row = _track_row("initiation", fwd5=(8, 0.9), fwd10=(12, 0.8))
+    h = pattern_history(row)
+    assert h is not None
+    assert h["reliable"] is False
+    # horizon dengan n terbesar yang dipakai saat tak ada yang lolos ambang
+    assert h["horizon"] == "fwd10"
+    assert h["n_resolved_horizon"] == 12
+
+
+def test_pattern_history_ignores_horizons_without_rate():
+    row = _track_row("initiation", fwd5=(500, None), fwd10=(40, 0.5))
+    h = pattern_history(row)
+    assert h is not None
+    assert h["horizon"] == "fwd10"
+
+
+def test_pattern_history_none_when_no_data():
+    assert pattern_history(None) is None
+    assert pattern_history({}) is None
+    assert pattern_history({"horizons": {}}) is None
+    assert pattern_history({"horizons": {"fwd5": {"n": 10, "aligned_hit_rate": None}}}) is None
+
+
+def test_patterns_history_only_covers_detected_patterns():
+    pats = [{"id": "silent_accumulation"}, {"id": "tak_dikenal"}]
+    tr = [_track_row("silent_accumulation", fwd21=(213, 0.554))]
+    out = patterns_history(pats, tr, window_sessions=120)
+    assert set(out) == {"silent_accumulation"}
+    assert out["silent_accumulation"]["horizon_days"] == 21
+
+
+def test_pattern_evidence_sentence_names_horizon_and_sample():
+    h = pattern_history(_track_row("silent_distribution", fwd5=(484, 0.636)), window_sessions=120)
+    s = pattern_evidence_sentence("Distribusi diam-diam", h, "sell-side")
+    assert s is not None
+    assert "64%" in s
+    assert "484" in s
+    assert "5 hari bursa" in s
+    assert "turun" in s
+    assert "120 sesi terakhir" in s
+
+
+def test_pattern_evidence_sentence_direction_comes_from_pattern_not_rate():
+    # Regresi: 64% pada pola JUAL berarti harga TURUN. Menyimpulkan arah dari
+    # besarnya angka akan membalik artinya jadi "harga naik".
+    sell = pattern_history(_track_row("silent_distribution", fwd5=(484, 0.636)))
+    s_sell = pattern_evidence_sentence("Distribusi diam-diam", sell, "sell-side")
+    assert s_sell is not None and "harga turun" in s_sell and "harga naik" not in s_sell
+
+    # Sebaliknya, pola beli yang rekornya buruk (40,7%) tetap "harga naik" —
+    # angkanya yang rendah, bukan arahnya yang dibalik.
+    buy = pattern_history(_track_row("silent_accumulation", fwd5=(329, 0.407)))
+    s_buy = pattern_evidence_sentence("Akumulasi diam-diam", buy, "buy-side")
+    assert s_buy is not None and "harga naik" in s_buy and "41%" in s_buy
+
+
+def test_pattern_evidence_sentence_neutral_when_direction_unknown():
+    h = pattern_history(_track_row("initiation", fwd5=(100, 0.6)))
+    s = pattern_evidence_sentence("Inisiasi volume + asing", h)
+    assert s is not None
+    assert "sesuai arah polanya" in s
+    assert "harga naik" not in s and "harga turun" not in s
+
+
+def test_pattern_evidence_sentence_marks_small_sample():
+    h = pattern_history(_track_row("initiation", fwd5=(9, 0.9)))
+    s = pattern_evidence_sentence("Inisiasi volume + asing", h, "buy-side")
+    assert s is not None
+    assert "indikatif" in s
+
+
+def test_pattern_evidence_sentence_none_without_history():
+    assert pattern_evidence_sentence("Akumulasi diam-diam", None) is None
+    assert pattern_evidence_sentence("Akumulasi diam-diam", {}) is None
+
+
+def test_build_narrative_includes_since_date_and_evidence():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    v = verdict(rows)
+    pats = detect_patterns(rows)  # silent_accumulation
+    assert pats and pats[0]["id"] == "silent_accumulation"
+    hist = patterns_history(
+        pats,
+        [_track_row("silent_accumulation", fwd5=(329, 0.407), fwd21=(213, 0.554))],
+        window_sessions=120,
+    )
+    out = build_narrative("BBCA", v, pats, None, pattern_history=hist)
+    joined = " ".join(out)
+    assert "sejak 1 Sep 2026" in joined
+    assert "21 hari bursa" in joined  # horizon terbaik = 21 hari, bukan 5
+    assert "harga naik" in joined  # pola akumulasi = sisi beli
+
+
+def test_build_narrative_without_history_still_works():
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    v = verdict(rows)
+    pats = detect_patterns(rows)
+    out = build_narrative("BBCA", v, pats, None)
+    assert out and "sejak 1 Sep 2026" in " ".join(out)
+
+
+def test_min_history_n_threshold_is_documented_constant():
+    assert MIN_HISTORY_N == 30

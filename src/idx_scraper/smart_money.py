@@ -108,14 +108,18 @@ def _clean_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _streak(rows: list[dict[str, Any]]) -> tuple[int, str]:
+def _streak(rows: list[dict[str, Any]]) -> tuple[int, str, str | None]:
     """Streak arah net asing terakhir (hari berturut-turut, sampai hari paling
-    baru). Returns ``(streak, side)``; side = ``"net_buy"``/``"net_sell"``/
-    ``"flat"``. Hari net 0 atau tanpa data memutus streak — konsisten dengan
+    baru). Returns ``(streak, side, start_date)``; side =
+    ``"net_buy"``/``"net_sell"``/``"flat"``; ``start_date`` = tanggal sesi
+    PERTAMA streak yang sedang berjalan (None bila streak 0) — ini yang
+    menjawab "sejak kapan" tanpa harus menghitung sendiri di UI. Hari net 0
+    atau tanpa data memutus streak — konsisten dengan
     ``foreign_flow.daily_flow``.
     """
     streak = 0
     side = "flat"
+    start_date: str | None = None
     for r in reversed(rows):
         net = r["net_idr"]
         if net is None:
@@ -128,7 +132,9 @@ def _streak(rows: list[dict[str, Any]]) -> tuple[int, str]:
         elif (s > 0 and side == "net_sell") or (s < 0 and side == "net_buy"):
             break
         streak += 1
-    return streak, side
+        # baris ditelusuri mundur, jadi nilai terakhir = hari paling awal
+        start_date = r["date"]
+    return streak, side, start_date
 
 
 def _window_stats(rows: list[dict[str, Any]], days: int) -> dict[str, Any]:
@@ -167,16 +173,17 @@ def verdict(rows: Iterable[Mapping[str, Any]], days: int = PRICE_WINDOW) -> dict
     - ``insufficient``: True jika < :data:`MIN_WINDOW_DAYS` hari ber-net di
       jendela — UI wajib menampilkan "data belum cukup", bukan netral palsu.
 
-    Returns ``side, strength, streak, streak_side, net_sum_idr, netval_pct,
-    n_net_days, date, insufficient``. Tidak pernah raise — emiten tanpa data
-    menghasilkan struktur kosong yang aman di-render.
+    Returns ``side, strength, streak, streak_side, streak_start_date,
+    net_sum_idr, netval_pct, n_net_days, date, insufficient``. Tidak pernah
+    raise — emiten tanpa data menghasilkan struktur kosong yang aman
+    di-render.
 
     ``days``: lebar jendela agregasi (default 10). Requirement "hari
     bernilai" berskala dengan jendela (``min(5, days)``) supaya jendela pendek
     (mis. radar 2 hari) tidak selamanya ``insufficient``.
     """
     cleaned = _clean_rows(rows)
-    streak, streak_side = _streak(cleaned)
+    streak, streak_side, streak_start = _streak(cleaned)
     stats = _window_stats(cleaned, days)
     netval = stats["netval_pct"]
     min_days = min(MIN_WINDOW_DAYS, days)
@@ -200,6 +207,7 @@ def verdict(rows: Iterable[Mapping[str, Any]], days: int = PRICE_WINDOW) -> dict
         "strength": strength,
         "streak": streak,
         "streak_side": streak_side,
+        "streak_start_date": streak_start if streak > 0 else None,
         "net_sum_idr": stats["net_sum_idr"] or None,
         "netval_pct": round(netval, 2) if netval is not None else None,
         "n_net_days": stats["n_net_days"],
@@ -598,6 +606,170 @@ def pattern_track_record(
     return out
 
 
+# ------------------------------------------------------------------ arti historis
+
+#: Minimum episode TEREFALISASI sebelum satu persentase layak diklaim ke user.
+#: 30 = ambang sampel konvensional untuk sebuah rate (bukan tebakan): di bawah
+#: ini, 60% dan 60%-nya lagi bisa datang dari 10 kejadian dan tak berarti apa-
+#: apa. Horizon di bawah ambang ini tetap dikirim, tapi ditandai tidak reliable.
+MIN_HISTORY_N = 30
+
+#: Nama horizon (kunci dari ``pattern_track_record``) -> jumlah hari bursa.
+HORIZON_DAYS = {"fwd5": 5, "fwd10": 10, "fwd21": 21}
+
+
+def pattern_history(
+    row: Mapping[str, Any] | None,
+    *,
+    window_sessions: int | None = None,
+) -> dict[str, Any] | None:
+    """Ringkas track record SATU pola jadi bentuk siap-tampil (pure).
+
+    ``row`` = satu entri keluaran :func:`pattern_track_record` (atau hasil
+    :func:`patterns_history`). Memilih **horizon terbaik** = ``aligned_hit_rate``
+    tertinggi di antara horizon yang sampelnya >= :data:`MIN_HISTORY_N`
+    (seri diputus oleh n terbesar); bila tak ada yang memenuhi, dipakai
+    horizon dengan n terbesar dan hasilnya ditandai ``reliable=False``.
+
+    Kenapa horizon dipilih, bukan dirata-rata: kekuatan pola berbeda tajam
+    antar horizon (pola akumulasi nyaris tak berarti di 5 hari, baru terbaca
+    di 21 hari; pola distribusi justru sebaliknya). Satu angka gabungan akan
+    menyembunyikan fakta itu — tepat kesalahan yang mau dihindari.
+
+    Returns ``{n, n_resolved, window_sessions, horizon, horizon_days,
+    aligned_hit_rate, n_resolved_horizon, tstat, effective_alpha, reliable,
+    horizons}`` atau None bila tak ada horizon. Tidak pernah raise.
+    """
+    if not row:
+        return None
+    horizons = row.get("horizons") or {}
+    if not isinstance(horizons, Mapping) or not horizons:
+        return None
+
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
+    for key, stats in horizons.items():
+        if not isinstance(stats, Mapping):
+            continue
+        if stats.get("aligned_hit_rate") is None:
+            continue
+        candidates.append((str(key), stats))
+    if not candidates:
+        return None
+
+    def _n(key_stats: tuple[str, Mapping[str, Any]]) -> int:
+        return int(_f(key_stats[1].get("n")) or 0)
+
+    def _aligned(key_stats: tuple[str, Mapping[str, Any]]) -> float:
+        return float(_f(key_stats[1].get("aligned_hit_rate")) or 0.0)
+
+    reliable_pool = [c for c in candidates if _n(c) >= MIN_HISTORY_N]
+    if reliable_pool:
+        best = max(reliable_pool, key=lambda c: (_aligned(c), _n(c)))
+        reliable = True
+    else:
+        best = max(candidates, key=_n)
+        reliable = False
+
+    key, stats = best
+    clean: dict[str, Any] = {}
+    for hkey, hstats in horizons.items():
+        if isinstance(hstats, Mapping) and hstats.get("aligned_hit_rate") is not None:
+            clean[str(hkey)] = {
+                "n": int(_f(hstats.get("n")) or 0),
+                "aligned_hit_rate": hstats.get("aligned_hit_rate"),
+                "tstat": hstats.get("tstat"),
+                "effective_alpha": hstats.get("effective_alpha"),
+                "horizon_days": HORIZON_DAYS.get(str(hkey)),
+            }
+
+    return {
+        "n": row.get("n"),
+        "n_resolved": row.get("n_resolved"),
+        "window_sessions": window_sessions,
+        "horizon": key,
+        "horizon_days": HORIZON_DAYS.get(key),
+        "aligned_hit_rate": stats.get("aligned_hit_rate"),
+        "n_resolved_horizon": int(_f(stats.get("n")) or 0),
+        "tstat": stats.get("tstat"),
+        "effective_alpha": stats.get("effective_alpha"),
+        "reliable": reliable,
+        "horizons": clean,
+    }
+
+
+def patterns_history(
+    patterns: Iterable[Mapping[str, Any]],
+    track_record: Iterable[Mapping[str, Any]],
+    *,
+    window_sessions: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Peta ``pattern_id -> pattern_history`` untuk pola yang terdeteksi.
+
+    Dipakai jalur per-emiten: pola yang benar-benar muncul hari ini saja yang
+    perlu dibawakan angka historisnya. ``track_record`` = daftar keluaran
+    :func:`pattern_track_record`; pola yang tak ada di sana dilewati (UI
+    menampilkan pola tanpa klaim historis, bukan angka nol palsu).
+    """
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for r in track_record:
+        pid = r.get("pattern")
+        if pid is not None:
+            by_id[str(pid)] = r
+    out: dict[str, dict[str, Any]] = {}
+    for p in patterns:
+        pid = str(p.get("id"))
+        h = pattern_history(by_id.get(pid), window_sessions=window_sessions)
+        if h is not None:
+            out[pid] = h
+    return out
+
+
+def pattern_evidence_sentence(
+    label: str,
+    history: Mapping[str, Any] | None,
+    direction: str | None = None,
+) -> str | None:
+    """Kalimat bukti plain-language untuk satu pola + track record-nya.
+
+    Contoh: "Dalam 120 sesi terakhir, 64% dari 484 kejadian serupa diikuti
+    harga turun dalam 5 hari bursa." Horizon dan arah selalu disebut, karena
+    itulah isi klaimnya — pola akumulasi bercerita 3 minggu, pola distribusi
+    bercerita 5 hari. Sampel kecil ditandai terus terang.
+
+    ``direction`` **wajib** untuk menyebut arah harga dengan benar:
+    ``aligned_hit_rate`` sudah dihitung searah pola (untuk pola jual, "sesuai
+    ekspektasi" berarti harga TURUN), jadi arah tidak boleh disimpulkan dari
+    besar-kecilnya angka — pola jual dengan 64% akan terbaca "harga naik" dan
+    itu justru membalik artinya. Tanpa ``direction``, kalimat memakai frasa
+    netral "sesuai arah polanya" daripada menebak.
+
+    Angka rate tetap apa adanya meski di bawah 50%: itu artinya pola ini
+    justru sering meleset, dan user berhak melihatnya.
+    """
+    if not history:
+        return None
+    rate = _f(history.get("aligned_hit_rate"))
+    days = history.get("horizon_days")
+    n = history.get("n_resolved_horizon") or 0
+    if rate is None or not days or not n:
+        return None
+    window = history.get("window_sessions")
+    head = (
+        f"Dalam {window} sesi terakhir" if window else "Secara historis"
+    )
+    tail = "" if history.get("reliable", True) else " (sampel masih kecil — anggap indikatif)"
+    if direction == "buy-side":
+        hasil = "diikuti harga naik"
+    elif direction == "sell-side":
+        hasil = "diikuti harga turun"
+    else:
+        hasil = "berakhir sesuai arah polanya"
+    return (
+        f"{head}, {rate * 100:.0f}% dari {n} kejadian {label.lower()} "
+        f"{hasil} dalam {days} hari bursa{tail}."
+    )
+
+
 # ------------------------------------------------------------------ narasi
 
 #: Band label untuk "artinya seberapa" — ambang dari kalibrasi data (lihat
@@ -631,11 +803,35 @@ def _fmt_rp(v: float | None) -> str:
     return f"Rp {v / 1e6:.1f} Jt"
 
 
+#: Singkatan bulan Indonesia untuk tanggal di narasi (bukan locale OS — output
+#: harus sama di mesin mana pun).
+_MONTHS_ID = (
+    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+    "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+)
+
+
+def _fmt_date_short(value: Any) -> str | None:
+    """``'2026-09-17'`` -> ``'17 Sep 2026'``; None bila tak bisa diurai."""
+    s = str(value or "").strip()
+    parts = s.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+    if not 1 <= month <= 12:
+        return None
+    return f"{day} {_MONTHS_ID[month - 1]} {year}"
+
+
 def build_narrative(
     code: str,
     verdict: dict[str, Any],
     patterns: list[dict[str, Any]],
     rng: dict[str, Any] | None,
+    pattern_history: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Narasi plain-language 2-4 kalimat untuk banner "Jejak Smart Money".
 
@@ -645,9 +841,13 @@ def build_narrative(
     1. Arah + durasi + ukuran:
        "BBCA — Sedang ditimbun asing (10 sesi terakhir): net buy Rp 1,2 T,
        setara 14% dari total nilai transaksi."
-    2. Streak (hanya jika >= 3, biar tidak bising).
+    2. Streak + sejak kapan (hanya jika >= 3, biar tidak bising):
+       "...; net sell sejak 17 Sep 2026."
     3. Catatan pola (hanya pola pertama — yang paling banyak syaratnya).
-    4. Level (hanya jika ada range): "Harga 20 sesi terakhir terkurung
+    4. Arti historis pola itu (hanya bila track record-nya tersedia):
+       seberapa sering pola ini diikuti arah yang diharapkan dan **di
+       horizon berapa** — satu pola bercerita 5 hari, yang lain 3 minggu.
+    5. Level (hanya jika ada range): "Harga 20 sesi terakhir terkurung
        9.200-9.500; tembus di atas 9.500 = konfirmasi, jebol 9.200 = batal."
 
     Emiten dengan verdict ``insufficient`` -> satu kalimat jujur "belum
@@ -686,10 +886,25 @@ def build_narrative(
 
     if streak >= 3 and side != VERDICT_NEUTRAL:
         arah = "net buy" if (side == VERDICT_ACCUMULATION) else "net sell"
-        sentences.append(f"Terjadi {streak} sesi berturut-turut (arah {arah}).")
+        since = _fmt_date_short(verdict.get("streak_start_date"))
+        since_txt = f", sejak {since}" if since else ""
+        sentences.append(
+            f"Terjadi {streak} sesi {arah} berturut-turut{since_txt}."
+        )
 
     if patterns:
         sentences.append(patterns[0]["note"])
+        # Arti historis pola yang paling syaratnya — klaim yang bisa dicek,
+        # bukan cuma label. Hanya kalau track record-nya memang ada.
+        if pattern_history:
+            head = patterns[0]
+            evidence = pattern_evidence_sentence(
+                str(head.get("label") or ""),
+                pattern_history.get(str(head.get("id"))) if isinstance(pattern_history, Mapping) else None,
+                str(head.get("direction")) if head.get("direction") else None,
+            )
+            if evidence:
+                sentences.append(evidence)
 
     if rng:
         sentences.append(

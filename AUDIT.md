@@ -406,3 +406,74 @@ Pelengkap skema: DDL `research.ownership` kini juga ada di
 | `pytest` (backend) | ✅ lulus semua |
 | `tsc --noEmit` + `next build` (frontend) | ✅ bersih, 22 route |
 | `GET /api/stocks/BMRI/ownership` | ✅ 200 — snapshot 2026-10-02 vs 2026-10-01 |
+
+## 10. Pola jadi klaim yang bisa dicek: horizon + "sejak kapan" (2026-10-03)
+
+### 10.1 Masalah (dari data nyata, bukan dugaan)
+
+Label pola di banner emiten ("Distribusi diam-diam") tampil tanpa angka, dan
+`SmartMoneyTrackRecordCard` cuma dipasang di `/radar` + `/radar/[code]` —
+**bukan di `/stock/[code]`**, halaman yang dibuka orang awam. Jadi pembaca
+menyimpulkan sendiri jangka waktunya. Track record se-pasar menunjukkan
+simpulan itu justru keliru:
+
+| Pola | Arah | 5 hari | 10 hari | 21 hari |
+|---|---|---|---|---|
+| `silent_accumulation` | beli | 40,7% ⚠️ | 45,5% | **55,4%** |
+| `initiation` | beli | 51,5% | 53,4% | **55,6%** |
+| `distribution_on_rally` | jual | **57,0%** | 53,2% | 51,0% |
+| `silent_distribution` | jual | **63,6%** | 58,0% | 51,1% |
+
+*(aligned hit rate = berapa sering arah harga sesuai pola, 120 sesi terakhir)*
+
+Dua cacat: (a) **horizon tidak seragam** — akumulasi baru terbaca di 21 hari dan
+justru lebih buruk dari koin di 5 hari, distribusi sebaliknya; (b) "sejak kapan"
+cuma integer `streak`, tanpa tanggal.
+
+### 10.2 Yang dikerjakan
+
+- `smart_money._streak` mengembalikan tanggal sesi pertama streak; `verdict`
+  menambah `streak_start_date`; narasi menyebut "net sell sejak 18 Sep 2026".
+- `smart_money.pattern_history` (pure): memilih **horizon terbaik** =
+  `aligned_hit_rate` tertinggi dengan sampel >= `MIN_HISTORY_N` (30 episode
+  terealisasi) — bukan rata-rata semua horizon, justru karena horizon tidak
+  seragam. `reliable=False` bila tak ada horizon yang lolos ambang (UI wajib
+  bilang "sampel kecil").
+- `smart_money.patterns_history` + `pattern_evidence_sentence` (pure): satu
+  kalimat bukti per pola. **Arah harga diambil dari `direction` pola, bukan dari
+  besarnya angka** — `aligned_hit_rate` sudah searah-pola, jadi menyimpulkan arah
+  dari rate akan membalik artinya (pola jual 64% terbaca "harga naik"). Bug ini
+  ditangkap unit test sebelum sampai produksi.
+- `analytics.get_stock_smart_money` menempelkan `history` ke tiap pola yang
+  muncul dan meneruskannya ke `build_narrative`. Track record di-cache 1 jam;
+  bila pengambilannya gagal, banner tetap tampil tanpa klaim historis.
+- Skema: `SmartMoneyVerdict.streak_start_date`, `SmartMoneyPattern.history`
+  (+ `SmartMoneyPatternHistory`, `SmartMoneyHorizonStats`).
+- UI banner emiten: badge "cerita N hari" + "N% sesuai arah · n=…" per pola, dan
+  streak jadi "11× berturut / sejak 18 Sep 2026". Persentase diberi warna netral,
+  bukan hijau/merah — pola jual yang terbukti bukan kabar baik, jadi warnanya
+  menyatakan kekuatan catatan, bukan arah pasar.
+
+### 10.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src/ tests/` | ✅ bersih |
+| `pytest tests/` | ✅ 468 lulus (test_smart_money.py 48 → 64) |
+| `tsc --noEmit` | ✅ bersih |
+| Endpoint BMRI (distribusi) | ✅ `streak_start_date=2026-09-18`; `silent_distribution` → horizon **5 hari**, 64%, n=484, reliable |
+| Endpoint EMAS (akumulasi) | ✅ `streak_start_date=2026-09-25`; `silent_accumulation` → horizon **21 hari**, 55%, n=213, reliable |
+| Browser `/stock/BMRI` | ✅ "sejak 18 Sep 2026" · "cerita 5 hari" · "64% sesuai arah · n=484" · kalimat bukti tampil di narasi |
+
+### 10.4 Sisa peta jalan
+
+1. **Verdict relatif pasar** — hari ini 589 emiten net sell vs 374 net buy (dari
+   963). Verdict per emiten perlu konteks "61% pasar juga net sell" supaya tidak
+   dibaca sebagai sinyal eksklusif. Konteks sektor sudah ada, pasar belum.
+2. **Bobot tampilan ikut kekuatan bukti** — `initiation` punya alpha terkuat
+   (+1,09% / +2,02% / +2,58% pada 5/10/21 hari, t=2,3–3,5); pola dengan bukti
+   terkuat layak tampil lebih dulu, bukan diperlakukan sama rata.
+3. **Data tipis yang membatasi fitur**: `broker_daily` baru 6 hari bursa
+   (2026-09-25..10-02) sehingga tren broker belum bisa diklaim; intraday praktis
+   kosong (`intraday_ticks` 528 baris, `intraday_ticks_2026_10` 0 baris) — fitur
+   intraday tidak boleh dijanjikan sebelum pengumpulannya dibereskan.
