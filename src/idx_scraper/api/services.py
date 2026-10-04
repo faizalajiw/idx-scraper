@@ -707,6 +707,17 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
 
     This is a research aid, not a recommendation to buy/sell.
     """
+    # Skor per emiten tidak berubah intraday (sumbernya EOD/IC/broker snapshot),
+    # dan perhitungannya mahal (~4-5s untuk seluruh watchlist). Cache 10 menit
+    # di kunci (codes, min_days); serve loop mengosongkannya tiap refresh via
+    # POST /api/cache/clear.
+    from .analytics import _research_cache_get, _research_cache_put
+
+    cache_key = f"hold_check:{','.join(sorted(codes))}:{min_days}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     # Lapisan aktivitas broker (proksi aliran, bobot dari IC). Dihitung SEBELUM
     # blok cursor: snapshot-nya membuka koneksi sendiri untuk query panel faktor
     # yang berat, jadi jangan tahan koneksi pool sambil menunggu. Gagal atau
@@ -921,6 +932,7 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
             row["foreign_net"] = _f(r["foreign_net"]) if r else None
 
     out.sort(key=lambda r: r["score"], reverse=True)
+    _research_cache_put(cache_key, out, ttl=600.0)
     return out
 
 

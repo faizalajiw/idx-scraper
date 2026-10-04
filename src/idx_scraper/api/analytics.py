@@ -1259,169 +1259,6 @@ def _load_frame_for_decision(cur: Any, code: str):
 # --------------------------------------------------------------- sector analysis
 
 
-# --------------------------------------------------------------- sector RRG
-
-
-def get_sector_rrg(
-    benchmark: str = "COMPOSITE",
-    window: int = 21,
-    tail_weeks: int = 8,
-) -> dict[str, Any]:
-    """Relative Rotation Graph (RRG) points per sector, benchmarked to an index.
-
-    RRG semantics (relative to the benchmark index):
-      - RS-Ratio  = 100 + (log(relative strength) - mean) / std * scale
-        (indexed so 100 = in line with benchmark; >100 outperforming).
-      - RS-Momentum = 100 + rate of change of the RS-Ratio, normalized the same
-        way (>100 improving, <100 weakening).
-
-    The relative-strength series per sector is built from the equal-weighted
-    average daily return of its constituents in stock_summary_daily, so no new
-    data source is needed. Benchmark series comes from index_quotes (IHSG).
-
-    tail_weeks controls how many past weekly points are returned per sector so
-    the UI can draw the rotation trail; the last point is "now".
-    """
-    import numpy as np
-
-    with get_cursor() as cur:
-        cur.execute("select max(trade_date) as d from research.latest_pit")
-        d = cur.fetchone()["d"]
-        if not d:
-            return {"benchmark": benchmark, "window": window, "date": None, "points": []}
-
-        cur.execute(
-            """select code, trade_date as date, percent from research.latest_pit
-               where trade_date >= %s - (%s * 3)::int and percent is not null
-               order by trade_date""",
-            (d, window + tail_weeks * 5),
-        )
-        rows = cur.fetchall()
-
-        cur.execute(
-            """select distinct on (captured_at::date) captured_at::date as date, close
-               from index_quotes
-               where code = %s and close is not null
-               order by captured_at::date, captured_at desc""",
-            (benchmark,),
-        )
-        idx_rows = cur.fetchall()
-
-    # index_quotes only carries a few days of live captures; RRG needs weeks,
-    # so fall back to a synthetic composite whenever the real benchmark is short.
-    if len(idx_rows) < window + 5:
-        with get_cursor() as cur:
-            cur.execute(
-                """select trade_date as date, avg(percent) as pct from research.latest_pit
-                   where percent is not null group by trade_date order by trade_date"""
-            )
-            idx_rows = [
-                {"date": r["date"], "close": None, "pct": _f(r["pct"])}
-                for r in cur.fetchall()
-            ]
-            pct_mode = True
-    else:
-        pct_mode = False
-
-    # ---- benchmark daily return series (indexed by ISO date) ----
-    if pct_mode:
-        bench_ret: dict[str, float] = {}
-        for r in idx_rows:
-            p = _f(r["pct"])
-            if p is not None:
-                bench_ret[_norm_date(r["date"])] = p / 100.0
-    else:
-        closes: dict[str, float] = {}
-        for r in idx_rows:
-            c = _f(r["close"])
-            if c:
-                closes[_norm_date(r["date"])] = c
-        dates_sorted = sorted(closes)
-        bench_ret = {
-            dates_sorted[i]: closes[dates_sorted[i]] / closes[dates_sorted[i - 1]] - 1.0
-            for i in range(1, len(dates_sorted))
-        }
-
-    if len(bench_ret) < window + 5:
-        return {"benchmark": benchmark, "window": window, "date": str(d), "points": []}
-
-    # ---- sector daily returns: equal-weighted mean of constituents per date ----
-    sums: dict[str, dict[str, float]] = {}
-    counts: dict[str, dict[str, int]] = {}
-    for r in rows:
-        sector = sector_for(r["code"])
-        p = _f(r["percent"])
-        if p is None:
-            continue
-        dt = _norm_date(r["date"])
-        sums.setdefault(sector, {}).setdefault(dt, 0.0)
-        counts.setdefault(sector, {}).setdefault(dt, 0)
-        sums[sector][dt] += p / 100.0
-        counts[sector][dt] += 1
-
-    # Keep only sectors with enough history; drop "Lainnya" (unclassified mix).
-    sector_daily: dict[str, pd.Series] = {}
-    for sector, by_date in sums.items():
-        if sector == "Lainnya":
-            continue
-        dates = sorted(by_date)
-        if len(dates) < window + 5:
-            continue
-        vals = [by_date[dt] / counts[sector][dt] for dt in dates]
-        sector_daily[sector] = pd.Series(vals, index=pd.Index(dates), dtype=float)
-
-    if not sector_daily:
-        return {"benchmark": benchmark, "window": window, "date": str(d), "points": []}
-
-    # ---- weekly resample + relative strength ----
-    bench = pd.Series(bench_ret, dtype=float).sort_index()
-    bench_df = pd.DataFrame({"ret": bench.values}, index=pd.to_datetime(bench.index))
-    bench_w = bench_df["ret"].resample("W-FRI").prod(min_count=1).dropna()
-
-    points: list[dict[str, Any]] = []
-    for sector, s in sector_daily.items():
-        sdf = pd.DataFrame({"ret": s.values}, index=pd.to_datetime(s.index))
-        sw = sdf["ret"].resample("W-FRI").prod(min_count=1).dropna()
-        common = sw.index.intersection(bench_w.index)
-        if len(common) < window + 2:
-            continue
-        rel = (1 + sw.loc[common]) / (1 + bench_w.loc[common])
-        rs = rel.cumprod()
-        if len(rs) < window + 2:
-            continue
-        lr = np.log(rs)
-
-        # Each point is normalized against ITS OWN trailing window (rolling),
-        # like a real RRG: the trail shows where the sector sat relative to its
-        # trailing distribution at each week, not positions inside one window.
-        roll = lr.rolling(window)
-        ratio = 100 + (lr - roll.mean()) / roll.std() * 2
-
-        mdiff = lr.diff()
-        rollm = mdiff.rolling(window)
-        mom = 100 + (mdiff - rollm.mean()) / rollm.std() * 2
-
-        both = pd.DataFrame({"ratio": ratio, "mom": mom}).dropna()
-        if both.empty:
-            continue
-        # Dates are week-ending (Friday) labels; the last one may be the Friday
-        # of the current, still-open week.
-        for dt, rowv in both.tail(tail_weeks).iterrows():
-            points.append({
-                "sector": sector,
-                "date": dt.strftime("%Y-%m-%d"),
-                "rs_ratio": round(float(rowv["ratio"]), 2),
-                "rs_momentum": round(float(rowv["mom"]), 2),
-            })
-
-    return {
-        "benchmark": benchmark,
-        "window": window,
-        "date": str(d),
-        "points": points,
-    }
-
-
 def get_sector_analysis(date: str | None = None) -> dict[str, Any]:
     """Average % change, value, and foreign net grouped by sector (curated map)."""
     with get_cursor() as cur:
@@ -1644,6 +1481,10 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
     "Overvalued" is the mirror image: price far above band with stretched RSI.
     This is a mean-reversion *screen*, not a fairness opinion.
     """
+    cached = _research_cache_get("valuation")
+    if cached is not None:
+        return cached
+
     with get_cursor() as cur:
         cur.execute("select distinct code from research.latest_pit order by code")
         codes = [r["code"] for r in cur.fetchall()]
@@ -1699,7 +1540,11 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
         for r in lst:
             r["name"] = names.get(r["code"])
 
-    return {"undervalued": undervalued, "overvalued": overvalued}
+    result = {"undervalued": undervalued, "overvalued": overvalued}
+    # ~10s saat dingin (loop per emiten); data hanya berubah tiap EOD, dan
+    # serve loop memanggil /api/cache/clear setiap pipeline refresh.
+    _research_cache_put("valuation", result, ttl=600.0)
+    return result
 
 
 # --------------------------------------------------------------- AI screener
@@ -1718,7 +1563,7 @@ def get_screener(
     min_days: int = 30,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """    Rule-based multi-factor screener ("AI screening" v1: transparent rules).
+    """Rule-based multi-factor screener ("AI screening" v1: transparent rules).
 
     Factors per stock: technical signal (SMA20/50+RSI rule), 20-day momentum,
     RSI, volume ratio (today vs 20d avg — detects unusual activity), foreign
@@ -1729,7 +1574,58 @@ def get_screener(
     ``min_broker_score`` hanya bermakna kalau skor broker sudah tervalidasi. Kalau
     belum, tidak ada emiten yang bisa dinyatakan lolos kriteria yang tidak bisa
     dihitung -> hasilnya kosong, bukan filter yang diam-diam diabaikan.
+
+    Baris lengkap (tanpa filter) di-cache; filter hanya menyeleksi baris, jadi
+    bisa diterapkan ke cache tanpa mengubah hasil.
     """
+    rows = _screener_rows()
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        sig = row["signal"]
+        momo = row["momentum_20d"]
+        value = row["value"]
+        fnet = row["foreign_net"]
+        rsi = row["rsi"]
+        vol_ratio = row["vol_ratio"]
+        if min_days > 30 and row["hist_days"] < min_days:
+            continue
+        if signal and sig != signal:
+            continue
+        if rsi_min is not None and (rsi is None or rsi < rsi_min):
+            continue
+        if rsi_max is not None and (rsi is None or rsi > rsi_max):
+            continue
+        if min_momentum is not None and (momo is None or momo < min_momentum):
+            continue
+        if max_momentum is not None and (momo is None or momo > max_momentum):
+            continue
+        if min_value is not None and (value is None or value < min_value):
+            continue
+        if foreign_in_only and (fnet is None or fnet <= 0):
+            continue
+        if min_vol_ratio is not None and (vol_ratio is None or vol_ratio < min_vol_ratio):
+            continue
+        if min_broker_score is not None:
+            bs = row["broker_score"]
+            if bs is None or bs < min_broker_score:
+                continue
+        out.append(row)
+
+    return out[:limit]
+
+
+def _screener_rows() -> list[dict[str, Any]]:
+    """Baris screener penuh (semua emiten, semua metrik) — cache 10 menit.
+
+    Tanpa cache ini tiap permintaan screener memuat ulang dan menghitung indikator
+    setiap emiten (~15-20s). Data hanya berubah tiap EOD, dan serve loop memanggil
+    /api/cache/clear setiap pipeline refresh.
+    """
+    cached = _research_cache_get("screener_rows")
+    if cached is not None:
+        return cached
+
     ob = _latest_orderbook_factors()
     # Skor broker diambil di luar blok cursor: snapshot-nya membuka koneksi
     # sendiri untuk query panel faktor, jadi jangan tahan koneksi pool menunggu.
@@ -1749,7 +1645,7 @@ def get_screener(
     with get_cursor() as cur:
         for code in codes:
             df = _valuation_frame(cur, code)
-            if df is None or len(df) < min_days:
+            if df is None or len(df) < 30:
                 continue
             df = calculate_indicators(
                 df.assign(open=df["close"], high=df["close"], low=df["close"])
@@ -1824,32 +1720,11 @@ def get_screener(
                 "value": value,
                 "hist_days": len(df),
             }
-
-            # ---- apply filters
-            if signal and sig != signal:
-                continue
-            if rsi_min is not None and (rsi is None or rsi < rsi_min):
-                continue
-            if rsi_max is not None and (rsi is None or rsi > rsi_max):
-                continue
-            if min_momentum is not None and (momo is None or momo < min_momentum):
-                continue
-            if max_momentum is not None and (momo is None or momo > max_momentum):
-                continue
-            if min_value is not None and (value is None or value < min_value):
-                continue
-            if foreign_in_only and (fnet is None or fnet <= 0):
-                continue
-            if min_vol_ratio is not None and (vol_ratio is None or vol_ratio < min_vol_ratio):
-                continue
-            if min_broker_score is not None:
-                bs = (broker_by_code.get(code) or {}).get("score")
-                if bs is None or bs < min_broker_score:
-                    continue
             out.append(row)
 
     out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
-    return out[:limit]
+    _research_cache_put("screener_rows", out, ttl=600.0)
+    return out
 
 
 # --------------------------------------------------------------- order-book helper
@@ -2595,8 +2470,7 @@ def _rotation_delta(history: pd.DataFrame, sessions: int) -> float | None:
 def get_sector_rotation(lookback: int = 60, min_names: int = 3) -> dict[str, Any]:
     """Rotasi sektor dari skor aktivitas broker (proksi aliran dana).
 
-    Beda dari RRG di halaman Sektor (rotasi berbasis HARGA relatif), ini rotasi
-    berbasis JEJAK ALIRAN: sektor mana yang skor akumulasinya sedang naik.
+    Rotasi berbasis JEJAK ALIRAN: sektor mana yang skor akumulasinya sedang naik.
 
     Tiap tanggal diagregasi per sektor (median skor + breadth), lalu rotasi
     diukur dari perubahan median — bukan levelnya. Sektor dengan kurang dari

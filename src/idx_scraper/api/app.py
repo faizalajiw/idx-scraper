@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import watchlist_store
 
-from . import alerts, analytics, dividends, quality, services, simulation
+from . import alerts, analytics, dividends, services, simulation
 from .config import get_settings
 from .database import close_pool, get_cursor, init_pool
 from .schemas import (
@@ -32,8 +32,6 @@ from .schemas import (
     BrokerActivity,
     BrokerFlow,
     CorpActionRow,
-    CorpActionSummary,
-    CoverageGaps,
     DividendDetail,
     DividendOverview,
     DividendStock,
@@ -43,13 +41,9 @@ from .schemas import (
     MarketNarration,
     MarketOverview,
     MarketRegime,
-    QualityOverview,
-    QuarantineReason,
-    QuarantineRow,
     ScreenerRow,
     SectorAnalysis,
     SectorRotation,
-    SectorRRG,
     SentimentResponse,
     SessionMovers,
     Signal,
@@ -65,7 +59,6 @@ from .schemas import (
     StockForeignFlow,
     StockOwnership,
     TechnicalChart,
-    ThinDay,
     TopBrokers,
     ValuationResponse,
     WatchlistRow,
@@ -99,8 +92,37 @@ def _warm_heavy_caches() -> None:
         except Exception as e:
             print(f"[warmup] broker snapshot dilewati: {e}")
 
+    def _run_screener() -> None:
+        # Baris screener (~15-20s saat dingin) dipakai halaman Screener sama
+        # sekali tanpa filter; hangatkan agar kunjungan pertama cepat.
+        try:
+            analytics._screener_rows()
+            print("[warmup] screener rows siap")
+        except Exception as e:
+            print(f"[warmup] screener rows dilewati: {e}")
+
+    def _run_valuation() -> None:
+        # Watchlist default (~10s saat dingin) dipakai halaman Valuasi dan
+        # gabungan verdict di Ruang Keputusan.
+        try:
+            analytics.get_valuation()
+            print("[warmup] valuation siap")
+        except Exception as e:
+            print(f"[warmup] valuation dilewati: {e}")
+
+    def _run_hold_check() -> None:
+        # Verdict watchlist default (~7s saat dingin) dipakai halaman Hold Check.
+        try:
+            services.get_hold_check(watchlist_store.read_watchlist())
+            print("[warmup] hold check siap")
+        except Exception as e:
+            print(f"[warmup] hold check dilewati: {e}")
+
     threading.Thread(target=_run_events, daemon=True, name="warmup-event-bundle").start()
     threading.Thread(target=_run_broker_snapshot, daemon=True, name="warmup-broker-snapshot").start()
+    threading.Thread(target=_run_screener, daemon=True, name="warmup-screener").start()
+    threading.Thread(target=_run_valuation, daemon=True, name="warmup-valuation").start()
+    threading.Thread(target=_run_hold_check, daemon=True, name="warmup-hold-check").start()
 
 
 async def lifespan(app: FastAPI):
@@ -425,16 +447,6 @@ def smart_money_verdicts(
     return {**data, "telegram_enabled": alerts.telegram_enabled()}
 
 
-@app.get("/api/sectors/rrg", response_model=SectorRRG)
-def sectors_rrg(
-    benchmark: str = Query(default="COMPOSITE", description="Benchmark index code from index_quotes"),
-    window: int = Query(default=21, ge=10, le=120, description="Trailing weekly window for normalization"),
-    tail_weeks: int = Query(default=8, ge=1, le=52, description="Weekly trail points per sector"),
-) -> dict:
-    """RRG (Relative Rotation Graph) positions per sector vs the benchmark."""
-    return analytics.get_sector_rrg(benchmark=benchmark, window=window, tail_weeks=tail_weeks)
-
-
 @app.get("/api/sectors/rotation", response_model=SectorRotation)
 def sectors_rotation(
     lookback: int = Query(default=60, ge=5, le=250, description="Hari bursa riwayat median skor sektor"),
@@ -442,9 +454,9 @@ def sectors_rotation(
 ) -> dict:
     """Rotasi sektor dari skor aktivitas broker (proksi aliran dana).
 
-    Beda dari RRG (rotasi harga relatif): ini mengukur sektor mana yang jejak
-    akumulasi alirannya sedang naik. Sektor dengan emiten berskor kurang dari
-    ``min_names`` dibuang; emiten tanpa sektor sebenarnya tidak diikutkan.
+    Mengukur sektor mana yang jejak akumulasi alirannya sedang naik. Sektor
+    dengan emiten berskor kurang dari ``min_names`` dibuang; emiten tanpa
+    sektor sebenarnya tidak diikutkan.
     """
     return analytics.get_sector_rotation(lookback=lookback, min_names=min_names)
 
@@ -501,47 +513,6 @@ def screener(
         min_days=min_days,
         limit=limit,
     )
-
-# --------------------------------------------------------------- data quality
-
-@app.get("/api/quality/overview", response_model=QualityOverview)
-def quality_overview() -> dict:
-    """Headline health of the research.* layer: coverage, freshness, counts."""
-    return quality.get_quality_overview()
-
-@app.get("/api/quality/quarantine", response_model=list[QuarantineRow])
-def quality_quarantine(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict]:
-    """Most recent rows rejected by the quality gate, with reason + raw payload."""
-    return quality.get_quarantine(limit=limit)
-
-@app.get("/api/quality/quarantine-reasons", response_model=list[QuarantineReason])
-def quality_quarantine_reasons() -> list[dict]:
-    """Quarantine counts grouped by rejection reason."""
-    return quality.get_quarantine_reasons()
-
-@app.get("/api/quality/coverage-gaps", response_model=CoverageGaps)
-def quality_coverage_gaps() -> dict:
-    """Weekdays in the covered window with no EOD rows (holidays or scrape misses)."""
-    return quality.get_coverage_gaps()
-
-@app.get("/api/quality/thin-days", response_model=list[ThinDay])
-def quality_thin_days(
-    min_codes: int = Query(default=100, ge=1, le=2000),
-    limit: int = Query(default=30, ge=1, le=200),
-) -> list[dict]:
-    """Trading days with unusually few emiten reported (possible partial scrape)."""
-    return quality.get_thin_days(min_codes=min_codes, limit=limit)
-
-@app.get("/api/quality/corp-actions", response_model=CorpActionSummary)
-def quality_corp_actions() -> dict:
-    """Corporate-action counts broken down by type and source."""
-    return quality.get_corp_action_summary()
-
-@app.get("/api/quality/duplicates")
-def quality_duplicates() -> dict:
-    """Count of (code, trade_date) bars with more than one knowledge_date."""
-    return quality.get_duplicate_pit()
-
 
 # --------------------------------------------------------------- research UI
 

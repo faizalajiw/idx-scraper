@@ -355,15 +355,12 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/stocks/{code}/ownership` (kepemilikan + aksi pemilik, gratis)
 - **Analitik:** `/api/screener` (+ filter `min_broker_score`), `/api/valuation`,
   `/api/foreign-flow`,
-  `/api/sectors`, `/api/sectors/rrg`, `/api/sectors/rotation`, `/api/sentiment`,
+  `/api/sectors`, `/api/sectors/rotation`, `/api/sentiment`,
   `/api/factors/overview`,
   `/api/broker-activity`, `/api/broker-flow` (komposisi asing/lokal/BUMN),
   `/api/stocks/{code}/foreign-flow` (arus asing per emiten: tren, flip, peer sektor)
 - **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
   `/api/corporate-actions`
-- **Kualitas data:** `/api/quality/overview`, `/api/quality/quarantine`,
-  `/api/quality/quarantine-reasons`, `/api/quality/coverage-gaps`,
-  `/api/quality/thin-days`, `/api/quality/corp-actions`, `/api/quality/duplicates`
 - **Alert Telegram:** `/api/alerts` (GET/POST/DELETE), `/api/alerts/test`
 - **Jejak smart money:** `/api/smart-money/radar`, `/api/stocks/{code}/smart-money`,
   `/api/smart-money/track-record`, `/api/smart-money/patterns` (papan pola yang

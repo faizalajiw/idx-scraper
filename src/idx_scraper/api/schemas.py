@@ -567,22 +567,6 @@ class SectorAnalysis(BaseModel):
     sectors: list[SectorRow]
 
 
-class RRGPoint(BaseModel):
-    """One weekly RRG position of a sector vs the benchmark index."""
-
-    sector: str
-    date: str
-    rs_ratio: float
-    rs_momentum: float
-
-
-class SectorRRG(BaseModel):
-    benchmark: str
-    window: int
-    date: str | None = None
-    points: list[RRGPoint]
-
-
 class SectorRotationRow(BaseModel):
     """Satu sektor: level skor broker agregat + arah rotasinya.
 
@@ -736,55 +720,6 @@ class HoldCheckResponse(BaseModel):
     date: str | None = None
     generated_at: str | None = None
     items: list[HoldCheckItem]
-
-
-# --------------------------------------------------------------- data quality
-
-class QualityOverview(BaseModel):
-    raw_rows: int
-    raw_codes: int
-    trading_days: int
-    first_day: str | None = None
-    last_day: str | None = None
-    pit_rows: int
-    quarantine_rows: int
-    corp_actions: int
-    last_ingest: str | None = None
-    staleness_hours: float | None = None
-
-
-class QuarantineRow(BaseModel):
-    code: str | None = None
-    trade_date: str | None = None
-    reason: str
-    payload: dict | None = None
-    ingested_at: str | None = None
-
-
-class QuarantineReason(BaseModel):
-    reason: str
-    count: int
-
-
-class CoverageWindow(BaseModel):
-    first: str
-    last: str
-
-
-class CoverageGaps(BaseModel):
-    window: CoverageWindow | None = None
-    covered_days: int
-    missing_weekdays: list[str]
-
-
-class ThinDay(BaseModel):
-    trade_date: str
-    codes: int
-
-
-class CorpActionSummary(BaseModel):
-    by_type: dict[str, int]
-    by_source: dict[str, int]
 
 
 # ---------------------------------------------------- dividends & corp actions
