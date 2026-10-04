@@ -366,7 +366,8 @@ Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
   `/api/quality/thin-days`, `/api/quality/corp-actions`, `/api/quality/duplicates`
 - **Alert Telegram:** `/api/alerts` (GET/POST/DELETE), `/api/alerts/test`
 - **Jejak smart money:** `/api/smart-money/radar`, `/api/stocks/{code}/smart-money`,
-  `/api/smart-money/track-record`, `/api/smart-money/verdicts`
+  `/api/smart-money/track-record`, `/api/smart-money/patterns` (papan pola yang
+  menyala di sesi terakhir, dikelompokkan per pola), `/api/smart-money/verdicts`
 - **Backtest:** `GET /api/backtest/config`, `POST /api/backtest/run`
 - **Utilitas:** `/health`, `POST /api/cache/clear`
 

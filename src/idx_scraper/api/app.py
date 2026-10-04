@@ -54,6 +54,7 @@ from .schemas import (
     SessionMovers,
     Signal,
     SignalTrack,
+    SmartMoneyPatternsBoard,
     SmartMoneyRadar,
     SmartMoneyStock,
     SmartMoneyTrackRecord,
@@ -393,6 +394,20 @@ def smart_money_track_record() -> dict:
     ``analytics``. Cache 1 jam.
     """
     return analytics.get_smart_money_track_record()
+
+
+@app.get("/api/smart-money/patterns", response_model=SmartMoneyPatternsBoard)
+def smart_money_patterns_board() -> dict:
+    """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir.
+
+    Dikelompokkan per pola (angka historisnya milik pola, bukan emiten) dan
+    diurutkan berdasar kekuatan bukti, sehingga `initiation` — pola dengan
+    catatan terkuat tapi jarang menyala — terlihat tanpa harus kebetulan
+    muncul di emiten yang sedang dibuka. Emiten di dalam tiap kelompok urut
+    |net rupiah| dengan lantai likuiditas yang sama seperti radar. Cache 30
+    menit.
+    """
+    return analytics.get_smart_money_patterns_board()
 
 
 @app.get("/api/smart-money/verdicts", response_model=SmartMoneyWatchList)

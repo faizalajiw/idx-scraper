@@ -19,6 +19,7 @@ from idx_scraper.smart_money import (
     pattern_evidence_sentence,
     pattern_history,
     pattern_track_record,
+    patterns_board,
     patterns_history,
     rank_patterns,
     size_label,
@@ -1026,3 +1027,111 @@ def test_build_narrative_without_market_has_no_market_line():
     pats = detect_patterns(rows)
     joined = " ".join(build_narrative("BBCA", v, pats, None))
     assert "Konteks pasar" not in joined
+
+
+# --------------------------------------------------------------------------- #
+# papan "pola terkuat hari ini"
+# --------------------------------------------------------------------------- #
+
+
+def _initiation_rows() -> list[dict]:
+    """Baris pola inisiasi: deret datar + lonjakan volume di sesi terakhir.
+
+    Memicu DUA pola sekaligus (`initiation` + `silent_accumulation`) — persis
+    kombinasi yang paling sering terjadi di data nyata (34 dari 35 hari-emiten
+    ber-pola-ganda), jadi sekaligus menguji satu emiten muncul di dua kelompok.
+    """
+    rows = _flat_rows(20, net=100.0, value=1000.0)
+    last = rows[-1]
+    rows[-1] = _row(last["date"], 100.0, value=1000.0, volume=5_000_000.0)
+    return rows
+
+
+def test_patterns_board_groups_by_pattern_and_ranks_by_evidence():
+    panel = {
+        "ACC1": {"name": "Acc One", "rows": _flat_rows(20, net=100.0, value=1000.0)},
+        "ACC2": {"name": "Acc Two", "rows": _flat_rows(20, net=100.0, value=1000.0)},
+        "INI": {"name": "Init One", "rows": _initiation_rows()},
+    }
+    tr = [
+        _track_row("initiation", fwd21=(133, 0.556, 3.45, 2.58)),
+        _track_row("silent_accumulation", fwd21=(213, 0.554, 3.98, 0.48)),
+    ]
+    board = patterns_board(panel, tr, window_sessions=120, min_window_value=0.0)
+    assert board["scanned"] == 3
+    assert board["date"] == "2026-09-20"
+    # inisiasi (edge 2,58%) di depan akumulasi (0,48%)
+    assert [g["pattern"] for g in board["groups"]] == ["initiation", "silent_accumulation"]
+    ini, acc = board["groups"]
+    assert ini["confidence"] == "tinggi"
+    assert ini["edge_pct"] == 2.58
+    assert ini["horizon_days"] == 21
+    assert ini["aligned_hit_rate"] == 0.556
+    assert [e["code"] for e in ini["emitters"]] == ["INI"]
+    # INI juga memicu akumulasi -> muncul di dua kelompok, dan ikut terhitung
+    assert acc["fired"] == 3 and acc["count"] == 3
+    assert [e["code"] for e in acc["emitters"]] == ["ACC1", "ACC2", "INI"]
+    assert acc["emitters"][2]["name"] == "Init One"
+
+
+def test_patterns_board_only_counts_latest_session():
+    stale = _flat_rows(20, net=100.0, value=1000.0)[:-3]  # ketinggalan 3 sesi
+    panel = {
+        "STALE": {"name": "Stale", "rows": stale},
+        "FRESH": {"name": "Fresh", "rows": _flat_rows(20, net=100.0, value=1000.0)},
+    }
+    board = patterns_board(panel, [], min_window_value=0.0)
+    assert board["scanned"] == 1
+    assert [e["code"] for e in board["groups"][0]["emitters"]] == ["FRESH"]
+
+
+def test_patterns_board_reports_fired_vs_count_with_liquidity_floor():
+    panel = {
+        # nilai jendela: SMALL = 1 × 20 sesi = 20; BIG = 1000 × 20 = 20.000
+        "SMALL": {"name": "Small", "rows": _flat_rows(20, net=100.0, value=1.0)},
+        "BIG": {"name": "Big", "rows": _flat_rows(20, net=100.0, value=1000.0)},
+    }
+    g = patterns_board(panel, [], min_window_value=10_000.0)["groups"][0]
+    assert g["pattern"] == "silent_accumulation"
+    assert g["fired"] == 2  # keduanya memicu polanya
+    assert g["count"] == 1  # hanya yang lolos lantai likuiditas
+    assert [e["code"] for e in g["emitters"]] == ["BIG"]
+    assert g["confidence"] is None  # tanpa track record -> tanpa klaim
+
+
+def test_patterns_board_orders_emitters_by_absolute_rupiah():
+    # Dua emiten memicu pola yang sama; yang |net rupiah| lebih besar di depan.
+    big = _flat_rows(20, net=900.0, value=1000.0)
+    small = _flat_rows(20, net=60.0, value=1000.0)
+    panel = {
+        "KECIL": {"name": "Kecil", "rows": small},
+        "BESAR": {"name": "Besar", "rows": big},
+    }
+    g = patterns_board(panel, [], min_window_value=0.0)["groups"][0]
+    assert g["pattern"] == "silent_accumulation"
+    assert [e["code"] for e in g["emitters"]] == ["BESAR", "KECIL"]
+
+
+def test_patterns_board_group_without_history_goes_last():
+    panel = {
+        "DIS": {"name": "Dis", "rows": _flat_rows(20, net=-100.0, value=1000.0)},
+        "ACC": {"name": "Acc", "rows": _flat_rows(20, net=100.0, value=1000.0)},
+    }
+    tr = [_track_row("silent_accumulation", fwd21=(213, 0.554, 3.98, 0.48))]
+    board = patterns_board(panel, tr, min_window_value=0.0)
+    assert [g["pattern"] for g in board["groups"]] == [
+        "silent_accumulation",
+        "silent_distribution",
+    ]
+
+
+def test_patterns_board_empty_and_missing_rows_are_safe():
+    b = patterns_board({}, [])
+    assert b["groups"] == []
+    assert b["scanned"] == 0
+    assert b["date"] is None
+    assert patterns_board({"X": {"name": "X", "rows": []}}, [])["groups"] == []
+    # panel ber-baris tapi tak ada pola -> tidak ada kelompok
+    assert patterns_board({"Y": {"name": "Y", "rows": _flat_rows(20, net=10.0, value=1000.0)}}, [])[
+        "groups"
+    ] == []

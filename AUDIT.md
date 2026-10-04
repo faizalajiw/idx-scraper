@@ -544,3 +544,66 @@ cuma integer `streak`, tanpa tanggal.
 3. **`confidence` belum dipakai di kartu track record `/radar`** — masih hanya di
    banner emiten; menyatukan keduanya akan menghapus dua cara membaca angka yang
    sama.
+
+## 12. Papan "pola terkuat hari ini" di `/radar` (2026-10-03)
+
+### 12.1 Masalah
+
+`initiation` adalah pola dengan bukti terkuat (alpha +1,09% / +2,02% / +2,58%
+pada 5/10/21 hari, t=2,3–3,5) tapi paling jarang menyala — hari ini hanya 1
+emiten dari 963. Pola per emiten juga cuma terlihat kalau kebetulan membuka
+emiten itu, dan papan `/radar` yang ada hanya memeringkat emiten per |net|,
+bukan per pola. Jadi pola terkuat praktis tak pernah terlihat.
+
+### 12.2 Yang dikerjakan
+
+- `smart_money.patterns_board` (pure): pola yang menyala di sesi terakhir,
+  **dikelompokkan per pola** — angka historisnya (persen sesuai arah, horizon,
+  keyakinan) memang milik pola, bukan milik emiten; daftar rata per emiten akan
+  menuliskan statistik yang sama puluhan kali (66 emiten `silent_distribution`
+  hari ini) dan menyembunyikan pesannya. Urutan kelompok ikut kekuatan bukti;
+  tanpa catatan track record selalu di belakang.
+- Emiten di dalam kelompok urut |net rupiah|, dengan **lantai likuiditas yang
+  sama dengan radar** (Rp 500 jt nilai transaksi jendela) supaya nama nyaris tak
+  diperdagangkan tidak menempel di papan. `fired` (semua yang menyala) dan
+  `count` (yang lolos lantai) dikirim terpisah, dan UI menuliskan sisanya
+  terang-terangan — bukan disembunyikan.
+- `analytics.get_smart_money_patterns_board` (cache 30 menit, panel pasar yang
+  sama dengan radar + track record yang sudah di-cache 1 jam) + endpoint
+  `GET /api/smart-money/patterns`.
+- UI: kartu **Pola Terkuat Hari Ini** di `/radar`, sebelum kartu track record.
+
+### 12.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src/ tests/` | ✅ bersih |
+| `pytest tests/` | ✅ 489 lulus (+6 test `patterns_board`) |
+| `tsc --noEmit` | ✅ bersih |
+| Endpoint live | ✅ `GET /api/smart-money/patterns` 200 — 4 kelompok, 963 emiten dipindai, sesi 2026-10-02 |
+| Urutan kelompok | ✅ `initiation` (edge 2,58%) → `silent_accumulation` (0,48%) → `distribution_on_rally` (0,45%) → `silent_distribution` (0,44%) |
+| `fired` vs `count` | ✅ `silent_accumulation` 32 → 25, `silent_distribution` 66 → 53 (sisanya disaring lantai, dan disebut di UI) |
+| Emiten urut | ✅ `silent_distribution`: BMRI −Rp 1,81 T → BBRI −Rp 889 M → BBCA −Rp 432 M |
+| Browser `/radar` | ✅ kartu ter-render: "4 pola menyala · 963 emiten dipindai", badge "cerita N hari", "keyakinan tinggi", catatan emiten yang disaring |
+
+### 12.4 Catatan tinjauan: `confidence` di kartu track record — sengaja TIDAK disatukan
+
+Rencana awal (10.4 butir 3 / 11.4 butir 3) adalah menyatukan kata keyakinan di
+kartu track record `/radar`. Setelah kartunya dibaca, ternyata ia **sudah** punya
+kolom "Kepercayaan" — dan itu **berbeda hal dengan benar**: kartu itu per
+horizon (pengguna memilih 5/10/21 sesi), jadi keyakinannya diturunkan dari
+t-stat **horizon itu**; sedangkan `confidence` di banner adalah ringkasan
+level-pola dari |t| **terbaik lintas horizon**. Menyatukannya justru akan
+menyesatkan (pola dengan t=1,4 di 5 sesi dan t=2,8 di 21 sesi memang "sedang"
+untuk pertanyaan 5 sesi). Keduanya dibiarkan, dan tidak ada perubahan di kartu.
+
+### 12.5 Sisa peta jalan
+
+1. **Data tipis** (masih, dan ini yang paling membatasi): `broker_daily` 6 hari
+   bursa, intraday kosong, `ownership` 4 emiten.
+2. **Papan pola belum bisa klik ke jejak emiten** — chip emiten mengarah ke
+   `/stock/{code}`; `/radar/[code]` (jejak lengkap + konteks sektor) lebih tepat
+   untuk alur ini.
+3. **Pola per emiten belum punya halaman sendiri** — `detect_patterns` sudah
+   dipakai per emiten, tapi tak ada halaman yang mendaftar "semua emiten yang
+   pernah memicu pola ini" beserta hasil sesudahnya.

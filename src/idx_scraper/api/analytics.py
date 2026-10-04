@@ -549,6 +549,35 @@ def get_smart_money_breadth() -> dict[str, Any] | None:
     return out
 
 
+def get_smart_money_patterns_board() -> dict[str, Any]:
+    """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir.
+
+    Menggabungkan deteksi pola se-pasar (panel yang sama dengan radar) dengan
+    track record pola (cache 1 jam) supaya tiap kelompok membawa buktinya —
+    keyakinan, horizon, dan berapa persen arahnya benar. Cache 30 menit.
+
+    Ini yang membuat `initiation` (pola dengan bukti terkuat, tapi hanya muncul
+    saat volume melonjak) kelihatan tanpa harus menunggu ia kebetulan menyala
+    di emiten yang sedang dibuka.
+    """
+    from ..smart_money import patterns_board
+
+    cache_key = "smart_money_patterns_board"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    panel = _smart_money_panel(_SMART_MONEY_HISTORY)
+    tr = get_smart_money_track_record()
+    out = patterns_board(
+        panel,
+        tr.get("patterns") or [],
+        window_sessions=tr.get("history_sessions"),
+    )
+    _research_cache_put(cache_key, out, ttl=1800.0)
+    return out
+
+
 def get_stock_smart_money(code: str) -> dict[str, Any]:
     """Jejak smart money satu emiten: verdict + pola + level + narasi.
 

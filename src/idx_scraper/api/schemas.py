@@ -1225,6 +1225,50 @@ class SmartMoneySectorContext(BaseModel):
     position: str | None = None
 
 
+class SmartMoneyPatternsBoardRow(BaseModel):
+    """Satu emiten yang memicu sebuah pola di sesi terakhir."""
+
+    code: str
+    name: str | None = None
+    side: str | None = None
+    net_sum_idr: float | None = None
+    netval_pct: float | None = None
+    streak: int | None = None
+    window_value: float | None = None
+    date: str | None = None
+
+
+class SmartMoneyPatternsBoardGroup(BaseModel):
+    """Satu pola + buktinya + emiten yang memicunya.
+
+    ``fired`` = semua emiten yang memicu pola (termasuk yang tipis);
+    ``count`` = yang lolos lantai likuiditas dan boleh ditampilkan. Keduanya
+    dikirim supaya UI bisa jujur soal berapa yang disembunyikan lantai.
+    """
+
+    pattern: str
+    label: str
+    direction: str | None = None
+    confidence: str | None = None
+    horizon_days: int | None = None
+    aligned_hit_rate: float | None = None
+    n_resolved_horizon: int | None = None
+    edge_pct: float | None = None
+    fired: int = 0
+    count: int = 0
+    emitters: list[SmartMoneyPatternsBoardRow] = []
+
+
+class SmartMoneyPatternsBoard(BaseModel):
+    """Papan "pola terkuat hari ini" — dikelompokkan per pola, urut kekuatan bukti."""
+
+    date: str | None = None
+    scanned: int = 0
+    window_days: int = 10
+    min_window_value: float | None = None
+    groups: list[SmartMoneyPatternsBoardGroup] = []
+
+
 class SmartMoneyMarketContext(BaseModel):
     """Sebaran verdict seluruh pasar — pembanding verdict satu emiten.
 

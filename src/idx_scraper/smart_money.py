@@ -958,6 +958,140 @@ def market_context_sentence(
     return f"Konteks pasar: {body}."
 
 
+# ------------------------------------------------------------------ papan pola
+
+#: Berapa emiten yang ditampilkan per pola di papan "pola hari ini" (sisanya
+#: diringkas jadi hitungan — 66 emiten dalam satu baris tidak terbaca).
+PATTERNS_BOARD_TOP_N = 8
+
+
+def patterns_board(
+    emitters: Mapping[str, Mapping[str, Any]],
+    track_record: Iterable[Mapping[str, Any]],
+    *,
+    window_sessions: int | None = None,
+    days: int = PRICE_WINDOW,
+    min_window_value: float = RADAR_MIN_WINDOW_VALUE,
+    top_n: int = PATTERNS_BOARD_TOP_N,
+) -> dict[str, Any]:
+    """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir (pure).
+
+    Dikelompokkan **per pola**, bukan per emiten, karena angka historisnya
+    memang milik pola (bukan milik emiten): satu baris per pola dengan buktinya,
+    lalu emiten yang memicunya di dalamnya. Daftar rata per emiten akan
+    mengulang statistik yang sama puluhan kali dan menyembunyikan pesannya.
+
+    Urutan kelompok mengikuti kekuatan bukti (lihat :func:`rank_patterns`) —
+    pola tanpa catatan track record selalu di belakang. Urutan emiten di dalam
+    kelompok mengikuti |net rupiah|: di antara nama yang berbeda ukuran,
+    Rp 147 M dari Rp 680 M transaksi lebih besar artinya daripada Rp 1 M dari
+    Rp 1 M, dan lantai ``min_window_value`` menjaga nama nyaris tak
+    diperdagangkan tidak menempel di papan (lantai yang sama dengan radar).
+
+    Returns ``{date, scanned, window_days, min_window_value, groups: [...]}``
+    dengan tiap grup ``{pattern, label, direction, confidence, horizon_days,
+    aligned_hit_rate, n_resolved_horizon, edge_pct, fired, count, emitters}``.
+    ``fired`` = semua emiten yang memicu pola itu (termasuk yang tipis);
+    ``count`` = yang lolos lantai likuiditas dan boleh ditampilkan. Tidak
+    pernah raise.
+    """
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for r in track_record:
+        pid = r.get("pattern")
+        if pid is not None:
+            by_id[str(pid)] = r
+
+    entries: list[tuple[str, dict[str, Any]]] = [
+        (str(code).upper(), info or {})
+        for code, info in emitters.items()
+        if (info or {}).get("rows")
+    ]
+    if not entries:
+        return {"date": None, "scanned": 0, "window_days": days,
+                "min_window_value": min_window_value, "groups": []}
+
+    latest = max(info["rows"][-1]["date"] for _, info in entries)
+    usable = [(code, info) for code, info in entries if info["rows"][-1]["date"] == latest]
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    fired: dict[str, int] = {}
+    for code, info in usable:
+        rows = info["rows"]
+        pats = detect_patterns(rows)
+        if not pats:
+            continue
+        v = verdict(rows, days=days)
+        wv = _window_stats(_clean_rows(rows), days)["value_sum"]
+        for p in pats:
+            pid = str(p.get("id"))
+            fired[pid] = fired.get(pid, 0) + 1
+            if not wv or wv < min_window_value:
+                continue
+            buckets.setdefault(pid, []).append(
+                {
+                    "code": code,
+                    "name": info.get("name"),
+                    "side": v.get("side"),
+                    "net_sum_idr": v.get("net_sum_idr"),
+                    "netval_pct": v.get("netval_pct"),
+                    "streak": v.get("streak"),
+                    "window_value": wv,
+                    "date": v.get("date"),
+                }
+            )
+
+    labels = {
+        "silent_accumulation": ("Akumulasi diam-diam", "buy-side"),
+        "distribution_on_rally": ("Distribusi saat naik", "sell-side"),
+        "initiation": ("Inisiasi volume + asing", "buy-side"),
+        "silent_distribution": ("Distribusi diam-diam", "sell-side"),
+    }
+    # urutan mengikuti PATTERNS supaya stabil, lalu diurutkan berdasar bukti
+    order = {pid: i for i, pid in enumerate(PATTERNS)}
+    groups: list[tuple[tuple[int, int, float, int], dict[str, Any]]] = []
+    for pid in sorted(buckets, key=lambda p: order.get(p, 99)):
+        emits = sorted(buckets[pid], key=lambda e: abs(e["net_sum_idr"] or 0.0), reverse=True)
+        label, direction = labels.get(pid, (pid, None))
+        h = pattern_history(by_id.get(pid), window_sessions=window_sessions) or {}
+        conf = str(h.get("confidence")) if h else None
+        edge = h.get("edge_pct") if h else None
+        if not h:
+            key = (1, 9, 0.0, order.get(pid, 99))
+        else:
+            key = (
+                0,
+                _CONFIDENCE_ORDER.get(str(conf), 9),
+                -float(edge or 0.0),
+                order.get(pid, 99),
+            )
+        groups.append(
+            (
+                key,
+                {
+                    "pattern": pid,
+                    "label": label,
+                    "direction": direction,
+                    "confidence": conf,
+                    "horizon_days": h.get("horizon_days"),
+                    "aligned_hit_rate": h.get("aligned_hit_rate"),
+                    "n_resolved_horizon": h.get("n_resolved_horizon"),
+                    "edge_pct": edge,
+                    "fired": fired.get(pid, len(emits)),
+                    "count": len(emits),
+                    "emitters": emits[:top_n],
+                },
+            )
+        )
+
+    return {
+        "date": latest,
+        "scanned": len(usable),
+        "window_days": days,
+        "min_window_value": min_window_value,
+        "groups": [g for _, g in sorted(groups, key=lambda kv: kv[0])],
+    }
+
+
 # ------------------------------------------------------------------ narasi
 
 #: Band label untuk "artinya seberapa" — ambang dari kalibrasi data (lihat
