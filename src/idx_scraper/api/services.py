@@ -133,6 +133,7 @@ def get_market_overview() -> dict[str, Any]:
         cur.execute(
             """select close, change, percent, current, captured_at
                from index_quotes where code = 'COMPOSITE'
+               and close is not null and close > 0
                order by captured_at desc limit 1"""
         )
         idx = cur.fetchone()

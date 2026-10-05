@@ -146,7 +146,8 @@ def _norm_date(value: Any) -> str:
 def _latest_index(cur: Any, code: str = "COMPOSITE") -> dict[str, Any] | None:
     cur.execute(
         """select close, change, percent, current, captured_at from index_quotes
-           where code = %s order by captured_at desc limit 1""",
+           where code = %s and close is not null and close > 0
+           order by captured_at desc limit 1""",
         (code,),
     )
     r = cur.fetchone()
