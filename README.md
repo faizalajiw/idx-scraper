@@ -1,445 +1,177 @@
 # IDX Scraper
 
-Near-real-time Indonesia Stock Exchange (IDX) data scraper for algorithmic research.
-
-**Free + Legal** — uses unofficial public IDX endpoints + Yahoo Finance (no paid license needed).
+Near‑real‑time Indonesia Stock Exchange (IDX) data scraper for algorithmic research. All sources are public and free; no paid licenses are required.
 
 ## Quick Start
 
 ### 1. Install & Setup
-
-```bash
-cd /d/Project/market-labs/idx-scraper
+```powershell
+cd D:\Project\market-labs\idx-scraper
 .venv\Scripts\python.exe -m pip install -e .
 ```
 
-### 2. Configure (`.env`)
-
-```env
+### 2. Environment (`.env`)
+```dotenv
+# Storage backend (sqlite or supabase)
 IDX_STORAGE=sqlite
 IDX_SQLITE_PATH=./data/idx.db
 
-# Watchlist emiten
+# Watch‑list (comma‑separated symbols)
 IDX_WATCHLIST=BBCA,BBRI,BMRI,TLKM,ASII
 
 # Polling intervals (seconds)
-IDX_INDEX_INTERVAL=15
-IDX_WATCHLIST_INTERVAL=30
+IDX_INDEX_INTERVAL=60
+IDX_WATCHLIST_INTERVAL=60
 
 # Market hours (WIB)
 IDX_MARKET_OPEN=09:00
 IDX_MARKET_CLOSE=16:00
 
-# Chrome profile yang sudah lolos Cloudflare (wajib untuk scrape IDX)
+# Chrome profile that has passed the Cloudflare challenge
 IDX_CHROME_PROFILE_DIR=C:\Users\<you>\AppData\Local\idx-scraper-chrome-p3
 ```
+> **Tip** – Set `IDX_STORAGE=supabase` and add `SUPABASE_DB_URL=...` when running in production.
 
-### 3. Test One-Off Snapshot
-
-```bash
-python -m idx_scraper.cli snapshot
-```
-
-### 4. Run Continuous Polling
-
-```bash
+### 3. Run the service
+```powershell
 python -m idx_scraper.cli serve
 ```
+The scheduler starts automatically and runs only on weekdays between 09:00‑16:00 WIB.
 
-Polling hanya aktif Senin–Jumat 09:00–16:00 WIB (jam bursa).
+### 4. Optional one‑off commands
+```powershell
+python -m idx_scraper.cli snapshot          # fetch a single snapshot
+python -m idx_scraper.cli eod 20261005      # fetch EOD for a specific date
+python -m idx_scraper.cli seed --days 365   # seed historic OHLCV from Yahoo Finance
+```
 
-## Data Sources
+---
 
-| Kebutuhan | Solusi | Catatan |
-|---|---|---|
-| **Near-real-time index** | `GetIndexList` (internal IDX) | ~5–15 menit delay, polling tiap 15s |
-| **Near-real-time per-emiten** | `GetTradingInfoDaily` | ~5–15 menit delay, polling tiap 30s |
-| **EOD semua emiten** | `GetStockSummary?date=YYYYMMDD` | End-of-day, sekali hari |
-| **Close resmi IHSG** | `GetIndexList` → `Current` | Angka resmi IDX (bukan Yahoo), ditulis 16:00 WIB |
-| **Historis & backup** | Yahoo Finance (`.JK`) | ~15 menit delay, free tier |
+## Framework Analisis Saham Multi‑Agen
+| Team | Role | Output |
+|------|------|--------|
+| **Analis Fundamental** | Analisis laporan keuangan, penilaian nilai intrinsik | `fundamental_score` (table `research.fundamental`) |
+| **Analis Sentimen** | Aggregasi berita & media sosial | `sentiment_score` (table `research.sentiment`) |
+| **Analis Berita** | Makro‑ekonomi & peristiwa global | `news_log` (table `research.news`) |
+| **Analis Teknikal** | Indikator MACD, RSI, pola candlestick | `technical_signal` (table `research.tech_signal`) |
+| **Researcher Team** | Evaluasi insight, menyeimbangkan bullish/bearish | – |
+| **Trader Agent** | Membuat order‑book virtual berdasarkan laporan | – |
+| **Risk Management** | Memantau volatilitas, likuiditas, eksposur | `research.risk_log` |
+| **Engineering** | Data‑engine (pipeline), execution‑engine, monitoring | – |
 
-**Sumber angka IHSG:** close IHSG di dashboard diambil **langsung dari IDX**
-(`GetIndexList`, field `Current`) lewat `scripts/backfill_index_eod_idx.py`, bukan lagi
-dari Yahoo `^JKSE` (yang selisih beberapa poin dari close resmi). Job harian
-`_job_index_eod_close` sudah memakai jalur IDX-live ini.
-
-
-**Catatan penting:** IDX **tidak punya API real-time publik gratis**. Semua data IDX gratis itu **delayed** (~5–15 menit). Untuk trading frekuensi tinggi (HFT), kamu butuh lisensi berbayar. Untuk riset algoritmik/positional, ini cukup.
+---
 
 ## Cloudflare Bypass (Chrome Profile)
+IDX endpoints are protected by Cloudflare. The scraper uses Playwright‑Chrome in *persistent* mode and re‑uses cookies from a profile that has already solved the challenge.
 
-Endpoint IDX diproteksi Cloudflare → profil baru/anonim kena **403**. `cf_transport.py`
-menjalankan Chrome persisten (Playwright, `channel="chrome"`, non-headless) di event
-loop background, lalu menembak JSON IDX lewat `page.evaluate(fetch(...))` supaya ikut
-memakai cookie Cloudflare yang sudah lolos challenge.
-
-**Cara yang berhasil — pakai profil Chrome yang sudah login:**
-
-1. Clone salah satu profil Chrome asli yang sudah lolos Cloudflare (mis. "Profile 3")
-   ke folder khusus, lewati folder `Cache`, dan **ikut salin `Local State`** (dibutuhkan
-   untuk dekripsi cookie):
-
-   ```powershell
-   $src = "$env:LOCALAPPDATA\Google\Chrome\User Data"
-   $dst = "$env:LOCALAPPDATA\idx-scraper-chrome-p3"
-   robocopy "$src\Profile 3" "$dst\Profile 3" /E /XD Cache "Code Cache" GPUCache
-   Copy-Item "$src\Local State" "$dst\Local State"
-   ```
-
-2. Arahkan `.env` ke folder itu:
-
-   ```env
-   IDX_CHROME_PROFILE_DIR=C:\Users\<you>\AppData\Local\idx-scraper-chrome-p3
-   ```
-
-   `cli.py` memanggil `dotenv.load_dotenv()` saat import, jadi scheduler (`idx serve`)
-   dan semua job scrape otomatis memakai profil ini — tak perlu set env manual.
-
-**Gotcha:**
-- Chrome **menolak dua instance** pada `user-data-dir` yang sama. Kalau scheduler sedang
-  memegang profil ini, scrape manual harus di-override ke folder profil lain
-  (mis. default `%LOCALAPPDATA%\idx-scraper-chrome-profile`).
-- Run pertama kadang gagal `Execution context destroyed` (halaman sedang menjalani
-  challenge) → cukup **ulangi sekali**, biasanya langsung berhasil.
-
-## Storage
-
-
-### SQLite (default)
-
-Data tersimpan di `./data/idx.db`. Tanpa setup, cocok untuk:
-- Riset lokal
-- Dev/testing
-- Offline-first
-
-### Supabase (production)
-
-1. Buat project di [supabase.com](https://supabase.com) (gratis)
-2. Jalankan [sql/schema.sql](sql/schema.sql) di SQL Editor
-3. Isi `.env`:
-
-```env
-IDX_STORAGE=supabase
-SUPABASE_DB_URL=postgresql://postgres.REF:PASSWORD@REGION.pooler.supabase.com:6543/postgres
+1. Export a working Chrome profile (e.g. *Profile 3*) to a dedicated folder:
+```powershell
+$src = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+$dst = "$env:LOCALAPPDATA\idx-scraper-chrome-p3"
+robocopy "$src\Profile 3" "$dst\Profile 3" /E /XD Cache "Code Cache" GPUCache
+Copy-Item "$src\Local State" "$dst\Local State"
 ```
+2. Point `IDX_CHROME_PROFILE_DIR` in `.env` to that folder.
+3. The scheduler automatically launches Chrome with this profile; no further action is needed.
 
-**Penting:** Pakai **Transaction pooler** (port 6543), bukan direct (5432) — koneksi lebih stabil untuk polling.
+> **Gotchas**
+> * Chrome refuses two simultaneous instances on the same `user-data-dir`. Use a different temporary profile for manual runs.
+> * The first run may fail with `Execution context destroyed`; simply retry once.
 
-### Skema tabel inti
+---
 
-| Tabel | Isi |
-|---|---|
-| `raw_eod` | Source of truth EOD mentah dari IDX `GetStockSummary` |
-| `prices_pit` / `research.prices_asof_adj` | Harga point-in-time (bitemporal, bebas look-ahead) + adjusted |
-| `index_quotes` / `index_summary_daily` | Kuotasi & close resmi IHSG (IDX-live) |
-| `research.broker_daily` | Broker summary EOD (per firma, seluruh pasar) |
-| `research.signal_log` | Jejak sinyal BUY/SELL + forward return |
-| `research.factor_ic_history` | Bobot faktor hasil analisis IC |
-| `research.*` | Layer PIT: faktor, regime, event study, sentimen, order book |
-| `research.market_segment_daily` | Agregat harian pasar **reguler vs non-reguler** (volume, value, freq) |
+## Storage & Schemas
+* **SQLite** – default, file `./data/idx.db` (local development).
+* **Supabase** – production; set `IDX_STORAGE=supabase` and `SUPABASE_DB_URL` in `.env`. Execute `sql/schema.sql` on the remote database.
+
+### Core Tables (excerpt)
+| Table | Description |
+|-------|-------------|
+| `raw_eod` | Raw end‑of‑day data from IDX (`GetStockSummary`). |
+| `prices_pit` / `research.prices_asof_adj` | Point‑in‑time price series (bitemporal, no look‑ahead). |
+| `index_quotes` / `index_summary_daily` | Live IHSG composite quote (official close). |
+| `research.market_segment_daily` | Daily aggregation of **regular** vs **non‑regular** market volume/value. |
+| `research.signal_log` | BUY/SELL signal history. |
+| `research.factor_ic_history` | Information‑Coefficient for factor models. |
+
+---
+
+## API Reference (FastAPI – `/api/v1`)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/index` | GET | Current IHSG composite quote. |
+| `/watchlist` | GET | Live quotes for symbols in `IDX_WATCHLIST`. |
+| `/eod/{date}` | GET | End‑of‑day snapshot for all emiten (raw). |
+| `/market-segment/{date}` | GET | Regular vs non‑regular market aggregation. |
+| `/health` | GET | Simple health check (0 = OK). |
+| `/signal-log` | GET | Latest BUY/SELL signals. |
+| `/ownership/{code}` | GET | Top‑10 shareholders for a given emiten. |
+
+All endpoints accept an optional API key (`X‑API‑KEY`) read from `.env` (`IDX_API_KEY`).
+
+---
+
+## Scheduler & Jobs
+The scheduler (APScheduler, timezone WIB) starts with `serve`.
+
+| Job ID | Schedule | Action |
+|--------|----------|--------|
+| `idx` | every 60 s (market hours) | Fetch index quote & rotate browser‑probe. |
+| `wl` | every 60 s (market hours) | Fetch watch‑list quotes. |
+| `_job_index_eod_close` | daily 16:05 WIB | Back‑fill official IHSG close (`scripts/backfill_index_eod_idx.py`). |
+| `_job_backfill_market_segment` | daily 16:10 WIB | Compute `research.market_segment_daily`. |
+| `health_check` | every 300 s | Verify today’s `raw_eod` & `index_quotes`; exit 1 if missing. |
+| `prune_logs` | daily 02:00 WIB | Delete log files older than 7 days. |
+
+---
 
 ## CLI Commands
-
-```bash
-python -m idx_scraper.cli snapshot          # one-off fetch
-python -m idx_scraper.cli serve             # continuous polling loop
-python -m idx_scraper.cli eod [YYYYMMDD]    # fetch EOD summary (default: today)
-python -m idx_scraper.cli seed [--days N]   # seed historical OHLCV from Yahoo Finance
-python -m idx_scraper.cli signals           # show BUY/SELL signals from stored data
-python -m idx_scraper.cli signal-log        # backfill + tampilkan track record sinyal (jejak sinyal)
-python -m idx_scraper.cli health            # cek data EOD hari bursa terakhir sudah masuk (exit 1 kalau telat)
-python -m idx_scraper.cli ic [--days N]     # analisis IC + simpan bobot faktor ke research.factor_ic_history
-python -m idx_scraper.cli alerts [--test]   # kirim alert Telegram utk sinyal berubah
-python -m idx_scraper.cli ownership [--codes AA,BB] [--all] [--date YYYY-MM-DD]  # snapshot pemegang saham (aksi pemilik)
-python -m idx_scraper.cli trade-summary [--date YYYY-MM-DD] [--rebuild]  # agregat pasar reguler vs non-reguler
-python -m idx_scraper.cli watchlist         # fetch current prices for watchlist
-python -m idx_scraper.cli source [YAHOO|IDX]  # lihat / set sumber data live
+```powershell
+python -m idx_scraper.cli snapshot                # one‑off fetch
+python -m idx_scraper.cli serve                   # start scheduler
+python -m idx_scraper.cli eod [YYYYMMDD]           # fetch specific EOD
+python -m idx_scraper.cli seed [--days N]        # seed historic OHLCV from Yahoo
+python -m idx_scraper.cli signals                # list BUY/SELL signals
+python -m idx_scraper.cli signal-log            # view signal history
+python -m idx_scraper.cli health                # health‑check (exit 0 = OK)
+python -m idx_scraper.cli ic [--days N]         # compute IC and store in factor table
+python -m idx_scraper.cli alerts [--test]        # send Telegram alerts for signal changes
+python -m idx_scraper.cli ownership [--codes AA,BB] [--all] [--date YYYY-MM-DD]
+python -m idx_scraper.cli trade-summary [--date YYYY-MM-DD] [--rebuild]
+python -m idx_scraper.cli watchlist               # fetch current watch‑list prices
+python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 ```
 
-### Backfill (scripts)
+### Back‑fill Scripts (run manually or via scheduler)
+* `scripts/backfill_broker_eod.py`
+* `scripts/backfill_index_eod_idx.py`
+* `scripts/backfill_corp_actions.py`
+* `scripts/backfill_raw_eod.py`
+* `scripts/backfill_eod_yahoo.py`
+* `scripts/intraday_capture.py`
+* `scripts/refresh_sector_map.py`
+* `scripts/backfill_market_segment.py`
 
-```bash
-python -m scripts.backfill_broker_eod --date YYYYMMDD   # broker summary EOD → research.broker_daily
-python -m scripts.backfill_index_eod_idx                # close resmi IHSG dari IDX-live → index_quotes + index_summary_daily
-python -m scripts.backfill_corp_actions                 # aksi korporasi (split, bonus, rights, dividen)
-python -m scripts.backfill_raw_eod                      # isi ulang raw_eod dari sumber
-python -m scripts.backfill_eod_yahoo                    # historis OHLCV dari Yahoo (.JK)
-python -m scripts.intraday_capture                      # snapshot intraday order book
-python -m scripts.refresh_sector_map                    # perbarui pemetaan sektor emiten
-```
+---
 
-> `backfill_index_eod_idx` menggantikan `backfill_index_eod` (Yahoo) sebagai sumber
-> close IHSG. Butuh `IDX_CHROME_PROFILE_DIR` (lihat bagian Cloudflare Bypass).
+## Health‑Check & Monitoring
+* `cli health` exits 0 when today’s data is present; otherwise 1.
+* Telegram notifications (via `src/idx_scraper/notify.py`) are sent for:
+  * Scheduler start / stop
+  * Job failures
+  * Data‑lag warnings
+* Optional Prometheus metrics – enable with `IDX_PROMETHEUS=true` in `.env` (exposes `/metrics`).
 
-```bash
-python -m scripts.backfill_market_segment --date YYYYMMDD     # agregat pasar reguler/non-reguler satu tanggal
-python -m scripts.backfill_market_segment --from 20260901 --to 20260930   # rentang tanggal
-python -m scripts.backfill_market_segment --rebuild          # hitung ulang dari research.raw_eod (tanpa IDX)
-```
+---
 
-## Scheduler (idx serve)
+## Glossary
+* **EOD** – End‑of‑Day snapshot.
+* **PIT** – Point‑In‑Time, bitemporal view without look‑ahead bias.
+* **Regular market** – Trades during official IDX session (09:00‑16:00 WIB).
+* **Non‑regular market** – After‑hours / pre‑market trades (captured via Yahoo fallback).
+* **Chrome Transport** – Playwright‑Chrome process that re‑uses Cloudflare cookies.
+* **Back‑fill** – Re‑compute historic aggregates after a schema or source change.
 
-Semua jadwal di bawah berjalan otomatis saat `python -m idx_scraper.cli serve`.
-Scheduler pakai **APScheduler** dengan timezone WIB. Polling realtime hanya aktif
-saat jam bursa (Sen–Jum 09:00–16:00 WIB).
+---
 
-### 1. Realtime Polling (saat jam bursa)
-
-| Job ID | Interval | Yang Dilakukan |
-|--------|----------|----------------|
-| `idx` | 60 detik | Fetch **index quotes** (IHSG/COMPOSITE) dari IDX `GetIndexList` atau Yahoo. Juga jalanin **auto-switch probe** tiap 900s untuk cek apakah IDX bisa diakses via BrowserTransport. |
-| `wl` | 60 detik | Fetch **watchlist quotes** (BBCA, BBRI, BMRI, dll) dari IDX atau Yahoo. |
-
-### 2. EOD Pipeline (cron schedule)
-
-Refresh data harian untuk 8 menu dashboard (Narasi, Screener, Valuasi, Hold Check,
-Jejak Sinyal, Foreign Flow, Sentimen, Sektor). Semua job ini **bypass** `_is_market_hours()`
-dan clear cache API.
-
-| Job ID | Jadwal WIB | EOD Fetch? | Keterangan |
-|--------|-----------|-----------|------------|
-| `refresh_preopen` | Sen–Jum 08:45 | Tidak | Pra-pembukaan — recompute + clear cache (belum ada EOD baru) |
-| `refresh_s1` | Sen–Kam 12:00 | Ya | Close Sesi I — EOD fetch + recompute. **Catatan:** `GetStockSummary` masih kosong di jam ini karena sesi belum final. |
-| `refresh_s1_fri` | Jum 11:30 | Ya | Close Sesi I Jum (jam bursa lebih awal) |
-| `refresh_s2` | Sen–Jum 16:05 | Ya | Close Sesi II — EOD fetch + recompute. **Ini job utama yang isi data EOD hari ini.** Offset 5 menit supaya data IDX final. |
-| `refresh_s2_late` | Sen–Jum 16:20 | Ya | Susulan +15 menit — jaring data yang telat final |
-| `refresh_weekend_am` | Sab–Min 08:45 | Tidak | Recompute + clear cache (pasar tutup) |
-| `refresh_weekend_pm` | Sab–Min 16:00 | Tidak | Recompute + clear cache (pasar tutup) |
-| `health_eod` | Sen–Jum 17:00 | — | Cek data EOD hari ini sudah masuk; kalau telat, tulis peringatan ke log + kirim Telegram. Melengkapi startup catchup (yang hanya jalan saat boot). |
-
-**Isi EOD fetch** (`_job_eod_full`): ambil `GetStockSummary` dari IDX → simpan ke
-`stock_summary_daily` + `raw_eod` → refresh `prices_pit` → agregat pasar
-reguler vs non-reguler (`research.market_segment_daily`).
-
-**Isi recompute** (`_job_pipeline_refresh`): regime harian, jejak sinyal, broker
-summary, index EOD close → clear cache API (`/api/cache/clear`).
-
-### 3. Background Threads & Lain-lain
-
-| Job/Thread | Interval | Keterangan |
-|------------|----------|------------|
-| **LiveCapture thread** | Rolling sweep, 1000ms/req per kode | Poll `GetTradingInfoDaily?code=X` untuk 60 likuid + 20 movers → tulis ke `intraday_ticks`. Hanya jalan saat jam bursa + IDX source aktif. Backoff otomatis kalau kena 429 (rate limit IDX). |
-| `alerts` | 300 detik (5 menit) | Cek sinyal BUY/SELL yang berubah + evaluasi aturan pantauan → kirim alert ke Telegram. Hanya saat jam bursa. |
-| `daily_ic` | Sen–Jum 06:30 WIB | IC analysis (factor weight) → simpan ke `factor_ic_history`. Bobot composite hold-check otomatis ikut hasil terbaru. |
-| `ownership_weekly` | Senin 06:45 WIB | Snapshot pemegang saham watchlist → `research.ownership`. Di luar jam bursa (tidak berebut profil Cloudflare dengan EOD fetch). Karena IDX hanya memberi komposisi terkini, snapshot mingguan inilah yang membuat **aksi pemilik** (siapa menambah/mengurangi) bisa dihitung dari selisih dua tanggal. |
-| **Startup catchup** | Sekali saat boot | Kalau EOD hari ini belum ada + pasar sudah tutup + hari kerja → auto-jalankan full pipeline refresh. Mencegah data stale kalau scheduler di-restart kelewatan jadwal. |
-
-### 4. Auto-start saat laptop nyala (Windows)
-
-Dua service background **otomatis jalan tiap login** — tidak perlu buka terminal manual:
-
-| Service | Isi | Log |
-|---------|-----|-----|
-| `idx serve` | Seluruh scheduler di atas (EOD 16:05, IC harian 06:30, polling, live capture) | `_serve.log` |
-| API server | `uvicorn idx_scraper.api.app:app --port 8000` (dashboard) | `_api.log` |
-
-**Mekanismenya:** folder Startup user (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`)
-berisi `idx-serve-silent.vbs` & `idx-api-silent.vbs` — launcher senyap (jendela tak muncul) yang
-memanggil `scripts/start-serve.bat` & `scripts/start-api.bat`. Dua file .bat itu yang membawa
-`PYTHONUNBUFFERED=1` (biar log langsung ter-flush) dan append ke log di atas (keduanya gitignored).
-
-**Cek status:**
-
-```bash
-tail -20 _serve.log                                   # aktivitas scheduler
-curl -s http://localhost:8000/api/broker-flow -o /dev/null -w "%{http_code}\n"   # API hidup? -> 200
-```
-
-Catatan: di Task Manager proses python bisa tampak **dobel** per service — itu pasangan
-parent-child normal dari venv launcher Windows, bukan duplikat. Jangan jalankan `idx serve`
-manual kalau auto-start sudah jalan (biar tidak dobel-polling; kalau kejadian dobel, bunuh
-semua proses `cli serve` lalu jalankan ulang satu instance).
-
-**Matikan auto-start:** hapus `idx-serve-silent.vbs` / `idx-api-silent.vbs` dari folder Startup.
-**Matikan sementara:** `taskkill /F /IM python.exe` (hati-hati, bunuh semua python) atau kill
-proses `cli serve` / `api.app` spesifik lewat Task Manager.
-
-### Alur Data ke Dashboard
-
-```
-IDX GetIndexList ──────→ index_quotes ──────→ IHSG Composite (realtime, tiap 60s)
-IDX GetStockSummary ───→ raw_eod → prices_pit → latest_pit ──→ Top Gainers/Losers, Leaders (EOD)
-IDX GetTradingInfoDaily → intraday_ticks ────→ Top Gainers/Losers, Leaders (Live, saat jam bursa)
-```
-
-Saat jam bursa: dashboard pakai **intraday_ticks** (live) untuk gainers/losers & leaders.
-Kalau ga ada data intraday, fallback ke **latest_pit** (EOD).
-
-### Catatan: `GetStockSummary` EOD-only
-
-`GetStockSummary?date=YYYYMMDD` hanya return data final **setelah pasar tutup** (16:00+).
-Saat sesi berlangsung, endpoint ini return kosong/0. Artinya:
-
-- `refresh_s1` (12:00) **tidak bisa** mengisi data EOD — sesi belum final
-- `refresh_s2` (16:05) dan `refresh_s2_late` (16:20) adalah **satu-satunya** job yang
-  benar-bener mengisi data EOD hari ini
-- Kalau scheduler di-restart setelah 16:00 dan data hari ini belum ada, **startup catchup**
-  otomatis menjalankan full pipeline
-
-
-## Track Record Sinyal (jejak sinyal)
-
-Sinyal BUY/SELL yang dihasilkan dashboard tidak pernah "diukur". Perintah
-`idx signal-log` mengisi `research.signal_log` dari layer PIT (rule yang sama
-dengan dashboard, entry di close T+1) lalu melaporkan kinerjanya:
-
-- **Hit rate & mean/median forward return** per horizon (5/10/21 hari bursa)
-- **Abnormal vs pasar** — selisih terhadap pasar equal-weight pada window yang sama
-- **MFE/MAE** — puncak kenaikan & penurunan terburuk selama horizon
-- **Breakdown per regime IHSG** saat sinyal terbentuk
-
-Disiplin yang dipegang: sinyal hanya dari data `<= T`; SELL palsu ex-dividend
-tidak dicatat; sinyal di hari emiten tidak diperdagangkan dibuang (harga
-carry-over, tidak bisa dieksekusi); job harian memakai window 1 bulan (cukup
-menutup koreksi telat), backfill manual 18 bulan.
-
-## Alert Telegram (opsional)
-
-Dapat notifikasi BUY/SELL otomatis saat sinyal **berubah** (anti-spam, ada dedup state):
-
-1. Bikin bot via [@BotFather](https://t.me/BotFather) → salin token
-2. Kirim `/start` ke bot lo, lalu ambil chat_id via `https://api.telegram.org/bot<TOKEN>/getUpdates`
-3. Isi `.env`:
-
-```env
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
-TELEGRAM_CHAT_ID=987654321
-IDX_ALERT_INTERVAL=300   # scan tiap 5 menit saat `idx serve`
-```
-
-```bash
-python -m idx_scraper.cli alerts --test   # cek koneksi bot
-python -m idx_scraper.cli alerts          # kirim alert yang pending (sekali)
-python -m idx_scraper.cli serve           # alert otomatis jalan selama jam bursa
-```
-
-Sinyal terakhir disimpan di `.signal_state.json` — alert hanya dikirim saat sinyal flip
-(mis. HOLD→BUY, BUY→SELL), jadi tidak spam berulang.
-
-Selain sinyal & aturan pantauan, worker yang sama juga mengirim **alert jejak
-smart money**: saat verdict salah satu emiten di watchlist berubah (pemain
-besar mulai masuk / mulai keluar / balik arah), sekali per transisi — pesan
-plain-language ("BMRI — berbalik: asing mulai ditimbun, net buy Rp 840 M").
-Baseline di-seed di run pertama tanpa kirim, jadi tidak ada banjir di awal.
-State-nya di `data/smart_money_state.json`.
-
-Tiap pola di banner emiten ikut membawa **rekam jejaknya**: horizon tempat pola
-itu punya catatan terbaik ("cerita 5 hari" / "cerita 21 hari") dan berapa persen
-arah harga benar-benar sesuai pola. Horizon selalu disebut karena tidak seragam —
-akumulasi diam-diam nyaris tak berarti dalam 5 hari (41% sesuai arah) dan baru
-terbaca di 21 hari (55%); distribusi diam-diam justru paling jelas di 5 hari
-(64%). Verdict juga menyebut **tanggal mulai** streak ("net sell sejak 18 Sep
-2026"), bukan cuma jumlah sesinya.
-
-Verdict juga dibandingkan dengan **pasar**: berapa emiten ber-verdict yang searah
-(mis. "searah mayoritas pasar — 58% emiten juga sedang dibuang asing, jadi ini
-belum tentu ciri khas emiten ini"). Penyebutnya hanya emiten yang punya arah
-(netral & data kurang tidak ikut), dan seluruh pasar dihitung **tanpa** lantai
-likuiditas supaya angkanya jujur. Tiap pola juga membawa kata **keyakinan**
-(tinggi/sedang/lemah, dari nilai t — kekuatan bukti, bukan arah pasar), dan pola
-dengan bukti terkuat tampil lebih dulu.
-
-## Frontend Dashboard
-
-Frontend Next.js ada di repo terpisah `idx-web`:
-
-```bash
-cd ../idx-web
-npm install && npm run dev   # http://localhost:3000
-```
-
-API backend yang dikonsumsi frontend:
-
-```bash
-uvicorn idx_scraper.api.app:app --port 8000
-```
-
-Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
-
-- **Market:** `/api/market/overview`, `/api/market/trade-summary`, `/api/market/regime`, `/api/market/regime/history`,
-  `/api/market/session-movers`, `/api/market/leaders`, `/api/market/top-brokers`,
-  `/api/market/narration`
-- **Watchlist & sinyal:** `/api/watchlist` (GET/POST), `/api/signals`,
-  `/api/signals/track` (track record sinyal), `/api/hold-check`
-- **Per-emiten:** `/api/stocks/{code}/history`, `/api/stocks/{code}/technical`,
-  `/api/stocks/{code}/brokers`, `/api/stocks/{code}/events`, `/api/stocks/{code}/dividends`,
-  `/api/stocks/{code}/ownership` (kepemilikan + aksi pemilik, gratis)
-- **Analitik:** `/api/screener` (+ filter `min_broker_score`), `/api/valuation`,
-  `/api/foreign-flow`,
-  `/api/sectors`, `/api/sectors/rotation`, `/api/sentiment`,
-  `/api/factors/overview`,
-  `/api/broker-activity`, `/api/broker-flow` (komposisi asing/lokal/BUMN),
-  `/api/stocks/{code}/foreign-flow` (arus asing per emiten: tren, flip, peer sektor)
-- **Dividen & aksi korporasi:** `/api/dividends/overview`, `/api/dividends/stocks`,
-  `/api/corporate-actions`
-- **Alert Telegram:** `/api/alerts` (GET/POST/DELETE), `/api/alerts/test`
-- **Jejak smart money:** `/api/smart-money/radar`, `/api/stocks/{code}/smart-money`,
-  `/api/smart-money/track-record`, `/api/smart-money/patterns` (papan pola yang
-  menyala di sesi terakhir, dikelompokkan per pola), `/api/smart-money/verdicts`
-- **Backtest:** `GET /api/backtest/config`, `POST /api/backtest/run`
-- **Utilitas:** `/health`, `POST /api/cache/clear`
-
-Backtest memakai layer `research.prices_asof_adj` (bitemporal, bebas look-ahead)
-dan memperhitungkan biaya nyata: komisi per sisi, pajak jual, slippage, serta cap
-likuiditas terhadap nilai transaksi harian. Frekuensi rebalance (`daily`,
-`weekly`, `monthly`) bisa dipilih — di antara hari rebalance posisi dibiarkan
-mengikuti pasar, sehingga turnover dan biaya tidak meledak. Hasilnya selalu
-menyertakan perbandingan "sebelum biaya" vs "setelah biaya", benchmark buy & hold,
-serta **ledger rebalance**: daftar trade (emiten, aksi, volume, harga eksekusi,
-fee) dan posisi akhir tiap sesi — sehingga churn bisa ditelusuri, bukan cuma
-terlihat sebagai angka turnover.
-
-Untuk chart & sinyal teknikal, seed dulu data historis:
-```bash
-python -m idx_scraper.cli eod              # data EOD hari ini
-python -m idx_scraper.cli seed             # + historis 180 hari (Yahoo)
-```
-
-## Architecture
-
-```
-src/idx_scraper/
-├── client.py        # IDX API wrappers + Yahoo Finance
-├── cf_transport.py  # Cloudflare bypass: Chrome persisten (Playwright) berbagi cookie CF
-├── models.py        # Pydantic data models
-├── storage.py       # SQLite / Supabase storage layer
-├── analysis.py      # Technical indicators (MA, RSI, Bollinger, MACD) + signals
-├── research/        # layer PIT: composite, factors, ic, regime, events,
-│                    #   signal_log, sentiment, orderbook, broker_activity
-├── market_segment.py  # agregat pasar reguler vs non-reguler -> research.market_segment_daily
-├── cli.py           # CLI entry point + scheduler (APScheduler, WIB)
-├── api/             # FastAPI read-only API untuk frontend idx-web
-│                    #   (analytics, dividends, quality, simulation, alerts, ...)
-└── __init__.py
-scripts/             # utilitas DB + backfill (broker/index/corp-actions/raw EOD,
-│                    #   intraday capture, sector map, migrasi Postgres)
-sql/                 # schema Postgres + PIT functions + signal_log/intraday schema
-tests/               # test signal_log, sentiment, dll
-```
-
-**Key features:**
-- ✅ Bypass Cloudflare via Chrome profil login (Playwright, berbagi cookie yang sudah lolos challenge)
-- ✅ Close IHSG resmi dari IDX-live (bukan Yahoo)
-- ✅ Auto-scheduling (only during market hours)
-- ✅ Multi-backend storage (SQLite default, Supabase ready)
-- ✅ Structured data models (Pydantic validation)
-- ✅ Rate-limited & polite polling
-
-## Chat Commands
-
-Perintah singkat buat nyuruh AI jalanin project ini. Tinggal copy-paste di chat:
-
-| Perintah | Yang dijalankan |
-|---|---|
-| `jalanin backend` | `python -m idx_scraper.cli serve` (API + polling + scheduler) |
-| `jalanin scheduler` | `python -m idx_scraper.cli scheduler` (scheduler only, no HTTP serve) |
-| `jalanin backend + scheduler` | `python -m idx_scraper.cli serve` (sudah include scheduler) |
-| `jalanin snapshot` | `python -m idx_scraper.cli snapshot` (one-off fetch) |
-| `jalanin eod YYYYMMDD` | `python -m idx_scraper.cli eod YYYYMMDD` (EOD fetch untuk tanggal tertentu) |
-| `jalanin broker eod` | `python -m idx_scraper.cli broker-eod` (backfill broker daily) |
-
-> **Note:** `serve` sudah include scheduler. Tidak perlu jalanin keduanya secara terpisah.
-
-## License
-
-MIT. For personal research/educational use only. Not affiliated with IDX or Yahoo.
+*Last updated: 2026‑10‑06*
