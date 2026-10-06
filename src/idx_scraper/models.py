@@ -66,4 +66,10 @@ class EodStockRow(BaseModel):
     foreign_sell: float | None = None
     foreign_net: float | None = None
     individual_index: float | None = None
+    # Pasar non-reguler (tunai + negosiasi) dilaporkan terpisah oleh IDX;
+    # Volume/Value di atas adalah pasar REGULER saja. None = emiten tidak
+    # punya transaksi non-reguler (bukan nol yang dipaksakan).
+    non_regular_volume: int | None = None
+    non_regular_value: float | None = None
+    non_regular_frequency: int | None = None
     captured_at: datetime

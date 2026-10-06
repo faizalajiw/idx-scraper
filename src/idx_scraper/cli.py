@@ -291,6 +291,29 @@ def _job_broker_eod() -> None:
         print(f"[err] broker summary job: {e}", file=sys.stderr)
 
 
+def _job_health_eod() -> None:
+    """Cek data EOD hari bursa sudah masuk; kirim Telegram kalau telat.
+
+    Komplemen ``startup catchup``: catchup hanya jalan saat boot, sedangkan job
+    ini menjaga kasus scheduler hidup tapi job EOD-nya gagal diam-diam (DB
+    putus, Cloudflare). DB/Telegram error tidak boleh menghentikan scheduler.
+    """
+    try:
+        from .health import check_eod_health, format_health_message
+
+        h = check_eod_health()
+        if h.ok:
+            print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
+            return
+        print(
+            f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — "
+            f"{', '.join(h.missing)}"
+        )
+        TelegramNotifier().send_message(format_health_message(h))
+    except Exception as e:
+        print(f"[err] health EOD: {e}", file=sys.stderr)
+
+
 def _job_signal_log() -> None:
     """Rekam sinyal BUY/SELL hari bursa terakhir ke research.signal_log.
 
@@ -381,6 +404,10 @@ def _job_eod_full(client: IDXClient, storage) -> None:
             pass
     print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
     _ingest_eod_research(rows)
+    try:
+        _upsert_segment_day(rows)
+    except Exception as e:
+        print(f"[err] agregat pasar reguler/non-reguler: {e}", file=sys.stderr)
 
 def _clear_api_cache() -> None:
     """Flush the API in-process analytic cache so menus show fresh data at once.
@@ -446,11 +473,16 @@ def _ingest_eod_research(rows) -> None:
 
     import psycopg
 
+    from .market_segment import ensure_table
+
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     inserted = quarantined = 0
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        # Kolom nr_* (pasar non-reguler) harus ada sebelum insert bawah; DDL
+        # idempoten + no-op kalau sudah ada, jadi aman dijalankan tiap EOD.
+        ensure_table(cur)
         for r in rows:
             trade_date = datetime.strptime(r.date, "%Y%m%d").replace(tzinfo=WIB).date()
             prev_close = r.previous
@@ -477,11 +509,13 @@ def _ingest_eod_research(rows) -> None:
                 """insert into research.raw_eod
                    (code, trade_date, open, high, low, close, prev_close,
                     volume, value, frequency, source,
-                    name, foreign_buy, foreign_sell, foreign_net)
-                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    name, foreign_buy, foreign_sell, foreign_net,
+                    nr_volume, nr_value, nr_freq)
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (r.code, trade_date, _ohl(r.open), _ohl(r.high), _ohl(r.low),
                  r.close, prev_close, r.volume, r.value, r.frequency, r.source,
-                 r.name, r.foreign_buy, r.foreign_sell, r.foreign_net),
+                 r.name, r.foreign_buy, r.foreign_sell, r.foreign_net,
+                 r.non_regular_volume, r.non_regular_value, r.non_regular_frequency),
             )
             inserted += 1
 
@@ -508,6 +542,107 @@ def _ingest_eod_research(rows) -> None:
                  and prev.trade_date = p.trade_date - 1"""
         )
     print(f"[research] raw_eod +{inserted}, quarantine +{quarantined}, prices_pit refreshed")
+
+
+def _upsert_segment_day(rows) -> None:
+    """Agregat reguler vs non-reguler per tanggal -> research.market_segment_daily.
+
+    Dipanggil setelah ingest EOD supaya hero dashboard bisa menampilkan
+    volume/value pasar non-reguler, bukan cuma pasar reguler. Gagal di sini
+    tak boleh menjatuhkan pipeline EOD — dibungkus pemanggil.
+    """
+    import psycopg
+
+    from .market_segment import aggregate_day, upsert_day
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        return
+    by_date: dict[str, list] = {}
+    for r in rows:
+        try:
+            trade_date = (
+                datetime.strptime(r.date, "%Y%m%d").replace(tzinfo=WIB).date().isoformat()
+            )
+        except (TypeError, ValueError):
+            continue
+        by_date.setdefault(trade_date, []).append(r)
+
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        for trade_date, day_rows in by_date.items():
+            upsert_day(cur, trade_date, aggregate_day(day_rows))
+
+
+def cmd_trade_summary(args) -> None:
+    """Tampilkan (dan opsional isi ulang) agregat pasar reguler/non-reguler."""
+    import psycopg
+
+    from .market_segment import _int, _num
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        print("DATABASE_URL belum di-set — tidak bisa baca/menulis agregat.")
+        return
+
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        if getattr(args, "rebuild", False):
+            from types import SimpleNamespace
+
+            from .market_segment import aggregate_day, ensure_table, upsert_day
+
+            ensure_table(cur)
+            # Rebuild dari raw_eod yang SUDAH tersimpan: tanpa kontak IDX, dan
+            # hanya tanggal yang memang punya baris. Baris lama sebelum kolom
+            # nr_* ada akan ber agregat non-reguler NULL (jujur, bukan 0).
+            cur.execute(
+                """select trade_date, code, volume, value, frequency,
+                          nr_volume, nr_value, nr_freq
+                   from research.raw_eod
+                   order by trade_date"""
+            )
+            by_date: dict[str, list] = {}
+            for d, code, vol, val, freq, nrv, nrvl, nrf in cur.fetchall():
+                by_date.setdefault(d.isoformat(), []).append(
+                    SimpleNamespace(
+                        code=code,
+                        volume=vol,
+                        value=val,
+                        frequency=freq,
+                        non_regular_volume=nrv,
+                        non_regular_value=nrvl,
+                        non_regular_frequency=nrf,
+                    )
+                )
+            for trade_date, day_rows in by_date.items():
+                upsert_day(cur, trade_date, aggregate_day(day_rows))
+            print(f"[trade-summary] rebuild {len(by_date)} tanggal dari research.raw_eod")
+
+        cur.execute(
+            """select * from research.market_segment_daily
+               where trade_date = coalesce(%s::date, (select max(trade_date) from research.market_segment_daily))""",
+            (getattr(args, "date", None),),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        print("Belum ada agregat. Jalankan `idx eod` dulu (atau `idx trade-summary --rebuild`).")
+        return
+
+    def _lot(v: int | None) -> str:
+        return f"{(v or 0) / 100:,.0f}"
+
+    print(f"Pasar {row['trade_date']}  (emiten: {row['stock_count']})")
+    print(
+        f"  Reguler     : volume {_lot(_int(row['regular_volume']))} lot "
+        f"({_int(row['regular_volume']):,} lembar) · value Rp {_num(row['regular_value']):,.0f} · freq {_int(row['regular_freq']):,}"
+    )
+    print(
+        f"  Non-reguler : volume {_lot(_int(row['nonreg_volume']))} lot "
+        f"({_int(row['nonreg_volume']):,} lembar) · value Rp {_num(row['nonreg_value']):,.0f} · freq {_int(row['nonreg_freq']):,}"
+    )
+    print(
+        f"  Total       : volume {_lot(_int(row['total_volume']))} lot · value Rp {_num(row['total_value']):,.0f}"
+    )
 
 
 def cmd_snapshot(args) -> None:
@@ -674,6 +809,26 @@ def cmd_alerts(args) -> None:
             print("alerts: tidak ada sinyal/aturan/smart money yang berubah")
     finally:
         storage.close()
+
+
+def cmd_health(args) -> None:
+    """Cek apakah data EOD hari bursa terakhir sudah masuk.
+
+    Exit code 1 kalau sudah lewat deadline (default 17:00 WIB) dan data belum
+    ada — biar bisa dipakai cron: ``idx health || kirim-alert``.
+    """
+    from .health import check_eod_health
+
+    h = check_eod_health()
+    print(
+        f"hari bursa diharapkan: {h.expected} | saham terbaru: {h.stocks_latest} "
+        f"| close IHSG terbaru: {h.index_latest}"
+    )
+    if h.ok:
+        print("OK — data EOD terbaru lengkap")
+        return
+    print("TELAT — belum masuk: " + ", ".join(h.missing))
+    sys.exit(1)
 
 
 def run_rule_alerts() -> int:
@@ -855,6 +1010,13 @@ def cmd_serve(args) -> None:
         **_refresh("close Sesi II susulan Sen-Jum 16:20", do_eod=True),
         day_of_week="mon-fri", hour=16, minute=20, id="refresh_s2_late",
     )
+    # Health-check EOD — Sen-Jum 17:00 WIB. Kalau job EOD 16:05/16:20 gagal
+    # diam-diam, ini yang memberi tahu (log scheduler + Telegram), supaya
+    # dashboard tidak diam-diam menampilkan data kemarin.
+    scheduler.add_job(
+        _job_health_eod, "cron", day_of_week="mon-fri", hour=17, minute=0,
+        id="health_eod",
+    )
     # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
     scheduler.add_job(
         **_refresh("akhir pekan 08:45", do_eod=False),
@@ -1008,10 +1170,24 @@ def main() -> None:
     p_slog.add_argument("--months", type=int, default=18, help="panjang histori (default: 18 bulan)")
     p_slog.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
+    p_ts = sub.add_parser(
+        "trade-summary",
+        help="agregat pasar reguler vs non-reguler (volume lot + value) per tanggal",
+    )
+    p_ts.add_argument("--date", help="YYYY-MM-DD (default: tanggal terbaru)")
+    p_ts.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="hitung ulang semua tanggal dari research.raw_eod yang tersimpan",
+    )
     p_own = sub.add_parser("ownership", help="snapshot komposisi pemegang saham (aksi pemilik)")
     p_own.add_argument("--codes", help="daftar kode dipisah koma (default: watchlist .env)")
     p_own.add_argument("--all", action="store_true", help="semua emiten tercatat (berat, ±950 request)")
     p_own.add_argument("--date", help="tanggal snapshot ISO YYYY-MM-DD (default: hari ini)")
+    sub.add_parser(
+        "health",
+        help="cek data EOD hari bursa terakhir sudah masuk (exit 1 kalau telat)",
+    )
     sub.add_parser("serve", help="start continuous polling loop")
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
     p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
@@ -1028,6 +1204,8 @@ def main() -> None:
         cmd_signals(args)
     elif args.command == "alerts":
         cmd_alerts(args)
+    elif args.command == "health":
+        cmd_health(args)
     elif args.command == "ic":
         cmd_ic(args)
     elif args.command == "signal-log":
@@ -1044,6 +1222,8 @@ def main() -> None:
             storage.close()
     elif args.command == "ownership":
         cmd_ownership(args)
+    elif args.command == "trade-summary":
+        cmd_trade_summary(args)
     elif args.command == "serve":
         cmd_serve(args)
     elif args.command == "source":

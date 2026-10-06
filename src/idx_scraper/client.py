@@ -169,6 +169,9 @@ class IDXClient:
                 foreign_sell=fsell,
                 foreign_net=fnet,
                 individual_index=_pf(item.get("IndividualIndex")),
+                non_regular_volume=_pi(item.get("NonRegularVolume")),
+                non_regular_value=_pf(item.get("NonRegularValue")),
+                non_regular_frequency=_pi(item.get("NonRegularFrequency")),
                 captured_at=now,
             ))
         return results

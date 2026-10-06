@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS research.raw_eod (
 );
 CREATE INDEX IF NOT EXISTS idx_raw_eod_lookup
     ON research.raw_eod (code, trade_date, ingested_at DESC);
+-- Latest-date lookups (`select max(trade_date)`) must not fall back to a
+-- parallel seq scan: without this index the planner reads the whole table with
+-- two parallel workers — slow, and fragile, because a worker that fails to
+-- start aborts the query with "parallel worker failed to initialize" instead
+-- of degrading to a serial scan.
+CREATE INDEX IF NOT EXISTS idx_raw_eod_trade_date
+    ON research.raw_eod (trade_date DESC);
 
 -- ----------------------------------------------------------------------------
 -- 2) PRICES_PIT — bitemporal point-in-time snapshot

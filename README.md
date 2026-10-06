@@ -136,6 +136,7 @@ SUPABASE_DB_URL=postgresql://postgres.REF:PASSWORD@REGION.pooler.supabase.com:65
 | `research.signal_log` | Jejak sinyal BUY/SELL + forward return |
 | `research.factor_ic_history` | Bobot faktor hasil analisis IC |
 | `research.*` | Layer PIT: faktor, regime, event study, sentimen, order book |
+| `research.market_segment_daily` | Agregat harian pasar **reguler vs non-reguler** (volume, value, freq) |
 
 ## CLI Commands
 
@@ -146,9 +147,11 @@ python -m idx_scraper.cli eod [YYYYMMDD]    # fetch EOD summary (default: today)
 python -m idx_scraper.cli seed [--days N]   # seed historical OHLCV from Yahoo Finance
 python -m idx_scraper.cli signals           # show BUY/SELL signals from stored data
 python -m idx_scraper.cli signal-log        # backfill + tampilkan track record sinyal (jejak sinyal)
+python -m idx_scraper.cli health            # cek data EOD hari bursa terakhir sudah masuk (exit 1 kalau telat)
 python -m idx_scraper.cli ic [--days N]     # analisis IC + simpan bobot faktor ke research.factor_ic_history
 python -m idx_scraper.cli alerts [--test]   # kirim alert Telegram utk sinyal berubah
 python -m idx_scraper.cli ownership [--codes AA,BB] [--all] [--date YYYY-MM-DD]  # snapshot pemegang saham (aksi pemilik)
+python -m idx_scraper.cli trade-summary [--date YYYY-MM-DD] [--rebuild]  # agregat pasar reguler vs non-reguler
 python -m idx_scraper.cli watchlist         # fetch current prices for watchlist
 python -m idx_scraper.cli source [YAHOO|IDX]  # lihat / set sumber data live
 ```
@@ -167,6 +170,12 @@ python -m scripts.refresh_sector_map                    # perbarui pemetaan sekt
 
 > `backfill_index_eod_idx` menggantikan `backfill_index_eod` (Yahoo) sebagai sumber
 > close IHSG. Butuh `IDX_CHROME_PROFILE_DIR` (lihat bagian Cloudflare Bypass).
+
+```bash
+python -m scripts.backfill_market_segment --date YYYYMMDD     # agregat pasar reguler/non-reguler satu tanggal
+python -m scripts.backfill_market_segment --from 20260901 --to 20260930   # rentang tanggal
+python -m scripts.backfill_market_segment --rebuild          # hitung ulang dari research.raw_eod (tanpa IDX)
+```
 
 ## Scheduler (idx serve)
 
@@ -196,9 +205,11 @@ dan clear cache API.
 | `refresh_s2_late` | Sen–Jum 16:20 | Ya | Susulan +15 menit — jaring data yang telat final |
 | `refresh_weekend_am` | Sab–Min 08:45 | Tidak | Recompute + clear cache (pasar tutup) |
 | `refresh_weekend_pm` | Sab–Min 16:00 | Tidak | Recompute + clear cache (pasar tutup) |
+| `health_eod` | Sen–Jum 17:00 | — | Cek data EOD hari ini sudah masuk; kalau telat, tulis peringatan ke log + kirim Telegram. Melengkapi startup catchup (yang hanya jalan saat boot). |
 
 **Isi EOD fetch** (`_job_eod_full`): ambil `GetStockSummary` dari IDX → simpan ke
-`stock_summary_daily` + `raw_eod` → refresh `prices_pit`.
+`stock_summary_daily` + `raw_eod` → refresh `prices_pit` → agregat pasar
+reguler vs non-reguler (`research.market_segment_daily`).
 
 **Isi recompute** (`_job_pipeline_refresh`): regime harian, jejak sinyal, broker
 summary, index EOD close → clear cache API (`/api/cache/clear`).
@@ -345,7 +356,7 @@ uvicorn idx_scraper.api.app:app --port 8000
 
 Endpoint (read-only), semuanya nol kalkulasi (baca DB saja):
 
-- **Market:** `/api/market/overview`, `/api/market/regime`, `/api/market/regime/history`,
+- **Market:** `/api/market/overview`, `/api/market/trade-summary`, `/api/market/regime`, `/api/market/regime/history`,
   `/api/market/session-movers`, `/api/market/leaders`, `/api/market/top-brokers`,
   `/api/market/narration`
 - **Watchlist & sinyal:** `/api/watchlist` (GET/POST), `/api/signals`,
@@ -395,6 +406,7 @@ src/idx_scraper/
 ├── analysis.py      # Technical indicators (MA, RSI, Bollinger, MACD) + signals
 ├── research/        # layer PIT: composite, factors, ic, regime, events,
 │                    #   signal_log, sentiment, orderbook, broker_activity
+├── market_segment.py  # agregat pasar reguler vs non-reguler -> research.market_segment_daily
 ├── cli.py           # CLI entry point + scheduler (APScheduler, WIB)
 ├── api/             # FastAPI read-only API untuk frontend idx-web
 │                    #   (analytics, dividends, quality, simulation, alerts, ...)

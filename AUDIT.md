@@ -607,3 +607,75 @@ untuk pertanyaan 5 sesi). Keduanya dibiarkan, dan tidak ada perubahan di kartu.
 3. **Pola per emiten belum punya halaman sendiri** — `detect_patterns` sudah
    dipakai per emiten, tapi tak ada halaman yang mendaftar "semua emiten yang
    pernah memicu pola ini" beserta hasil sesudahnya.
+
+## 13. `max(trade_date)` paralel di `raw_eod` — error intermiten yang bukan soal slot (2026-10-06)
+
+### 13.1 Masalah
+
+`uvicorn.err.log` menyimpan **satu** kegagalan, dari 2026-10-04 23:47:27, yang
+tidak pernah terulang — dan justru kedatangannya sekali itu yang membuat gejalanya
+gampang salah dibaca:
+
+    psycopg.errors.ObjectNotInPrerequisiteState: parallel worker failed to initialize
+
+Statement yang gagal ikut tercatat di log server: `select max(trade_date) as d
+from research.raw_eod` — baris pertama `_leaders_eod` (`api/services.py:305`),
+yang dipanggil dashboard **tiga kali serentak** (`metric=volume`, `value`,
+`frequency`). Tanpa dilacak, gejala ini paling gampang ditutup dengan menaikkan
+`max_worker_processes` — padahal itu **tidak akan memperbaikinya** (13.2).
+
+### 13.2 Yang dikerjakan
+
+- **Melacak jalur errornya di sumber Postgres.** Di `access/transam/parallel.c`
+  (REL_18_STABLE) pesan ini hanya muncul di `WaitForParallelWorkersToAttach`
+  (baris 759) dan `WaitForParallelWorkersToFinish` (baris 878), dengan komentar
+  sumbernya: *"the postmaster was unable to fork the worker or it exited without
+  initializing properly"*. Jadi worker **berhasil didaftarkan lalu mati sebelum
+  attach** — bukan query yang ditolak sejak awal.
+- **Membuang teori kehabisan slot.** `parallel.c:617` menyatakan gagal registrasi
+  memang sengaja **tidak** dijadikan error — *"there is no need to throw an error
+  here if registration fails"*, ditambah penanda `any_registrations_failed` —
+  sehingga query lanjut dengan worker lebih sedikit **secara diam**, bukan gagal.
+  Karena itu menaikkan `max_worker_processes` bukan perbaikan untuk error ini.
+- **Membuang teori bug Windows `inherited socket`** (BUG #18168 gejalanya identik:
+  SQLSTATE 55000 di Windows). Event Log provider `PostgreSQL` di mesin ini tidak
+  punya event error handle/socket pada jam kejadian — hanya info startup.
+- **Menghapus pemicunya.** `research.raw_eod` cuma punya index `(id)` dan
+  `(code, trade_date, ingested_at DESC)`, jadi `max(trade_date)` tidak bisa
+  dilayani index dan jatuh ke **parallel seq scan** 87 MB / 236.911 baris dengan
+  **2 worker**. Dashboard memanggil `_leaders_eod` 3× serentak (3 × 2 worker)
+  sementara pool efektif cuma **7** (`max_worker_processes = 8` minus satu slot
+  `logical replication launcher` yang dipegang sejak startup) — tabrakan spawn
+  proses inilah yang membuat kejadiannya intermiten.
+- `CREATE INDEX CONCURRENTLY idx_raw_eod_trade_date ON research.raw_eod
+  (trade_date DESC)` (0,53 s, 1,7 MB), dan definisinya dicatat di
+  `sql/research_schema.sql`. `raw_eod` memang murni di-bootstrap dari file itu —
+  tidak ada DDL runtime yang perlu di-mirror, beda dari `ownership`/`broker`.
+
+### 13.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| Sebelum — plan `select max(trade_date) from research.raw_eod` | ⚠️ Gather + **Parallel Seq Scan**, `Workers Launched: 2`, 114 ms |
+| Sesudah — plan query yang sama | ✅ **Index Only Scan** (backward + Limit), **0 worker**, 0,28 ms (hangat 0,03 ms) |
+| Query kedua `_leaders_eod` (`where trade_date = (select max(...))`) | ✅ ikut pindah ke **Bitmap Index Scan** `idx_raw_eod_trade_date`; `_leaders_eod` jadi 2,6 ms |
+| Pembanding di repo sendiri: `max(date)` di `stock_summary_daily` (sudah punya index `date DESC`) | ✅ 0 worker, 0,35 ms — polanya sudah benar di sana, `raw_eod` yang kelewat |
+| `GET /api/market/leaders?metric={volume,value,frequency}` | ✅ ketiganya HTTP 200, ~0,22 s |
+| DDL di `sql/research_schema.sql` dijalankan ulang | ✅ no-op (`IF NOT EXISTS`) — `USING btree (trade_date DESC)` |
+| Log Postgres | ✅ tetap **1** kejadian (historis 2026-10-04), tidak ada tambahan |
+| `ruff check src tests scripts` | ✅ bersih |
+| `pytest` | ✅ 503 lulus (9,03 s) |
+
+### 13.4 Sisa peta jalan
+
+1. **`prices_pit` masih pola yang sama** — `max(trade_date)` di tabel dasarnya
+   juga parallel seq scan (2 worker, 193 ms); index-nya `(code, trade_date,
+   knowledge_date DESC)` sehingga tidak bisa melayani `max(trade_date)` sendiri.
+   Belum disentuh.
+2. **`max(trade_date)` di `research.latest_pit`** (view, dipakai ~8 tempat) makan
+   351 ms — serentak tanpa worker (index-only scan 281.167 baris), jadi bukan
+   sumber error ini, tapi tetap scan penuh hanya untuk mendapat satu tanggal.
+3. **Restart Postgres yang sering + 4× mati tidak wajar** (`database system was
+   interrupted` → crash recovery otomatis) pada 26/09, 28/09, 29/09, dan 01/10;
+   penyebabnya belum diketahui. Ini risiko yang jauh lebih besar daripada error di
+   atas — setiap crash begitu membunuh semua worker paralel sekaligus.

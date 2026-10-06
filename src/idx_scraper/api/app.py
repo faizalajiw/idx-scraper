@@ -41,6 +41,7 @@ from .schemas import (
     MarketNarration,
     MarketOverview,
     MarketRegime,
+    MarketTradeSummary,
     ScreenerRow,
     SectorAnalysis,
     SectorRotation,
@@ -175,6 +176,19 @@ def health() -> dict[str, str]:
 @app.get("/api/market/overview", response_model=MarketOverview)
 def market_overview() -> dict:
     return services.get_market_overview()
+
+
+@app.get("/api/market/trade-summary", response_model=MarketTradeSummary)
+def market_trade_summary(
+    date: str | None = Query(default=None, description="YYYY-MM-DD (default: sesi terbaru)"),
+) -> dict:
+    """Pasar reguler vs non-reguler: volume (lembar + lot) & value satu sesi.
+
+    Non-reguler = pasar tunai + negosiasi. Angka berasal dari GetStockSummary
+    IDX yang memisahkan keduanya per emiten; worker mengagregasinya ke
+    research.market_segment_daily. Endpoint ini hanya membaca.
+    """
+    return services.get_market_trade_summary(date)
 
 
 @app.get("/api/market/regime", response_model=MarketRegime)

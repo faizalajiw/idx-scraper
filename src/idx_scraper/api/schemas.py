@@ -37,6 +37,29 @@ class MarketOverview(BaseModel):
     top_losers: list[Mover]
 
 
+class MarketTradeSegment(BaseModel):
+    """Satu segmen pasar: volume dalam lembar & lot (1 lot = 100 lembar)."""
+
+    volume_shares: float | None = None
+    volume_lot: float | None = None
+    value: float | None = None
+    frequency: float | None = None
+
+
+class MarketTradeSummary(BaseModel):
+    """Pasar reguler vs non-reguler (tunai + negosiasi) untuk satu sesi."""
+
+    date: str | None = None
+    captured_at: str | None = None
+    stock_count: int = 0
+    regular: MarketTradeSegment
+    non_regular: MarketTradeSegment
+    total: MarketTradeSegment
+    # Porsi non-reguler terhadap total pasar (0..1) — biasanya kecil.
+    non_regular_share_volume: float | None = None
+    non_regular_share_value: float | None = None
+
+
 class SessionMovers(BaseModel):
     date: str | None = None
     captured_at: str | None = None

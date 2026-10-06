@@ -52,6 +52,75 @@ def _is_market_hours() -> bool:
 # --------------------------------------------------------------- overview
 
 
+def _segment(shares: Any, value: Any, freq: Any) -> dict[str, Any]:
+    """Baris agregat -> segment dict dengan volume dalam lembar DAN lot."""
+    sh = _f(shares)
+    return {
+        "volume_shares": sh,
+        "volume_lot": (sh / 100.0) if sh is not None else None,
+        "value": _f(value),
+        "frequency": _f(freq),
+    }
+
+
+def _share(part: Any, whole: Any) -> float | None:
+    p, w = _f(part), _f(whole)
+    if p is None or not w:
+        return None
+    return p / w
+
+
+def get_market_trade_summary(date_str: str | None = None) -> dict[str, Any]:
+    """Pasar reguler vs non-reguler (volume lembar/lot + value) satu sesi.
+
+    Sumber: research.market_segment_daily, diisi dari GetStockSummary IDX
+    (reguler + non-reguler tiap emiten). Tidak ada kalkulasi baru di sini —
+    hanya baca baris yang sudah dihitung worker.
+    """
+    empty = {
+        "date": None,
+        "captured_at": None,
+        "stock_count": 0,
+        "regular": _segment(None, None, None),
+        "non_regular": _segment(None, None, None),
+        "total": _segment(None, None, None),
+        "non_regular_share_volume": None,
+        "non_regular_share_value": None,
+    }
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """select trade_date, captured_at, stock_count,
+                          regular_volume, regular_value, regular_freq,
+                          nonreg_volume, nonreg_value, nonreg_freq,
+                          total_volume, total_value
+                   from research.market_segment_daily
+                   where trade_date = coalesce(%s::date,
+                         (select max(trade_date) from research.market_segment_daily))""",
+                (date_str,),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        # Tabel belum ada (worker belum pernah menulis) atau tanggal tak valid
+        # -> sajikan kosong, bukan 500. Dicatat supaya tak jadi kegagalan senyap.
+        print(f"[warn] market trade summary dilewati: {e}", file=sys.stderr)
+        return empty
+
+    if not row or row["trade_date"] is None:
+        return empty
+
+    return {
+        "date": row["trade_date"].isoformat(),
+        "captured_at": row["captured_at"].isoformat() if row["captured_at"] else None,
+        "stock_count": int(row["stock_count"] or 0),
+        "regular": _segment(row["regular_volume"], row["regular_value"], row["regular_freq"]),
+        "non_regular": _segment(row["nonreg_volume"], row["nonreg_value"], row["nonreg_freq"]),
+        "total": _segment(row["total_volume"], row["total_value"], None),
+        "non_regular_share_volume": _share(row["nonreg_volume"], row["total_volume"]),
+        "non_regular_share_value": _share(row["nonreg_value"], row["total_value"]),
+    }
+
+
 # Midnight today in WIB, as timestamptz — bounds "ticks from this session".
 # (The trailing ) closes the leading paren: ts column is timestamptz, so the
 # naive-local result of date_trunc must be re-tagged to WIB.)
