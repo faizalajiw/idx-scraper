@@ -27,7 +27,13 @@ api = [
 ]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.5",
+    # Ruff DIPIN persis (bukan >=). Set aturan bawaannya berubah antar rilis —
+    # PYI041 & DTZ007 yang memerahkan CI 2026-10-09 sudah aktif di default
+    # 0.16.8 (terbukti dengan `ruff check --isolated`), jadi `>=0.5` membuat
+    # gerbang lint bergantung pada rilis terbaru, bukan pada aturan yang
+    # disetujui. Versi naik lewat commit yang sengaja (bump + jalankan
+    # `ruff check src tests scripts`), bukan lewat resolusi otomatis.
+    "ruff==0.16.8",
     "numpy>=1.26",
 ]
 

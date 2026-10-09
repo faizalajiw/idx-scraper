@@ -2644,3 +2644,328 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
 
     _research_cache_put(cache_key, out)
     return out
+
+
+# --------------------------------------------------------------- rekomendasi beli
+
+#: Sesi ditarik untuk metrik kandidat: rolling 252 (jarak puncak 52-minggu) +
+#: warmup SMA50/RSI/ATR. Sama dengan panel pasar yang dipakai radar/smart money.
+_RECOMMENDATION_HISTORY = 300
+
+
+RECOMMENDATION_LAYER_NOTE = (
+    "Lapisan faktor IC dan aliran broker hanya ikut bila parameternya tervalidasi "
+    "(lolos gate IC). Kalau belum, keduanya tidak menggerakkan skor sama sekali "
+    "— bukan diterapkan sebagai nol tersamar."
+)
+
+
+def _recommendation_metrics() -> pd.DataFrame:
+    """Metrik kandidat seluruh pasar (cache 30 menit).
+
+    Memakai panel pasar yang SAMA dengan radar/smart money
+    (:func:`_smart_money_panel`), lalu menurunkannya lewat modul pure
+    ``research.recommendation_log.metrics_frame`` — supaya definisi pola dan
+    angka di daftar kandidat tidak pernah berbeda dari halaman lain.
+    """
+    cached = _research_cache_get("recommendation_metrics")
+    if cached is not None:
+        return cached
+    from ..research.recommendation_log import metrics_frame
+
+    panel = _smart_money_panel(_RECOMMENDATION_HISTORY)
+    metrics = metrics_frame(panel)
+    _research_cache_put("recommendation_metrics", metrics, ttl=1800.0)
+    return metrics
+
+
+def _pattern_histories() -> dict[str, dict[str, Any]]:
+    """Peta ``pattern_id -> smart_money.pattern_history`` (bobot bukti pola)."""
+    from ..smart_money import pattern_history
+
+    tr = get_smart_money_track_record()
+    window = tr.get("history_sessions")
+    out: dict[str, dict[str, Any]] = {}
+    for row in tr.get("patterns") or []:
+        h = pattern_history(row, window_sessions=window)
+        if h is not None:
+            out[str(row.get("pattern"))] = h
+    return out
+
+
+def _recommendation_context() -> dict[str, Any]:
+    """Semua input skor kandidat + status tiap lapisan (cache 30 menit).
+
+    Lapisan faktor IC dan aliran broker dihitung di sini SEKALI untuk seluruh
+    pasar, lalu di-injeksi per emiten. Bila gate IC belum terpenuhi, keduanya
+    kosong dan tidak menggerakkan skor — transparan lewat ``layers``.
+    """
+    cached = _research_cache_get("recommendation_context")
+    if cached is not None:
+        return cached
+
+    metrics = _recommendation_metrics()
+    histories = _pattern_histories()
+
+    factor_adj: dict[str, float] = {}
+    factor_validated = False
+    factor_note = (
+        "Belum ada faktor umum yang lolos gate IC (|IC| >= 0,05 & |ICIR| >= 0,5) "
+        "pada run terakhir — lapisan faktor tidak dipakai."
+    )
+    try:
+        from ..research.composite import factor_adjustment, market_factor_ranks
+        from ..research.ic_history import weights_by_key
+
+        with get_cursor() as cur:
+            weights = weights_by_key(cur)
+            if weights:
+                ranks = market_factor_ranks(cur)
+                for code, pcts in ranks.items():
+                    adj, _ = factor_adjustment(pcts, weights)
+                    if adj:
+                        factor_adj[str(code).upper()] = adj
+                factor_validated = True
+                factor_note = "Lapisan faktor aktif — bobot dari run IC tervalidasi."
+    except Exception as e:  # DB kosong / query gagal: lapisan tidak aktif
+        print(f"[warn] lapisan faktor rekomendasi dilewati: {e}", file=sys.stderr)
+
+    broker_adj: dict[str, float] = {}
+    broker_validated = False
+    broker_note = (
+        "Faktor aliran (proksi aktivitas broker) belum lolos gate IC — lapisan "
+        "aliran tidak dipakai."
+    )
+    try:
+        from ..research.broker_activity import verdict_adjustment
+
+        broker_by_code, broker_validated = broker_scores_by_code()
+        if broker_validated:
+            for code, row in broker_by_code.items():
+                adj, _ = verdict_adjustment(row.get("score"), True)
+                if adj:
+                    broker_adj[str(code).upper()] = adj
+            broker_note = "Lapisan aliran broker aktif — faktor aliran lolos gate IC."
+    except Exception as e:
+        print(f"[warn] lapisan broker rekomendasi dilewati: {e}", file=sys.stderr)
+
+    out: dict[str, Any] = {
+        "metrics": metrics,
+        "histories": histories,
+        "factor_adj": factor_adj,
+        "factor_validated": factor_validated,
+        "factor_note": factor_note,
+        "broker_adj": broker_adj,
+        "broker_validated": broker_validated,
+        "broker_note": broker_note,
+    }
+    _research_cache_put("recommendation_context", out, ttl=1800.0)
+    return out
+
+
+def recommendation_record_inputs() -> dict[str, Any]:
+    """Input lapisan untuk job log rekomendasi (tanpa metrik — job memuat panelnya).
+
+    Dipakai worker CLI supaya baris yang ditulis ke ``research.recommendation_log``
+    memakai bobot pola & lapisan yang SAMA dengan yang tampil di API.
+    """
+    ctx = _recommendation_context()
+    return {
+        "histories": ctx["histories"],
+        "factor_adj_by_code": ctx["factor_adj"],
+        "factor_validated": ctx["factor_validated"],
+        "broker_adj_by_code": ctx["broker_adj"],
+        "broker_validated": ctx["broker_validated"],
+    }
+
+
+def _with_sizing(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Lengkapi tiap kandidat dengan ukuran posisi (% modal) — risiko 1%/posisi."""
+    from ..research.recommend import position_size_pct
+
+    for c in candidates:
+        c["position_pct"] = position_size_pct(entry=c.get("entry_ref"), stop=c.get("stop"))
+    return candidates
+
+
+def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]:
+    """Papan kandidat beli se-pasar untuk sesi terakhir (read-only).
+
+    Menggabungkan: setup teknikal + entry timing (modul pure ``recommend``),
+    bukti pola jejak smart money (track record, bukan klaim), dan — HANYA bila
+    tervalidasi — lapisan faktor IC serta aliran broker. Tiap kandidat membawa
+    zona entry, stop, target, R/R, dan ukuran posisi sederhana.
+
+    Cache 30 menit (metrik harian, tidak berubah intraday). Papan kosong berarti
+    tidak ada kandidat yang lolos gate hari itu — bukan error.
+    """
+    limit = max(1, min(limit, 100))
+    min_grade = str(min_grade).upper()
+    if min_grade not in ("A", "B", "C"):
+        min_grade = "C"
+    cache_key = f"recommendations:{limit}:{min_grade}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research.recommend import rank_candidates
+    from ..research.recommendation_log import candidates_for_date
+
+    ctx = _recommendation_context()
+    metrics: pd.DataFrame = ctx["metrics"]
+    layers = {
+        "factor": ctx["factor_validated"],
+        "broker": ctx["broker_validated"],
+        "factor_note": ctx["factor_note"],
+        "broker_note": ctx["broker_note"],
+        "note": RECOMMENDATION_LAYER_NOTE,
+    }
+
+    out: dict[str, Any] = {
+        "date": None,
+        "generated_at": datetime.now(WIB).isoformat(timespec="seconds"),
+        "scanned": 0,
+        "total_candidates": 0,
+        "limit": limit,
+        "min_grade": min_grade,
+        "layers": layers,
+        "rows": [],
+    }
+    if metrics.empty:
+        _research_cache_put(cache_key, out, ttl=1800.0)
+        return out
+
+    last_date = metrics["date"].max()
+    scanned = int((metrics["date"] == last_date).sum())
+    candidates = candidates_for_date(
+        metrics,
+        last_date,
+        histories=ctx["histories"],
+        factor_adj_by_code=ctx["factor_adj"],
+        factor_validated=ctx["factor_validated"],
+        broker_adj_by_code=ctx["broker_adj"],
+        broker_validated=ctx["broker_validated"],
+    )
+    candidates = _with_sizing(candidates)
+    ranked = rank_candidates(candidates, limit=limit, min_grade=min_grade)
+
+    out["date"] = str(pd.Timestamp(last_date).date())
+    out["scanned"] = scanned
+    out["total_candidates"] = len(candidates)
+    out["rows"] = ranked
+    _research_cache_put(cache_key, out, ttl=1800.0)
+    return out
+
+
+def get_stock_recommendation(code: str) -> dict[str, Any]:
+    """Kandidat beli untuk SATU emiten (skor + level + alasan).
+
+    Skor memakai mesin yang sama dengan papan se-pasar, jadi angka emiten di
+    halaman detail persis sama dengan angkanya di papan. Emiten tanpa kandidat
+    (di bawah grade C / likuiditas kurang / sinyal SELL) tetap mengembalikan
+    alasan penolakan, bukan kandidat rekaan.
+    """
+    code = code.strip().upper()
+    cache_key = f"recommendation_stock:{code}"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research.recommendation_log import candidates_for_date
+
+    ctx = _recommendation_context()
+    metrics: pd.DataFrame = ctx["metrics"]
+    out: dict[str, Any] = {
+        "code": code,
+        "as_of": None,
+        "has_data": False,
+        "candidate": None,
+        "layers": {
+            "factor": ctx["factor_validated"],
+            "broker": ctx["broker_validated"],
+            "factor_note": ctx["factor_note"],
+            "broker_note": ctx["broker_note"],
+            "note": RECOMMENDATION_LAYER_NOTE,
+        },
+        "reason": None,
+        "generated_at": datetime.now(WIB).isoformat(timespec="seconds"),
+    }
+
+    if metrics.empty:
+        out["reason"] = "Belum ada data harga yang cukup untuk menghitung kandidat."
+        _research_cache_put(cache_key, out, ttl=1800.0)
+        return out
+
+    rows = metrics[metrics["code"] == code]
+    if rows.empty:
+        out["reason"] = f"Tidak ada data harga untuk {code}."
+        _research_cache_put(cache_key, out, ttl=1800.0)
+        return out
+
+    row = rows.sort_values("date").iloc[-1]
+    last_date = metrics["date"].max()
+    out["has_data"] = True
+    out["as_of"] = str(pd.Timestamp(last_date).date())
+
+    # Skor **dan grade** memakai jalur yang sama dengan papan (satu pool, satu
+    # peringkat), jadi angka emiten di halaman detail tidak mungkin berbeda dari
+    # angkanya di papan. Grade adalah peringkat relatif pool hari itu.
+    candidates = candidates_for_date(
+        metrics,
+        last_date,
+        histories=ctx["histories"],
+        factor_adj_by_code=ctx["factor_adj"],
+        factor_validated=ctx["factor_validated"],
+        broker_adj_by_code=ctx["broker_adj"],
+        broker_validated=ctx["broker_validated"],
+    )
+    candidate = next((c for c in candidates if c["code"] == code), None)
+    if candidate is None:
+        if pd.Timestamp(row["date"]) != pd.Timestamp(last_date):
+            out["reason"] = (
+                f"Data terakhir {code} ({pd.Timestamp(row['date']).date()}) bukan sesi "
+                f"terakhir pasar ({out['as_of']}) — tidak ada kandidat untuk sesi itu."
+            )
+        else:
+            out["reason"] = (
+                "Belum masuk kandidat beli: di luar 25% teratas pool hari itu, "
+                "likuiditas kurang, sinyal jual, atau level eksekusi tidak bisa dihitung."
+            )
+    else:
+        out["candidate"] = _with_sizing([candidate])[0]
+
+    _research_cache_put(cache_key, out, ttl=1800.0)
+    return out
+
+
+def get_recommendation_track() -> dict[str, Any]:
+    """Track record kandidat beli (per grade & horizon) — "rekomendasi terbukti?".
+
+    Membaca ``research.recommendation_log`` (kandidat harian) lalu menilai
+    return forward T+1 + abnormal vs pasar. Kalau log belum pernah diisi,
+    mengembalikan payload kosong dengan alasan — bukan angka rekaan. Cache 1 jam
+    (hitungan mahal & harian, tak berubah intraday).
+    """
+    cache_key = "recommendation_track"
+    cached = _research_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    from ..research.recommendation_log import evaluate
+
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
+               "reason": "DATABASE_URL/SUPABASE_DB_URL belum diisi."}
+        _research_cache_put(cache_key, out, ttl=600.0)
+        return out
+    try:
+        out = evaluate(dsn)
+    except Exception as e:
+        print(f"[warn] track record rekomendasi dilewati: {e}", file=sys.stderr)
+        out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
+               "reason": "Tabel research.recommendation_log belum ada / belum diisi."}
+    if not out.get("candidates") and not out.get("reason"):
+        out["reason"] = "Belum ada kandidat tercatat — jalankan `idx recommendations`."
+    _research_cache_put(cache_key, out, ttl=3600.0)
+    return out

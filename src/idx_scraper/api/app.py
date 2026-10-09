@@ -42,6 +42,8 @@ from .schemas import (
     MarketOverview,
     MarketRegime,
     MarketTradeSummary,
+    RecommendationResponse,
+    RecommendationTrack,
     ScreenerRow,
     SectorAnalysis,
     SectorRotation,
@@ -59,6 +61,7 @@ from .schemas import (
     StockDecision,
     StockForeignFlow,
     StockOwnership,
+    StockRecommendation,
     TechnicalChart,
     TopBrokers,
     ValuationResponse,
@@ -333,6 +336,32 @@ def technical_chart(code: str) -> dict:
 @app.get("/api/stocks/{code}/brokers", response_model=StockBrokerSummary)
 def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
     return analytics.get_broker_summary(code.upper(), date=date)
+
+
+@app.get("/api/recommendations", response_model=RecommendationResponse)
+def recommendations(
+    limit: int = Query(default=20, ge=1, le=100, description="Jumlah kandidat yang ditampilkan"),
+    min_grade: str = Query(default="C", pattern="^[ABCabc]$", description="Grade terendah yang ditampilkan"),
+) -> dict:
+    """Papan kandidat beli se-pasar: skor, grade, dan level eksekusi per emiten.
+
+    Lapisan faktor IC dan aliran broker ikut HANYA bila lolos gate IC; kalau
+    belum, keduanya tidak menggerakkan skor dan statusnya disebut di ``layers``.
+    Alat bantu riset, bukan rekomendasi keuangan.
+    """
+    return analytics.get_recommendations(limit=limit, min_grade=min_grade.upper())
+
+
+@app.get("/api/recommendations/track", response_model=RecommendationTrack)
+def recommendations_track() -> dict:
+    """Track record kandidat beli: hit rate & abnormal return per grade/horizon."""
+    return analytics.get_recommendation_track()
+
+
+@app.get("/api/stocks/{code}/recommendation", response_model=StockRecommendation)
+def stock_recommendation(code: str) -> dict:
+    """Kandidat beli satu emiten (skor & level memakai mesin yang sama dengan papan)."""
+    return analytics.get_stock_recommendation(code.upper())
 
 
 @app.get("/api/stocks/{code}/decision", response_model=StockDecision)

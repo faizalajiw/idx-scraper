@@ -230,3 +230,32 @@ CREATE TABLE IF NOT EXISTS research.ownership (
 );
 CREATE INDEX IF NOT EXISTS idx_ownership_code
     ON research.ownership (code, snapshot_date DESC);
+
+-- ----------------------------------------------------------------------------
+-- 10) RECOMMENDATION_LOG — kandidat beli harian (halaman Rekomendasi).
+--     Skor/level dihitung modul pure research.recommend (entry timing, stop,
+--     target, R/R) dari data tersimpan; baris di sini yang diukur track
+--     record-nya (forward return T+1 + abnormal vs pasar per grade).
+--     Upsert idempoten per (code, trade_date); mirror dari DDL di
+--     src/idx_scraper/research/recommendation_log.py.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS research.recommendation_log (
+    code         TEXT        NOT NULL,
+    trade_date   DATE        NOT NULL,
+    grade        TEXT        NOT NULL CHECK (grade IN ('A','B','C')),
+    score        NUMERIC(6,2),
+    signal       TEXT,
+    setup        TEXT,
+    close        NUMERIC(18,4),
+    entry_ref    NUMERIC(18,4),
+    stop         NUMERIC(18,4),
+    target       NUMERIC(18,4),
+    rr           NUMERIC(8,2),
+    horizon_days INTEGER,
+    patterns     TEXT,
+    source       TEXT        NOT NULL DEFAULT 'PIT',
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_recommendation_log_date
+    ON research.recommendation_log (trade_date DESC, grade);

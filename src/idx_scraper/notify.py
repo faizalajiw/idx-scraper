@@ -31,6 +31,7 @@ from .smart_money import build_alert_message
 
 if TYPE_CHECKING:
     from .alert_rules import RuleEvaluation
+    from .recommendation_state import RecommendationEvent
     from .smart_money_state import SmartMoneyEvent
 
 TELEGRAM_API = "https://api.telegram.org"
@@ -151,6 +152,53 @@ def format_smart_money_message(events: list[SmartMoneyEvent]) -> str:
     lines.append(
         "<i>Jejak investor asing (bukan rekomendasi). Detail: halaman Radar "
         "Smart Money di dashboard.</i>"
+    )
+    return "\n".join(lines)
+
+
+def _rp(v: object) -> str:
+    """Format rupiah ringkas untuk pesan Telegram; None -> '-'. Pure."""
+    if v is None:
+        return "-"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    return f"Rp {f:,.0f}"
+
+
+def format_recommendation_message(events: list[RecommendationEvent]) -> str:
+    """Format kandidat beli grade A yang baru muncul jadi satu pesan Telegram.
+
+    ``events`` adalah hasil :meth:`RecommendationState.evaluate` — emiten yang
+    BARU masuk grade A, jadi pembaca hanya melihat transisi nyata. Level
+    eksekusi (entry/stop/target) selalu ikut karena itulah isi bermanfaatnya.
+    """
+    lines = [
+        "<b>🎯 Market Labs — Kandidat Beli Grade A</b>",
+        f"<i>{time.strftime('%Y-%m-%d %H:%M WIB', time.gmtime(time.time() + 7 * 3600))}</i>",
+        "",
+    ]
+    for ev in events:
+        entry = "-"
+        if ev.row.get("entry_low") is not None and ev.row.get("entry_high") is not None:
+            entry = f"{_rp(ev.row.get('entry_low'))}-{_rp(ev.row.get('entry_high'))}"
+        elif ev.entry_ref is not None:
+            entry = _rp(ev.entry_ref)
+        rr = f" · R/R {float(ev.rr):.1f}" if ev.rr is not None else ""
+        score = f" · skor {float(ev.score):.0f}" if ev.score is not None else ""
+        lines.append(f"🟢 <b>{ev.code}</b>{score}")
+        lines.append(f"   Entry {entry} · stop {_rp(ev.stop)} · target {_rp(ev.target)}{rr}")
+        horizon = (
+            f"   Horizon {ev.horizon_days} hari bursa"
+            if ev.horizon_days
+            else "   Horizon tidak disebut"
+        )
+        lines.append(horizon)
+        lines.append("")
+    lines.append(
+        "<i>Kandidat dari data tersimpan, bukan rekomendasi keuangan. "
+        "Detail: halaman Rekomendasi.</i>"
     )
     return "\n".join(lines)
 

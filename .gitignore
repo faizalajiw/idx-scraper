@@ -18,6 +18,7 @@ data/
 
 # Scratch/debug
 _*.txt
+_*.json
 _*.py
 scripts/_*.py
 

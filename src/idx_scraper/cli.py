@@ -40,6 +40,7 @@ from .live_capture import LiveCapture
 from .notify import (
     SignalState,
     TelegramNotifier,
+    format_recommendation_message,
     format_rule_message,
     format_smart_money_message,
     run_alert_check,
@@ -339,8 +340,55 @@ def _job_signal_log() -> None:
         print(f"[err] jejak sinyal job: {e}", file=sys.stderr)
 
 
+def _job_recommendations() -> None:
+    """Rekam kandidat beli hari bursa terakhir -> research.recommendation_log.
+
+    Dijalankan setelah jejak sinyal: memakai input lapisan yang SAMA dengan API
+    (bobot pola track record + penyesuaian faktor/broker bila tervalidasi),
+    supaya baris yang diukur track record-nya persis yang tampil di dashboard.
+    Idempoten per (code, trade_date); aman dijalankan ulang.
+    """
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        return
+    try:
+        from .api import analytics as analytics_api
+        from .research.recommendation_log import record
+
+        inputs = analytics_api.recommendation_record_inputs()
+        n = record(dsn, months=1, **inputs)
+        print(f"[{datetime.now(WIB).isoformat()}] rekomendasi tersimpan: {n} kandidat")
+    except Exception as e:
+        print(f"[err] rekomendasi job: {e}", file=sys.stderr)
+
+
+def cmd_recommendations(args) -> None:
+    """Backfill + tampilkan track record kandidat beli (halaman Rekomendasi)."""
+    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if not dsn:
+        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        return
+    from .research.recommendation_log import evaluate, print_report, record
+
+    # Input lapisan (bobot pola track record + faktor/broker bila tervalidasi)
+    # diambil dari service supaya baris yang diukur = yang tampil di dashboard.
+    # Best-effort: kalau API/DB belum siap, backfill tetap jalan tanpa lapisan itu.
+    inputs: dict = {}
+    try:
+        from .api import analytics as analytics_api
+
+        inputs = analytics_api.recommendation_record_inputs()
+    except Exception as e:
+        print(f"[warn] input lapisan rekomendasi dilewati: {e}", file=sys.stderr)
+
+    written = record(dsn, months=args.months, **inputs)
+    print(f"[ok] {written} baris kandidat ditulis")
+    print_report(evaluate(dsn, horizons=tuple(args.k)))
+
+
 def cmd_signal_log(args) -> None:
-    """Backfill + tampilkan track record sinyal (jejak sinyal)."""
+    """Backfill + tampilkan track record sinyal (jejak sinyal).
+    """
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
     if not dsn:
         print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
@@ -445,6 +493,7 @@ def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: boo
         ("index EOD close", _job_index_eod_close),
         ("regime harian", _job_regime_daily),
         ("jejak sinyal", _job_signal_log),
+        ("rekomendasi", _job_recommendations),
         ("broker summary", _job_broker_eod),
     ):
         try:
@@ -462,6 +511,12 @@ def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: boo
                 print(f"[alerts] jejak smart money: {n_sm} transisi terkirim")
         except Exception as e:
             print(f"[err] refresh alert smart money: {e}", file=sys.stderr)
+        try:
+            n_rec = run_recommendation_alerts()
+            if n_rec:
+                print(f"[alerts] kandidat beli grade A: {n_rec} terkirim")
+        except Exception as e:
+            print(f"[err] refresh alert rekomendasi: {e}", file=sys.stderr)
 
 
 def _ingest_eod_research(rows) -> None:
@@ -800,13 +855,14 @@ def cmd_alerts(args) -> None:
         signals = run_alert_check(storage, tickers, notifier, SignalState())
         rules = run_rule_alerts()
         smart = run_smart_money_alerts(tickers)
-        if signals or rules or smart:
+        recs = run_recommendation_alerts()
+        if signals or rules or smart or recs:
             print(
                 f"alerts terkirim — sinyal: {signals}, aturan: {rules}, "
-                f"smart money: {smart}"
+                f"smart money: {smart}, kandidat beli: {recs}"
             )
         else:
-            print("alerts: tidak ada sinyal/aturan/smart money yang berubah")
+            print("alerts: tidak ada sinyal/aturan/smart money/kandidat yang berubah")
     finally:
         storage.close()
 
@@ -857,6 +913,39 @@ def run_rule_alerts() -> int:
     if not fresh:
         return 0
     return len(fresh) if notifier.send_message(format_rule_message(fresh)) else 0
+
+
+def run_recommendation_alerts() -> int:
+    """Kirim alert Telegram untuk emiten yang BARU masuk grade A di papan kandidat.
+
+    Papan rekomendasi bersifat se-pasar (bukan watchlist), jadi tidak butuh
+    daftar kode. Alurnya sama persis dengan alert lain: ambil papan lewat service
+    read-only, saring transisi lewat :class:`RecommendationState`, kirim sekali.
+    DB down / Telegram tak diatur tidak boleh menghentikan scheduler.
+    """
+    notifier = TelegramNotifier()
+    if not notifier.enabled:
+        return 0
+
+    from .api import analytics as analytics_api
+    from .recommendation_state import RecommendationState
+
+    try:
+        board = analytics_api.get_recommendations(limit=50, min_grade="A")
+    except Exception as e:  # DB down / config missing must not kill the scheduler
+        print(f"[err] alert rekomendasi dilewati: {e}", file=sys.stderr)
+        return 0
+    rows = board.get("rows") or []
+    if not rows:
+        return 0
+    date = board.get("date")
+    for r in rows:
+        r.setdefault("date", date)
+
+    events = RecommendationState().evaluate(rows)
+    if not events:
+        return 0
+    return len(events) if notifier.send_message(format_recommendation_message(events)) else 0
 
 
 def run_smart_money_alerts(codes: list[str]) -> int:
@@ -1169,6 +1258,9 @@ def main() -> None:
     p_slog = sub.add_parser("signal-log", help="backfill + tampilkan track record sinyal BUY/SELL")
     p_slog.add_argument("--months", type=int, default=18, help="panjang histori (default: 18 bulan)")
     p_slog.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
+    p_rec = sub.add_parser("recommendations", help="backfill + tampilkan track record kandidat beli")
+    p_rec.add_argument("--months", type=int, default=6, help="panjang histori (default: 6 bulan)")
+    p_rec.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
     p_ts = sub.add_parser(
         "trade-summary",
@@ -1210,6 +1302,8 @@ def main() -> None:
         cmd_ic(args)
     elif args.command == "signal-log":
         cmd_signal_log(args)
+    elif args.command == "recommendations":
+        cmd_recommendations(args)
     elif args.command == "watchlist":
         client = IDXClient()
         storage = get_storage_from_env()

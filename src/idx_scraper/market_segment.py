@@ -79,7 +79,8 @@ def aggregate_day(rows: list[Any]) -> dict[str, Any]:
     nr_vol = nr_val = nr_freq = None
     codes: set[str] = set()
 
-    def _add(acc: int | float | None, v: Any) -> int | float | None:
+    def _add(acc: float | None, v: Any) -> float | None:
+        # ``float`` sudah mencakup ``int`` di anotasi (PEP 484 numeric tower).
         if v is None:
             return acc
         n = _num(v)
@@ -96,7 +97,7 @@ def aggregate_day(rows: list[Any]) -> dict[str, Any]:
         nr_val = _add(nr_val, getattr(r, "non_regular_value", None))
         nr_freq = _add(nr_freq, getattr(r, "non_regular_frequency", None))
 
-    def _tot(a: int | float | None, b: int | float | None) -> int | float | None:
+    def _tot(a: float | None, b: float | None) -> float | None:
         if a is None and b is None:
             return None
         return (a or 0) + (b or 0)

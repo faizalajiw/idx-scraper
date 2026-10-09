@@ -106,8 +106,10 @@ def rebuild_from_raw(dsn: str) -> int:
 
 
 def _daterange(d_from: str, d_to: str) -> list[str]:
-    start = datetime.strptime(d_from, "%Y%m%d")
-    end = datetime.strptime(d_to, "%Y%m%d")
+    # Tanggal bursa = tanggal WIB; diberi tz eksplisit supaya tidak terbaca
+    # sebagai waktu lokal mesin (perilaku hasilnya tetap sama).
+    start = datetime.strptime(d_from, "%Y%m%d").replace(tzinfo=WIB)
+    end = datetime.strptime(d_to, "%Y%m%d").replace(tzinfo=WIB)
     out: list[str] = []
     while start <= end:
         out.append(start.strftime("%Y%m%d"))

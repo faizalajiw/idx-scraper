@@ -679,3 +679,387 @@ yang dipanggil dashboard **tiga kali serentak** (`metric=volume`, `value`,
    interrupted` → crash recovery otomatis) pada 26/09, 28/09, 29/09, dan 01/10;
    penyebabnya belum diketahui. Ini risiko yang jauh lebih besar daripada error di
    atas — setiap crash begitu membunuh semua worker paralel sekaligus.
+
+## 14. Rekomendasi Beli — kandidat + level eksekusi + track record (2026-10-06)
+
+### 14.1 Masalah
+
+Semua verdict yang ada lahir dari pertanyaan **"masih layak DIPEGANG?"**
+(`hold_check` → `STRONG HOLD / HOLD / TRIM / EXIT`). Tidak ada yang menjawab
+"mana saham yang masuk akal **DIBELI**, di harga berapa, stop di mana?", tidak
+ada urutan prioritas se-pasar, dan tidak ada pengukuran apakah kandidat itu
+benar-benar berbuah. Screener mengembalikan baris terfilter (urut momentum),
+bukan daftar kandidat dengan level eksekusi.
+
+Temuan pendamping: tabel **"Framework Analisis Saham Multi-Agen"** di README
+idx-scraper mengklaim `research.fundamental` / `research.news` /
+`research.tech_signal` / `fundamental_score` yang **tidak ada di kode**
+(`grep fundamental` = 0 match; `/valuation` sendiri menulis bahwa data
+fundamental tidak tersedia di endpoint gratis).
+
+**Perbaikan lanjutan (sesi yang sama):** tabel itu **ditulis ulang** di README
+menjadi peta `peran → modul → output` yang benar-benar ada (data engine, analis
+teknikal/rezim/faktor/aliran/sentimen/kepemilikan, sintesis, evaluasi, simulator,
+API, frontend) plus sub-bagian **“Belum ada (jangan diandalkan)”** yang menyebut
+eksplisit `research.fundamental` / `research.news` / `research.tech_signal` /
+`research.risk_log` dan “Trader Agent” yang mengirim order sebagai **tidak ada**.
+Judul lama “Multi-Agen” diganti karena tidak ada agen otonom di kode — semuanya
+job deterministik APScheduler + fungsi pure. Verifikasi tabel dari sumber:
+`create table` di `sql/*.sql` + DDL runtime modul (`raw_eod`, `prices_pit`,
+`corporate_actions`, `quarantine_eod`, `broker_daily`, `ownership`,
+`recommendation_log`, `factor_ic_history`, `intraday_ticks`, `signal_log`,
+`regime_daily`, `market_segment_daily`; fungsi `research.prices_asof(_adj)`), dan
+daftar modul `src/idx_scraper/research/*.py`.
+
+**Sinkron di idx-web:** section bernama sama (`Tim Frontend` / `Tim Trainer`)
+diganti menjadi **“Framework Frontend (konvensi nyata, bukan agen otonom)”** —
+tabel `peran → wujud nyata` (batas presentasi-only, token `globals.css`,
+komponen bersama, atribut ARIA di ±31 berkas, gerbang CI `tsc` + `next build`,
+checklist “no AI slop” manual) + catatan bahwa peran Evaluation/Feedback/
+Calibration **tidak ada** sebagai kode frontend; pengukuran kualitas keputusan
+ada di backend (`signal_log` / `recommendation_log` / track record `smart_money`).
+
+### 14.2 Yang dikerjakan
+
+| File | Fungsi |
+|---|---|
+| `src/idx_scraper/research/recommend.py` | Baru, **pure**: `score_candidate` (skor 0–100 + grade A/B/C), `entry_plan` (pullback / breakout / trend; entry zone, stop, target, R/R), `smart_money_evidence` (poin dari track record pola), `rank_candidates`, `position_size_pct`. Modul ini **bukan** rekomendasi keuangan. |
+| `src/idx_scraper/research/recommendation_log.py` | Baru: `load_candidate_panel` (panel `research.latest_pit`, sama dengan radar), `metrics_frame` (metrik per emiten, pola via `smart_money.pattern_flags` — satu sumber kebenaran), `candidates_for_date`, `build_records`, `record` (delete+insert idempoten), `evaluate` (forward T+1 + abnormal vs pasar per grade/horizon). |
+| `src/idx_scraper/recommendation_state.py` | Baru: latch `RecommendationState` — alert sekali saat emiten **baru masuk grade A**; baseline dulu, re-arm setelah turun. |
+| `src/idx_scraper/api/analytics.py` | `_recommendation_metrics` / `_recommendation_context` / `get_recommendations` / `get_stock_recommendation` / `get_recommendation_track` / `recommendation_record_inputs` (cache 30 menit–1 jam). |
+| `src/idx_scraper/api/schemas.py`, `api/app.py` | `RecommendationResponse`, `StockRecommendation`, `RecommendationTrack` + `GET /api/recommendations`, `GET /api/recommendations/track`, `GET /api/stocks/{code}/recommendation`. |
+| `src/idx_scraper/cli.py` | Subcommand `idx recommendations`; job `_job_recommendations` (masuk pipeline refresh setelah jejak sinyal); `run_recommendation_alerts()` masuk `cmd_alerts` + blok alert pipeline. |
+| `src/idx_scraper/notify.py` | `format_recommendation_message` (level eksekusi + disclaimer). |
+| `sql/research_schema.sql` | Bagian 10: DDL `research.recommendation_log` + index (mirror DDL modul). |
+| `.env.example` | `IDX_RECOMMENDATION_STATE`. |
+| `tests/test_recommend.py`, `tests/test_recommendation_log.py`, `tests/test_recommendation_state.py` | 16 + 8 + 5 test. |
+| `idx-web` | `lib/types.ts`, `lib/hooks.ts` (`useRecommendations` / `useStockRecommendation` / `useRecommendationTrack`), `app/rekomendasi/page.tsx`, entri Sidebar "Rekomendasi Beli". |
+
+**Pilihan desain yang dipegang** (dikonfirmasi ke pengguna): papan baru
+`/rekomendasi`; **hanya lapisan tervalidasi yang menggerakkan skor** (faktor IC &
+aliran broker ikut hanya bila lolos gate; kalau belum → 0 dan statusnya disebut);
+cakupan penuh (skor+papan, track record, sizing, alert grade A).
+
+### 14.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check` berkas sentuh | ✅ bersih (5 error tersisa di `market_segment.py`/`backfill_market_segment.py` adalah pra-ada — berkas tak disentuh) |
+| `pytest` | ✅ 546 lulus |
+| `tsc --noEmit` | ✅ bersih |
+| `next build` | ✅ sukses, 23 route (dari 22) |
+| Runtime API (DB nyata) | ✅ `GET /api/recommendations` — 963 emiten dipindai, 74 kandidat, `layers.broker=true`, `layers.factor=false`; `GET /api/stocks/STAA/recommendation` 200 (grade B); BBCA ditolak dengan alasan eksplisit |
+| Backfill `idx recommendations --months 2` | ✅ 5.547 kandidat (32 A / 782 B / 4733 C), 2026-08-05 → 2026-10-06 |
+| Track record per grade | ✅ monoton: A h5 hit 61% / abn +0,98%; A h21 hit 61% / mean +4,73% / abn +3,43% (n=18 — sampel kecil); C h21 abn −2,20% |
+
+Catatan jujur: sampel grade A masih tipis (n=18 di 21 hari) sehingga angkanya
+indikatif; panel memakai `research.latest_pit` (harga raw, tidak disesuaikan aksi
+korporasi) — keterbatasan yang sama dengan track record smart money.
+
+### 14.4 Sisa peta jalan
+
+1. **Kartu kandidat di `/stock/[code]`** — saat ini baru di papan `/rekomendasi`
+   dan lewat deep-link Ruang Keputusan.
+2. **Bobot grade** — saat ini skor dijumlah apa adanya; kalibrasi ambang
+   A/B/C dari distribusi data nyata (seperti kalibrasi smart money) belum
+   dilakukan.
+3. **Lantai likuiditas harian (Rp 500 jt)** belum dikalibrasi terhadap persentil
+   data seperti lantai radar — perlu dicocokkan bila terlalu longgar/ketat.
+
+## 15. Kalibrasi ambang Rekomendasi dari distribusi nyata (2026-10-06)
+
+### 15.1 Masalah
+
+Ambang Rekomendasi dipasang tanpa dasar data: `MIN_DAY_VALUE = Rp 500 jt`,
+`GRADE_A_MIN = 70`, `GRADE_B_MIN = 55`, `GRADE_C_MIN = 42`. Akibatnya grade A
+nyaris tak pernah muncul (≈ p99,9): backfill 2 bulan hanya menghasilkan **32 A**,
+sementara B (p97,5) hampir seterang A dan gap C→B terlalu lebar.
+
+### 15.2 Distribusi terukur (probe ad hoc, dihapus setelah dipakai)
+
+Sampel: 60 sesi terakhir **2026-07-13 → 2026-10-06**, `research.latest_pit`
+(~964 emiten), panel 300 sesi → 237.874 baris; skor dihitung dengan lapisan
+faktor/broker aktif pada konfigurasi itu.
+
+**Likuiditas — nilai transaksi harian:**
+
+| Irisan | p25 | p40 | p50 | p75 | p90 |
+|---|---|---|---|---|---|
+| semua baris | Rp 28 jt | Rp 141 jt | Rp 326 jt | Rp 3,00 M | Rp 19,99 M |
+| hanya `value > 0` | Rp 91 jt | Rp 282 jt | **Rp 566 jt** | Rp 4,42 M | Rp 24,81 M |
+
+Emiten lolos lantai per sesi (median lintas 60 sesi): Rp 250 jt → 520 ·
+**Rp 500 jt → 435** · Rp 750 jt → 386 · Rp 1 M → 352 · Rp 3 M → 244.
+(Rp 500 jt = persentil 55 seluruh baris ber-data.)
+
+**Skor kandidat** (grade cutoff dimatikan, lantai Rp 500 jt): 21.189 kandidat,
+~363/sesi — p50 32,8 · **p75 44,8** · p85 49,6 · **p90 52,1** · p95 54,4 ·
+**p98 57,4** · p99 62,8 · max 86,5.
+
+**Outcome per bucket skor** (abn = forward − pasar equal-weight, entry T+1):
+
+| Bucket | n | abn5 | abn10 | abn21 |
+|---|---|---|---|---|
+| 0–35 | 11.599 | −0,06% | +0,03% | +0,41% |
+| 35–40 | 2.094 | −0,75% | −1,32% | −1,47% |
+| 40–45 | 2.251 | −0,38% | −0,73% | −1,97% |
+| 45–50 | 2.154 | +0,11% | −0,58% | −0,51% |
+| 50–52 | 813 | −0,50% | −0,72% | −1,76% |
+| 52–54 | 988 | +0,26% | −0,04% | −0,36% |
+| 54–56 | 656 | +0,34% | −0,82% | −0,34% |
+| 56–58 | 252 | −0,40% | −0,37% | −1,56% |
+| 58–60 | 60 | −0,32% | −1,11% | −3,15% |
+| 60–65 | 242 | +0,41% | +0,63% | −0,82% |
+| 65–100 | 80 | +0,28% | +0,41% | +0,04% |
+
+### 15.3 Yang dikalibrasi
+
+| Konstanta | Lama | Baru | Anchor terukur |
+|---|---|---|---|
+| `MIN_DAY_VALUE` | Rp 500 jt (tanpa dasar) | Rp 500 jt (**ber-anchor**) | ≈ median baris yang benar-benar diperdagangkan (p50 traded Rp 566 jt); persentil 55 seluruh baris; ~435 emiten/sesi |
+| `GRADE_C_MIN` | 42 | **45** | ≈ p75 skor (top ~25%) — sengaja membuang bucket 40–45 yang abn-nya paling negatif |
+| `GRADE_B_MIN` | 55 | **52** | ≈ p90 skor (top ~10%) |
+| `GRADE_A_MIN` | 70 | **57** | ≈ p98 skor (top ~2%) |
+
+### 15.4 Temuan jujur (ditulis, bukan disembunyikan)
+
+Outcome 60 sesi **tidak monoton** terhadap skor (lihat tabel 15.2). Track record
+pasca-kalibrasi (2 bulan, 4.357 kandidat — 432 A / 1.464 B / 2.461 C):
+
+| Horizon | abn A | abn B | abn C |
+|---|---|---|---|
+| 5 hari | −0,10% | −0,12% | −0,09% |
+| 10 hari | **−0,05%** | −0,95% | −0,83% |
+| 21 hari | −1,37% | **−0,78%** | −1,80% |
+
+Artinya: grade adalah **peringkat relatif** (persentil skor), **bukan
+probabilitas**; skor belum terbukti sebagai ranker abnormal return yang monoton.
+Yang benar-benar didapat dari kalibrasi: tier berukuran wajar dan gate membuang
+zona terburuk (40–45) — bukan klaim edge. Konsekuensinya dinyatakan juga di
+UI (info kartu Track Record) dan di docstring `research/recommend.py`.
+
+### 15.5 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check` berkas sentuh | ✅ bersih |
+| `pytest` | ✅ 546 lulus (dua asersi band grade diperbarui) |
+| `tsc --noEmit` + `next build` (idx-web, teks kartu) | ✅ bersih |
+| Backfill ulang 2 bulan | ✅ 4.357 kandidat (432 A / 1.464 B / 2.461 C) — tier berukuran wajar |
+| Distribusi & outcome per bucket | ✅ terukur dari DB nyata (tabel 15.2 & 15.4) |
+
+### 15.6 Sisa peta jalan
+
+1. **Skor perlu diperbaiki, bukan cuma ambangnya** — kalibrasi ini jujur
+   menunjukkan skor tidak monoton; langkah berikutnya merancang ulang komposisi
+   (mis. bobot dari IC faktor bila tervalidasi, atau skor terpisah per horizon)
+   lalu walk-forward, bukan menuning ambang di seluruh history.
+2. **Kalibrasi ulang berkala** — anchor persentil bergeser bila komposisi skor
+   berubah; catat ulang tanggal/sampel saat konstanta disentuh.
+
+## 16. Skor Rekomendasi: komposisi dari walk-forward + grade jadi peringkat pool (2026-10-09)
+
+### 16.1 Masalah (lanjutan §15.6 butir 1)
+
+Migrasi sesi sebelumnya berhenti **setengah jalan**: konstanta walk-forward
+(`COMPONENT_WEIGHTS` / `GRADE_BANDS`) sudah ditempel ke `research/recommend.py`,
+tetapi harness dan jalur produksinya belum sepakat. Keadaan terukur saat mulai:
+**8 tes gagal** (`test_recommend.py`, `test_recommendation_log.py`). Akar masalahnya:
+
+| # | Gejala | Akar |
+|---|---|---|
+| 1 | 3.701 baris `horizon_days` NULL di `research.recommendation_log` | Baris `"horizon_days": ...` **tertelan komentar** — komentar multi-baris di `recommend.py` menyambung ke baris key itu, jadi key-nya tak pernah masuk dict hasil |
+| 2 | `factor_adj` / `broker_adj` tidak menggeser skor | Skor hanya memakai `extra_points=ev["points"]`; parameter lapisan hanya dipakai menulis warning |
+| 3 | Band grade tidak menggambarkan skor yang dipakai | `score_eval` mengukur `50 + Σ bobot×bendera`, sedangkan produksi menambah **poin keyakinan pola yang ditulis tangan** (tinggi 12 / sedang 8 / lemah 4) yang tak pernah masuk harness |
+| 4 | Band B/C jatuh di ambang sama | Distribusi skor **ber-titik-massa** (mayoritas kandidat persis `NEUTRAL_SCORE`), jadi persentil p75/p90/p98 ≠ share yang dilabeli |
+
+### 16.2 Temuan yang mengubah rencana (diperiksa lebih dulu, bukan diasumsikan)
+
+1. **Harness buta komponen langka.** Gate lama menuntut **≥3 nama ber-bendera per
+   hari**, sementara `pattern_initiation` menyala ~1 nama/hari (189 nama / 190
+   sesi → 28 hari terukur). Diganti: satu nama per hari sudah cukup (tiap sesi
+   menyumbang satu observasi edge harian), dan yang membatasi adalah jumlah
+   **hari** terukur (`MIN_EDGE_DAYS = 20`), bukan jumlah nama per hari.
+2. **Blocker sebenarnya: datanya tipis, bukan harness-nya.** Setelah gate
+   dilonggarkan, pola tetap berbobot 0 di **semua** fold, dengan
+   `days=0, n=0` — tidak ada satu pun kejadian pola di dalam jendela train.
+   Sebabnya ditemukan di DB:
+
+   | Bulan | baris | `value` terisi | `foreign_net` terisi |
+   |---|---|---|---|
+   | 2025-09 … 2026-06 | ~192 rb | semua | **0** |
+   | 2026-07 | 22.160 | semua | 1.926 |
+   | 2026-08 … 2026-10 | 44.298 | semua | semua |
+
+   `foreign_net` (dasar seluruh lapisan jejak smart money) baru tersedia sejak
+   **Jul 2026 ≈ 50 sesi**, sedangkan jendela train 100 sesi. **Tak ada fold yang
+   bisa memuat kejadian pola**, jadi bobotnya mustahil diukur — apa pun bentuk
+   gate-nya. "Ukur pola di harness" berhenti di batas data, bukan batas kode.
+
+### 16.3 Yang dikerjakan
+
+| Berkas | Perubahan |
+|---|---|
+| `src/idx_scraper/research/score_eval.py` | Gate komponen langka (≥1 nama/hari + `MIN_EDGE_DAYS`); `bands_from_scores`/`BAND_PCTS` dibuang → `tier_mix` (diagnostik sebaran); laporan menandai komponen yang belum bisa dinilai; `format_weights` mengeluarkan `BAND_SHARES` |
+| `src/idx_scraper/research/recommend.py` | Bug `horizon_days` diperbaiki; **poin keyakinan pola dibuang dari skor** (`_CONFIDENCE_POINTS` dihapus, `smart_money_evidence` hanya menghasilkan alasan/peringatan); `factor_adj`/`broker_adj` **ikut menggeser skor** bila tervalidasi; `GRADE_BANDS`/`grade_for`/`GRADE_*_MIN` diganti `BAND_SHARES` + `tier_sizes` + `assign_grades` + `candidate_rank_key`; horizon jadi parameter (`safe_horizon`), `DEFAULT_HORIZON` = 21 (dari bukti OOS) |
+| `src/idx_scraper/research/recommendation_log.py` | Grade ditetapkan di `candidates_for_date` lewat `assign_grades`; parameter `horizon` diteruskan `build_records`/`record`/`record_recent` |
+| `src/idx_scraper/api/analytics.py` | `get_stock_recommendation` **memakai jalur papan yang sama** (`candidates_for_date` + cari kode) — menghapus duplikasi dict metrik sekaligus menjamin grade emiten identik dengan grade di papan; alasan penolakan membedakan "bukan sesi terakhir" dari "di luar 25% teratas" |
+| `src/idx_scraper/api/schemas.py` | Docstring `RecommendationRow`: grade = peringkat relatif pool harian, `horizon_days` = horizon komposisi skor |
+| `tests/test_recommend.py` | Ditulis ulang untuk kontrak baru (+6 tes: tier sizes, pembagian pool, pool kecil, tie-break deterministik, horizon, pola tanpa poin) |
+| `idx-web/app/rekomendasi/page.tsx` | Teks info papan & track record: grade = peringkat relatif pool hari itu; bukti pola belum menimbang skor |
+| `README.md` (kedua repo) | Bagian Rekomendasi Beli diselaraskan dengan semantik baru + hasil walk-forward ditulis apa adanya |
+| `.gitignore` | `_*.json` (artefak scratch `_score_eval.json`) |
+
+**Pilihan desain yang dipegang** (dikonfirmasi ke pengguna): pola **keluar dari
+skor**; bobot hanya boleh datang dari hasil ukur. Karena datanya belum cukup,
+hasilnya: pola ditampilkan sebagai bukti, bobotnya 0, dan harness-nya sudah siap
+(`MIN_EDGE_DAYS`) begitu `foreign_net` memanjang.
+
+### 16.4 Komposisi hasil walk-forward (190 sesi, 3 fold, run 2026-10-09)
+
+```
+h5  : rsi_healthy -1.0 · vol_expansion -1.0 · mom20_strong -3.0 · value_large -1.0
+h10 : rsi_healthy -1.5 · mom20_strong -4.0 · value_large -2.0
+h21 : signal_hold -1.0 · rsi_pullback -4.0 · mom20_strong -4.0 · high_volatility -5.0 · value_large -4.5
+BAND_SHARES = (0.75, 0.90, 0.98)   # C / B / A
+DEFAULT_HORIZON = 21
+```
+
+Bukti **out-of-sample pooled** (angka yang menjadi bukti; 21.586 baris test):
+
+| Horizon | IC | ICIR | t (NW) | hit IC | rho desil | spread Q10−Q1 |
+|---|---|---|---|---|---|---|
+| 5 | +0,010 | 0,098 | +0,55 | 49% | +0,103 | −0,21% |
+| 10 | **−0,019** | −0,233 | −1,19 | 44% | −0,297 | −1,54% |
+| 21 | **+0,038** | 0,406 | **+1,95** | 69% | +0,394 | +2,20% |
+
+Dua konsekuensi yang harus terbaca apa adanya:
+
+1. **Semua komponen yang lolos gate berbobot negatif.** Skor = "seberapa bersih
+   nama dari ciri yang historis merugikan", bukan kekuatan kandidat. `signal_buy`
+   sendiri tidak lolos gate (edge +0,27%, t 1,17 di h10) — skor ini bukan penguat
+   sinyal BUY, dan itu ditulis di docstring konstanta.
+2. **Hanya h21 yang punya sinyal OOS**, jadi `DEFAULT_HORIZON = 21`. Satu horizon
+   per papan juga menghapus cacat lama: horizon per-nama membuat skor dari skala
+   berbeda diadu dalam satu urutan.
+
+**Grade tidak lagi ambang absolut.** Bukti dari train fold terakhir:
+`n=25.503 → C 7.190 (28% ≥ 49,0) · B 7.190 (28% ≥ 49,0) · A 2.152 (8% ≥ 50,0)` —
+B dan C jatuh di ambang yang sama (28%/28%) padahal labelnya 10%/25%, karena
+titik massa di `NEUTRAL_SCORE`. Grade sekarang = peringkat relatif pool hari itu
+(A 2% · B 10% · C 25% teratas) lewat `assign_grades`, dengan tie-break
+**dibukukan**: skor → R/R → likuiditas → kode (tanpa itu, urutan ditentukan
+kedatangan data).
+
+### 16.5 Track record setelah perubahan (diukur, bukan diklaim)
+
+Backfill `idx recommendations --months 2` → 3.776 baris ditulis; log terbaca
+4.130 kandidat (307 A / 1.324 B / 2.499 C), 2026-08-05 → 2026-10-09.
+Abnormal vs pasar equal-weight (entry T+1):
+
+| Horizon | abn A | abn B | abn C |
+|---|---|---|---|
+| 5 | +0,33% | +0,83% | +0,70% |
+| 10 | +0,67% | +0,94% | +0,93% |
+| 21 | +3,95% | +1,78% | +2,60% |
+
+**Tidak monoton.** Grade adalah label peringkat, bukan probabilitas, dan tabel
+inilah yang mengujinya. Yang benar-benar berubah dari kalibrasi ini: tiap sesi
+selalu punya tier berukuran tetap (sesi 2026-10-09: pool 232 → 5 A / 18 B / 35 C),
+bukan band yang kadang kosong dan kadang melabeli 28% pool sebagai "B 10%".
+
+### 16.6 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src tests scripts` | ✅ bersih **seluruh repo** (5 error pra-ada di `market_segment.py`/`backfill_market_segment.py` dibereskan di §17) |
+| `pytest` | ✅ 546 lulus (0 gagal; sebelumnya 8 gagal) |
+| `tsc --noEmit` (idx-web) | ✅ bersih |
+| `next build` (idx-web) | ✅ sukses |
+| Walk-forward ulang (DB nyata) | ✅ 190 sesi, 3 fold; gate komponen langka aktif; konstanta di 16.4 |
+| Backfill log | ✅ 3.776 baris; `horizon_days` **terisi semua** (tak ada NULL baru) |
+| `GET /api/recommendations` | ✅ 200 — 963 emiten dipindai, 58 kandidat (5 A / 18 B / 35 C) pada 2026-10-09, `layers.broker=true` |
+| `GET /api/stocks/STAA/recommendation` | ✅ 200 — grade A, skor 57,6, h21, level 1.240 / 1.170 / 1.380, **sama persis** dengan baris di papan |
+| `GET /api/stocks/BBCA/recommendation` | ✅ 200 dengan alasan penolakan eksplisit ("di luar 25% teratas pool hari itu …"), bukan kandidat rekaan |
+| `GET /api/recommendations/track` | ✅ 200 — tabel 16.5 |
+
+Catatan operasional: `/api/recommendations` menghitung metrik seluruh pasar saat
+cache dingin (≈2–3 menit per 30 menit TTL) — bukan regresi, memang begitu sejak
+fitur ini ada.
+
+### 16.7 Sisa peta jalan
+
+1. **Panjangkan `foreign_net`** — pembuka jalan untuk seluruh lapisan pola
+   (radar, verdict, track record pola, dan bobot pola di sini). Menyelidiki apakah
+   `GetStockSummary` IDX atau vendor gratis lain bisa mengisi histori sebelum Jul
+   2026 lebih bernilai daripada menyetel ulang gate.
+2. **Skor masih perlu sisi positif** — komposisi sekarang hanya penalti karena
+   itulah yang lolos gate di sampel 190 sesi. Walk-forward ulang berkala begitu
+   rezim berubah; jangan menuning bobot di seluruh history.
+3. **`MIN_EDGE_DAYS`/`MIN_NAMES_PER_DAY` belum diuji sensitivitasnya** — 20 hari
+   dan 20 nama dipilih konservatif; belum ada studi berapa sering status komponen
+   berganti bila ambangnya digeser.
+
+## 17. Bersihkan 5 error ruff pra-ada — CI hijau (2026-10-10)
+
+§16.6 mencatat 5 error `ruff` yang **bukan** dari sesi itu, semuanya di berkas
+yang tidak disentuh sesi sebelumnya. Gerbang CI menjalankan
+`ruff check src tests scripts` dengan `ruff>=0.5` (tanpa pin), jadi error
+pra-ada itu tetap memerahkan CI. Dibereskan tanpa mengubah perilaku:
+
+| Berkas | Kode | Perbaikan |
+|---|---|---|
+| `src/idx_scraper/market_segment.py:82` | `PYI041` | `_add(acc: int \| float \| None) -> int \| float \| None` → `float \| None` — di anotasi, `float` sudah mencakup `int` (PEP 484 numeric tower); komentar ini ditulis di kode supaya tidak "diperbaiki" balik |
+| `src/idx_scraper/market_segment.py:99` | `PYI041` | sama untuk `_tot` (dua posisi: parameter & return) |
+| `scripts/backfill_market_segment.py:109-110` | `DTZ007` | `strptime` hasilkan datetime naif → `.replace(tzinfo=WIB)` (WIB sudah didefinisikan di berkas itu), sejalan dengan perbaikan `cli.py` di §2: tanggal bursa memang tanggal WIB, bukan waktu lokal mesin |
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `ruff check src tests scripts` | ✅ **0 error** (sebelumnya 5) |
+| `pytest` | ✅ 546 lulus |
+| Perilaku `_daterange('20261001','20261005')` | ✅ tetap `['20261001' … '20261005']` (tz tidak mengubah `strftime`) |
+| Perilaku `aggregate_day` (baris ber-data + baris all-None) | ✅ `regular_volume 10 · total_volume 12 · total_value 1050,5 · stock_count 2` — sama seperti sebelum perbaikan |
+
+## 18. Pin versi ruff supaya gerbang lint tidak bergantung rilis terbaru (2026-10-10)
+
+### 18.1 Masalah
+
+`idx-scraper/pyproject.toml` memakai `ruff>=0.5` di extra `dev`, dan CI memasang
+dari situ (`pip install -e ".[api,dev]"`). Artinya versi ruff yang menjadi
+gerbang **ditentukan saat CI berjalan**, bukan oleh repo. Ini bukan risiko
+teoretis — §17 membuktikannya:
+
+* Probe berkas sekali-pakai (`int | float` + `strptime` naif) diuji dengan
+  `ruff check --isolated` (tanpa config repo sama sekali) → **PYI041 & DTZ007
+  tetap menyala**. Jadi keduanya berasal dari set aturan **default** ruff 0.16.8,
+  bukan dari konfigurasi repo; setiap rilis yang memperluas default bisa
+  memerahkan CI tanpa satu pun perubahan kode di repo ini.
+* `pip index versions ruff` (dijalankan hari itu) → `INSTALLED: 0.16.8`,
+  `LATEST: 0.16.10`. Jadi CI sudah berjalan di versi **berbeda** dari yang
+  dipakai lokal, dan "hijau di lokal" tidak menjamin hijau di CI.
+
+### 18.2 Yang dikerjakan
+
+| Berkas | Perubahan |
+|---|---|
+| `pyproject.toml` (extra `dev`) | `ruff>=0.5` → **`ruff==0.16.8`** (versi yang benar-benar dipakai & lulus lokal), dengan komentar alasan di kode supaya tidak "dilonggarkan" balik tanpa sengaja |
+| `.github/workflows/ci.yml` | Langkah lint mencetak `ruff --version` sebelum `ruff check`, jadi log CI menyebut versi yang menjadi gerbang — bukan versi terbaru yang kebetulan terpasang |
+
+Jalur update-nya sengaja: naikkan pin di satu commit, jalankan
+`ruff check src tests scripts` lokal, perbaiki temuan barunya, baru merge —
+bukan resolusi otomatis di runner.
+
+Catatan: **frontend tidak butuh pin serupa** — `idx-web` sudah dikunci lewat
+`package-lock.json` dan CI memakai `npm ci` (bukan `npm install`), jadi toolchain
+Node-nya memang tidak bergerak sendiri.
+
+### 18.3 Verifikasi
+
+| Pemeriksaan | Hasil |
+|---|---|
+| `tomllib` membaca `pyproject.toml` | ✅ `dev = ['pytest>=8.0', 'ruff==0.16.8', 'numpy>=1.26']` |
+| Versi terpasang vs pin | ✅ `pip show ruff` → 0.16.8 = pin |
+| Ketersediaan di PyPI (jalur CI) | ✅ `pip index versions ruff` memuat `0.16.8` |
+| `ruff check src tests scripts` | ✅ 0 error |
+| `ci.yml` tetap YAML valid | ✅ langkah `Lint (ruff)` → `ruff --version\nruff check src tests scripts` |
+| `pytest` | ✅ 546 lulus |

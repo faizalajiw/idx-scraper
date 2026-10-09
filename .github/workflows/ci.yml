@@ -27,7 +27,12 @@ jobs:
         run: python -m pip install -e ".[api,dev]"
 
       - name: Lint (ruff)
-        run: ruff check src tests scripts
+        # Versi ruff dipin di extra ``dev`` (pyproject.toml); ``ruff --version``
+        # dicetak supaya log CI menyebut versi mana yang benar-benar menjadi
+        # gerbang, bukan versi terbaru yang kebetulan terpasang.
+        run: |
+          ruff --version
+          ruff check src tests scripts
 
       - name: Tests (pytest)
         run: pytest
