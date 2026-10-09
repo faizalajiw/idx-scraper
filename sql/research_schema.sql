@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS research.prices_pit (
 );
 CREATE INDEX IF NOT EXISTS idx_prices_pit_asof
     ON research.prices_pit (code, trade_date, knowledge_date DESC);
+-- Latest-date lookups (`select max(trade_date)`) dan saringan satu sesi harus
+-- dilayani index. `idx_prices_pit_asof` tidak bisa: kolom depan-nya `code`, jadi
+-- `max(trade_date)` jatuh ke parallel seq scan 284.056 baris dengan dua worker
+-- — lambat, dan rapuh: satu worker yang gagal start membatalkan query dengan
+-- "parallel worker failed to initialize" alih-alih merosot ke scan serial
+-- (insiden yang sudah tercatat untuk `raw_eod`).
+CREATE INDEX IF NOT EXISTS idx_prices_pit_trade_date
+    ON research.prices_pit (trade_date DESC);
 
 -- ----------------------------------------------------------------------------
 -- 3) CORPORATE ACTIONS — official IDX (split, reverse split, dividend, bonus, RI)

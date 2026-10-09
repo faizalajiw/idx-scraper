@@ -1063,3 +1063,74 @@ Node-nya memang tidak bergerak sendiri.
 | `ruff check src tests scripts` | ✅ 0 error |
 | `ci.yml` tetap YAML valid | ✅ langkah `Lint (ruff)` → `ruff --version\nruff check src tests scripts` |
 | `pytest` | ✅ 546 lulus |
+
+## 19. `prices_pit`: index `trade_date` supaya `max()` tidak parallel seq scan (2026-10-10)
+
+### 19.1 Masalah (§13.4 butir 1)
+
+`select max(trade_date) from research.prices_pit` → **Gather + Parallel Seq
+Scan, `Workers Launched: 2`, 82,0 ms**, buffer `hit=6316 read=988`. Sebabnya
+sama persis dengan `raw_eod` di §13: index yang ada tidak bisa melayani
+`max(trade_date)` —
+
+* `prices_pit_pkey (code, trade_date, knowledge_date)`
+* `idx_prices_pit_asof (code, trade_date, knowledge_date DESC)`
+
+kolom depan keduanya `code`, jadi agregat tanggal jatuh ke scan penuh. Selain
+lambat, bentuk ini **rapuh**: satu worker yang gagal spawn membatalkan query
+dengan `parallel worker failed to initialize` alih-alih merosot ke scan serial —
+insiden yang sudah pernah terjadi (2026-10-04, §13).
+
+### 19.2 Yang dikerjakan
+
+| Berkas / objek | Perubahan |
+|---|---|
+| DB `research.prices_pit` | `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_prices_pit_trade_date ON research.prices_pit (trade_date DESC)` — 0,39 s, **2.048 kB**, `indisvalid` & `indisready` = true |
+| `sql/research_schema.sql` | DDL + alasan di-mirror (gaya sama dengan `idx_raw_eod_trade_date` di §13) supaya instalasi baru ikut mendapatkannya; dijalankan ulang = **no-op** (`IF NOT EXISTS`) |
+
+### 19.3 Verifikasi (EXPLAIN ANALYZE di DB nyata, 284.056 baris)
+
+| Query | Sebelum | Sesudah |
+|---|---|---|
+| `max(trade_date) from research.prices_pit` | Gather + Parallel Seq Scan, **2 worker**, **82,0 ms**, buffer 7.304 | **Index Only Scan**, **0 worker**, **0,16 ms**, buffer 5 |
+| `count(*) … where trade_date = '2026-10-07'` | Parallel Seq Scan, **73,3 ms** | Index Only Scan, **0,50 ms** (146×) |
+| `backtest.trading_days` (Apr–Sep 2026, jalur `/backtest`) | Parallel Seq Scan, **69,9 ms** | Index Only Scan Backward, **39,3 ms**, 0 worker |
+
+Angka "sebelum" diambil pada DB yang sama dengan planner flag
+(`enable_indexscan`/`enable_bitmapscan = off`) supaya perbandingannya
+apel-ke-apel, bukan dari catatan lama.
+
+### 19.4 Yang TIDAK ikut diperbaiki (diukur, biar tidak disangka beres)
+
+1. **`max(trade_date) from research.latest_pit` (VIEW) tetap ±204 ms** — `DISTINCT
+   ON` memaksa materialisasi 284.056 baris, jadi index ini tidak bisa menolong.
+   Ini §13.4 butir 2 yang masih terbuka, dan dampaknya nyata: pola itu dipakai
+   ~8 tempat (`api/analytics.py`, `api/services.py` ×3, `api/dividends.py`,
+   `health.py`, `live_capture.py` ×2) plus subquery
+   `where trade_date = (select max(trade_date) from research.latest_pit)`.
+   Catatan jujur: 204 ms itu **serial** (tanpa worker), jadi bukan sumber error
+   intermiten §13 — hanya biaya yang belum dibayar.
+   Perbandingan: `max(trade_date)` yang sama dari **tabel dasarnya** sekarang
+   0,16 ms.
+2. `select distinct trade_date from research.prices_pit order by 1 desc limit 300`
+   **tetap** Parallel Seq Scan (±158 ms): 250 tanggal terbaru ≈ 240 ribu baris,
+   jadi index tidak menghemat apa pun untuk bentuk itu.
+3. `research.prices_asof(knowledge_date)` menyaring `knowledge_date`, bukan
+   `trade_date` — index ini tidak menyentuhnya.
+
+### 19.5 Catatan penting soal isi working tree
+
+Sesi ini **hanya** menyentuh `sql/research_schema.sql` + `AUDIT.md`. Saat index
+ini dikerjakan, working tree juga memuat perubahan **pekerjaan lain yang
+berjalan paralel** (`cf_transport.py`, `live_capture.py`, `cli.py`, dan
+`tests/test_live_capture_throttle.py` — throttle/revive Chrome) yang **bukan**
+dari sesi ini dan sengaja **tidak** ikut di-commit di sini.
+
+### 19.6 Sisa peta jalan
+
+1. Arahkan ~8 pemanggil `max(trade_date) from research.latest_pit` ke sumber
+   murah — entah `research.prices_pit` langsung (kini 0,16 ms) atau satu view
+   kecil `research.latest_session` supaya niatnya eksplisit, bukan coupling
+   tersembunyi antara view dan tabel dasarnya.
+2. `prices_asof` / `prices_asof_adj` (STABLE, memindai seluruh tabel tiap
+   panggilan) belum ditinjau sama sekali.
