@@ -52,6 +52,17 @@ def _ohl(v):
     return v if v else None
 
 
+def _prev_close(r):
+    """IDX sometimes omits PreviousPrice but still sends Change; derive prev = close - change (same as cli.py)."""
+    if r.previous is not None:
+        return r.previous
+    if r.close is not None and r.change is not None:
+        return r.close - r.change
+    return None
+
+assert _prev_close(type("R", (), {"previous": None, "close": 110, "change": 10})) == 100
+assert _prev_close(type("R", (), {"previous": 95, "close": 110, "change": 10})) == 95
+
 def load_env() -> None:
     """Load .env file into os.environ if not already set."""
     env_path = pathlib.Path(__file__).parent.parent / ".env"
@@ -142,7 +153,7 @@ def backfill(years: float | None = None, start_date: date | None = None, end_dat
                             name, foreign_buy, foreign_sell, foreign_net)
                            values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (r.code, d, _ohl(r.open), _ohl(r.high), _ohl(r.low),
-                         _num(r.close), _num(r.previous), _num(r.volume),
+                         _num(r.close), _num(_prev_close(r)), _num(r.volume),
                          _num(r.value), _num(r.frequency), r.source,
                          r.name, _num(r.foreign_buy), _num(r.foreign_sell),
                          _num(r.foreign_net)),
