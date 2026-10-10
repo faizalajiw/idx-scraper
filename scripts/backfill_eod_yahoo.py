@@ -36,7 +36,7 @@ def main() -> int:
             return 0
 
         # 1) universe + nama + prev_close (dari latest_pit 24 Sep)
-        cur.execute("select max(trade_date) from research.latest_pit")
+        cur.execute("select max(trade_date) from research.prices_pit")
         prev_date = cur.fetchone()[0]
         cur.execute(
             """select code, name, close
@@ -183,7 +183,7 @@ def main() -> int:
             "select count(*) from research.latest_pit where trade_date=%s", (TARGET,)
         )
         print(f"latest_pit rows @ {TARGET}: {cur.fetchone()[0]}")
-        cur.execute("select max(trade_date) from research.latest_pit")
+        cur.execute("select max(trade_date) from research.prices_pit")
         print(f"latest_pit max trade_date sekarang: {cur.fetchone()[0]}")
     return 0
 

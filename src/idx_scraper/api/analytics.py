@@ -254,16 +254,19 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
     multiplying with the day's close so cross-stock sums are meaningful.
     """
     with get_cursor() as cur:
+        cur.execute("select max(trade_date) from research.latest_pit where foreign_net is not null")
+        max_date = cur.fetchone()[0]
+
         cur.execute(
             """select trade_date as date,
                       sum(foreign_buy * close) as buy,
                       sum(foreign_sell * close) as sell,
                       sum(foreign_net * close) as net
                from research.latest_pit
-               where trade_date >= (select max(trade_date) from research.latest_pit) - %s::int
+               where trade_date >= %s::date - %s::int
                  and foreign_net is not null and close is not null
                group by trade_date order by trade_date""",
-            (days,),
+            (max_date, days),
         )
         by_day = cur.fetchall()
 
@@ -271,10 +274,10 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
             """select code, name, foreign_net * close as net_idr,
                       percent
                from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit
-                                    where foreign_net is not null)
+               where trade_date = %s
                  and foreign_net is not null and foreign_net <> 0 and close is not null
-               order by net_idr desc limit 10"""
+               order by net_idr desc limit 10""",
+            (max_date,),
         )
         inn = cur.fetchall()
 
@@ -282,10 +285,10 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
             """select code, name, foreign_net * close as net_idr,
                       percent
                from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit
-                                    where foreign_net is not null)
+               where trade_date = %s
                  and foreign_net is not null and foreign_net <> 0 and close is not null
-               order by net_idr asc limit 10"""
+               order by net_idr asc limit 10""",
+            (max_date,),
         )
         out = cur.fetchall()
 
@@ -1531,10 +1534,14 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
     overvalued.sort(key=lambda r: r["z_score"], reverse=True)
 
     with get_cursor() as cur:
+        cur.execute("select max(trade_date) from research.latest_pit")
+        max_date = cur.fetchone()[0]
+
         cur.execute(
             """select distinct on (code) code, name from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit)
-               order by code, knowledge_date desc"""
+               where trade_date = %s
+               order by code, knowledge_date desc""",
+            (max_date,),
         )
         names = {r["code"]: r["name"] for r in cur.fetchall()}
     for lst in (undervalued, overvalued):

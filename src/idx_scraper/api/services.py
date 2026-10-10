@@ -208,12 +208,16 @@ def get_market_overview() -> dict[str, Any]:
         idx = cur.fetchone()
 
         # Full-market EOD totals from the research superset (latest trade_date).
+        cur.execute("select max(trade_date) from research.latest_pit")
+        max_date = cur.fetchone()[0]
+
         cur.execute(
             """select sum(volume) as total_volume,
                       sum(value)  as total_value,
                       count(distinct code) as stock_count
                from research.latest_pit
-               where trade_date = (select max(trade_date) from research.latest_pit)"""
+               where trade_date = %s""",
+            (max_date,),
         )
         totals = cur.fetchone()
 
@@ -228,18 +232,20 @@ def get_market_overview() -> dict[str, Any]:
             cur.execute(
                 """select code, close, percent
                    from research.latest_pit
-                   where trade_date = (select max(trade_date) from research.latest_pit)
+                   where trade_date = %s
                      and percent is not null and volume > 0 and percent > 0
-                   order by percent desc limit 5"""
+                   order by percent desc limit 5""",
+                (max_date,),
             )
             gainers = cur.fetchall()
 
             cur.execute(
                 """select code, close, percent
                    from research.latest_pit
-                   where trade_date = (select max(trade_date) from research.latest_pit)
+                   where trade_date = %s
                      and percent is not null and volume > 0 and percent < 0
-                   order by percent asc limit 5"""
+                   order by percent asc limit 5""",
+                (max_date,),
             )
             losers = cur.fetchall()
             movers_at, movers_src = None, "eod"
