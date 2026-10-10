@@ -64,12 +64,27 @@ def _fetch_composite_idx() -> tuple[float, float | None, float | None] | None:
 
 
 def _prev_trading_close(cur, today) -> float | None:
-    """Close COMPOSITE hari bursa terakhir sebelum today (dari index_summary_daily)."""
+    """Close COMPOSITE hari bursa terakhir sebelum today.
+
+    Prioritas: index_summary_daily. Fallback: baris EOD idx-live di index_quotes
+    (summary bisa belum terisi untuk hari sebelumnya, mis. 9 Okt 2026).
+    """
     cur.execute(
         """select close from index_summary_daily
            where code = 'COMPOSITE' and date < %s and close > 0
            order by date desc limit 1""",
         (today,),
+    )
+    row = cur.fetchone()
+    if row:
+        return float(row[0])
+    cur.execute(
+        """select close from index_quotes
+           where source = 'IDX' and code = 'COMPOSITE' and close > 0
+             and metadata->>'src' = 'idx-live'
+             and captured_at < %s
+           order by captured_at desc limit 1""",
+        (datetime.combine(today, CLOSE_T, tzinfo=WIB),),
     )
     row = cur.fetchone()
     return float(row[0]) if row else None
