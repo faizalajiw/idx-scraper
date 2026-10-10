@@ -125,7 +125,7 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
 
     with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
-        cur.execute("select max(trade_date) from research.latest_pit")
+        cur.execute("select max(trade_date) from research.prices_pit")
         stocks_latest = cur.fetchone()[0]
         # Close resmi COMPOSITE = baris index_quotes setelah 16:00 WIB.
         cur.execute(

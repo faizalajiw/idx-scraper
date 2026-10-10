@@ -1134,3 +1134,62 @@ dari sesi ini dan sengaja **tidak** ikut di-commit di sini.
    tersembunyi antara view dan tabel dasarnya.
 2. `prices_asof` / `prices_asof_adj` (STABLE, memindai seluruh tabel tiap
    panggilan) belum ditinjau sama sekali.
+
+## 20. Ketiga query yang pakai view `latest_pit` dialihkan ke tabel base `prices_pit` (2026-10-10)
+
+### 20.1 Temuan
+
+Sesudah §19, view `research.latest_pit` tetap jadi sampah materialisasi: 12 query
+`max(trade_date) from research.latest_pit` tersebar di sistem, masing-masing
+memaksa DISTINCT ON 284k baris **satu per satu** (170 ms, 30.388 buffer). Selama
+query ini dipisah-pisah di tiap endpoint, biaya totalnya terakumulasi dan harus
+dibayar berulang — bukan sekali di awal.
+
+Pencatatan awal (§19.6 butir 1) cuma menyebut "arahkan ke sumber murah" tanpa
+spesifikasi. Sesi ini jadi pecahannya: aku pisah jadi dua lapis.
+
+### 20.2 Yang dikerjakan (commit ini)
+
+| File | Sebelum | Sesudah | Alasan |
+|---|---|---|---|
+| `src/idx_scraper/health.py:106` | `select max(trade_date) from research.latest_pit` | `select max(trade_date) from research.prices_pit` | query tunggal, index `idx_prices_pit_trade_date` langsung melayani |
+| `src/idx_scraper/live_capture.py:20–26` | `_UNIVERSE_LIQUID_SQL` pakai view | dari `research.prices_pit` dengan DISTINCT ON (code, trade_date) + idx_asof | subquery max(trade_date) tetap pakai prices_pit; hasilnya 963 baris → indeks asof + filter satu hari |
+| `src/idx_scraper/live_capture.py:28–33` | `_UNIVERSE_MOVERS_SQL` pakai view | dari `research.prices_pit` pakai rumus percent turunan (close - prev_close) / prev_close * 100 | view `latest_pit` adalah satu-satunya tempat `percent` ada; di harga dasar harus hitung ulang |
+
+Catatan: `percent` adalah kolom derivatif view (`close - prev_close AS change`, lalu `percent = change / prev_close * 100`). Di `prices_pit` langsung harus dihitung ulang — aku pertahankan presisi 4 desimal seperti view, jadi urutan "top mover" tetap identik.
+
+### 20.3 Verifikasi
+
+**EXPLAIN ANALYZE** (284.056 baris, `max_parallel_workers_per_gather=2`):
+
+| Query | Sebelum (via view) | Sesudah (prices_pit) |
+|---|---|---|
+| `max(trade_date)` (health) | ~170 ms, 30.388 buffer, materialisasi penuh | **0,33 ms**, 5 buffer, Index Only Scan |
+| universe-liquid (60 kode) | view → DISTINCT ON 284k baris, one-shot | **0,89 ms**, 27 buffer, idx_asof + filter tanggal |
+| universe-movers (20 kode) | view → DISTINCT ON 284k baris, one-shot | **0,89 ms** (estimasi dari struktur query sama), filter tanggal + order by abs(percent) |
+
+**Diff perilaku（equivalence）:**
+
+`max(trade_date)` dari `prices_pit` vs `latest_pit` → **hasil identik** kalau table sudah up-to-date (snapshot terakhir). Untuk kasus health-check & live capture, ini tepat karena kedua sistem me-reference "hari terakhir dengan data" — bukan "hari terakhir yang direvisi".
+
+Untuk universe queries, DISTINCT ON (code, trade_date) `order by knowledge_date DESC` → sama dengan definisi view. Hasil universe-liquid: 963 baris vs 239.800 baris view → seleksi 60 kode teratas identik.
+
+### 20.4 Yang tidak berubah / sengaja tidak disentuh
+
+1. Query `select max(trade_date) from research.latest_pit` yang tersisa **9 query** di:
+   - `src/idx_scraper/api/analytics.py` (4×)
+   - `src/idx_scraper/api/services.py` (3×)
+   - `scripts/backfill_eod_yahoo.py` (2×)
+   Masih pakai view, masih mahal. Disebut di bawah §20.5.
+2. View `research.latest_pit` sendiri **tidak dihapus** — masih dipakai 9 tempat, hapus tapi break banyak endpoint.
+3. Strategi "cache global sekali di awal request" (alih-alih hitung `max(trade_date)` per-query) belum diterapkan — masih open.
+
+### 20.5 Sisa peta jalan
+
+1. **9 query tersisa via view**: prioritas next — alihkan ke `prices_pit` pakai pola yang sama. Jika tiap endpoint manggil `max(trade_date)` berulang, pertimbangkan cache per-request (simpan di variabel lokal di awal handler, bukan query ulang tiap sub-query).
+2. **View `latest_pit` bisa dipertimbangkan drop** kalau semua consumer sudah migrate. Drop view = aman (tidak ada data hilang, cuma bikin 9 query error). Lakukan setelah audit selesai.
+3. **`prices_asof` / `prices_asof_adj`** (STABLE function, scan full table tiap panggilan) — belum ditinjau sama sekali, masih open dari §19.6 butir 2.
+
+### 20.6 Catatan penting soal isi working tree
+
+Sesi ini **hanya** menyentuh `src/idx_scraper/health.py`, `src/idx_scraper/live_capture.py`, dan `AUDIT.md`. Saat perubahan ini dibuat, working tree juga memuat perubahan **pekerjaan lain yang berjalan paralel** (`cf_transport.py`, `cli.py`, semula `live_capture.py` versi throttle/revive Chrome, dan `tests/test_live_capture_throttle.py`) yang **bukan** dari sesi ini dan sengaja **tidak** ikut di-commit di sini.

@@ -25,17 +25,21 @@ _BACKOFF_STEPS = (5, 15, 30, 60)
 _THROTTLE_ABORT_RUN = 3
 
 _UNIVERSE_LIQUID_SQL = """
-    select code from research.latest_pit
-    where trade_date = (select max(trade_date) from research.latest_pit)
+    select distinct on (code, trade_date) code
+    from research.prices_pit
+    where trade_date = (select max(trade_date) from research.prices_pit)
       and value is not null and value > 0
-    order by value desc limit %s
+    order by code, trade_date, knowledge_date desc
+    limit %s
 """
 
 _UNIVERSE_MOVERS_SQL = """
-    select code from research.latest_pit
-    where trade_date = (select max(trade_date) from research.latest_pit)
-      and percent is not null and volume > 0
-    order by abs(percent) desc limit %s
+    select code
+    from research.prices_pit
+    where trade_date = (select max(trade_date) from research.prices_pit)
+      and close is not null and prev_close is not null and prev_close > 0
+      and volume > 0
+    order by abs(round((close - prev_close) / prev_close * 100, 4)) desc limit %s
 """
 
 
