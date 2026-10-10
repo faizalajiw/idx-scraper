@@ -60,6 +60,11 @@ class MarketTradeSummary(BaseModel):
     non_regular_share_value: float | None = None
 
 
+class StockSearchResult(BaseModel):
+    code: str
+    name: str | None = None
+
+
 class SessionMovers(BaseModel):
     date: str | None = None
     captured_at: str | None = None

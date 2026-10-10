@@ -1623,6 +1623,41 @@ def get_screener(
     return out[:limit]
 
 
+def search_stocks(q: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Cari emiten by kode atau nama — dipakai command palette frontend.
+
+    Query nama langsung dari research.latest_pit (bukan lewat _screener_rows):
+    cukup kode + nama, tanpa menghitung indikator tiap emiten, jadi murah dan
+    aman dipanggil saat user mengetik. Urutan: kecocokan awalan kode dulu,
+    baru kecocokan substring nama.
+    """
+    needle = q.strip()
+    if not needle:
+        return []
+    with get_cursor() as cur:
+        cur.execute(
+            """with latest as (
+                 select distinct on (code) code, name, trade_date
+                 from research.latest_pit
+                 order by code, trade_date desc
+               )
+               select code, name from latest
+               where upper(code) like %(prefix)s
+                  or coalesce(name, '') ilike %(substr)s
+               order by
+                 case when upper(code) like %(prefix)s then 0 else 1 end,
+                 length(code), code
+               limit %(limit)s""",
+            {
+                "prefix": f"{needle.upper()}%",
+                "substr": f"%{needle}%",
+                "limit": limit,
+            },
+        )
+        rows = cur.fetchall()
+    return [{"code": r["code"], "name": r["name"]} for r in rows]
+
+
 def _screener_rows() -> list[dict[str, Any]]:
     """Baris screener penuh (semua emiten, semua metrik) — cache 10 menit.
 

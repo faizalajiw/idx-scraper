@@ -47,6 +47,7 @@ from .schemas import (
     SessionMovers,
     Signal,
     SignalTrack,
+    StockSearchResult,
     SmartMoneyPatternsBoard,
     SmartMoneyRadar,
     SmartMoneyStock,
@@ -235,6 +236,18 @@ def broker_activity(limit: int = Query(default=25, ge=1, le=200)) -> dict:
     lolos, ``validated`` False dan ``rows`` kosong (lihat research.broker_activity).
     """
     return analytics.get_broker_activity(limit)
+
+
+@app.get("/api/search", response_model=list[StockSearchResult])
+def search_stocks(
+    q: str = Query(default="", max_length=50, description="Kode atau nama emiten"),
+    limit: int = Query(default=10, ge=1, le=25),
+) -> list[dict]:
+    """Cari emiten by kode/nama — untuk command palette frontend.
+
+    Query nama langsung dari research.latest_pit; murah karena tidak menghitung
+    indikator. Q kosong = hasil kosong (bukan daftar penuh)."""
+    return analytics.search_stocks(q, limit)
 
 
 @app.get("/api/watchlist", response_model=list[WatchlistRow])
