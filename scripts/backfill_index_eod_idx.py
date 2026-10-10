@@ -12,6 +12,11 @@ Semantik field IDX GetIndexList untuk COMPOSITE:
 Kita simpan close=current (angka resmi hari ini), source='IDX', captured_at
 16:00 WIB supaya jadi baris terbaru yang menang atas snapshot polling lama.
 
+Guard hari libur & change kosong:
+- Akhir pekan dilewati (IDX tetap membalas change 0 di luar hari bursa).
+- Kalau IDX membalas change 0/None, change & percent diturunkan dari close
+  hari bursa terakhir (index_summary_daily), bukan disimpan 0 mentah.
+
 Idempotent: aman dijalankan berulang (dipanggil scheduler harian di
 cli._job_index_eod_close jam 16:10 WIB). Butuh Chrome profile yang sudah
 lolos Cloudflare (IDX_CHROME_PROFILE_DIR) sama seperti scrape EOD lainnya.
@@ -58,22 +63,44 @@ def _fetch_composite_idx() -> tuple[float, float | None, float | None] | None:
             pass
 
 
+def _prev_trading_close(cur, today) -> float | None:
+    """Close COMPOSITE hari bursa terakhir sebelum today (dari index_summary_daily)."""
+    cur.execute(
+        """select close from index_summary_daily
+           where code = 'COMPOSITE' and date < %s and close > 0
+           order by date desc limit 1""",
+        (today,),
+    )
+    row = cur.fetchone()
+    return float(row[0]) if row else None
+
 def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
     """Tulis close resmi IDX hari ini ke index_quotes + index_summary_daily.
 
     Returns (summary_upserts, quote_snapshots) — masing-masing 0/1 (satu hari).
     """
+    today = datetime.now(WIB).date()
+    if today.weekday() >= 5:  # Sabtu/Minggu: bukan hari bursa, IDX mengembalikan change 0
+        print(f"[skip] {today} adalah akhir pekan, bukan hari bursa.")
+        return 0, 0
+
     comp = _fetch_composite_idx()
     if comp is None:
         print("[abort] COMPOSITE tidak ditemukan / current kosong dari IDX.")
         return 0, 0
     close_today, change, percent = comp
 
-    today = datetime.now(WIB).date()
     captured = datetime.combine(today, CLOSE_T, tzinfo=WIB)
 
     with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
+
+        # IDX kadang mengembalikan change 0/None; turunkan dari close hari bursa sebelumnya.
+        if not change:
+            prev_close = _prev_trading_close(cur, today)
+            if prev_close:
+                change = close_today - prev_close
+                percent = change / prev_close * 100
 
         # index_quotes: baris close resmi IDX (idempotent via source+code+captured_at)
         cur.execute(
