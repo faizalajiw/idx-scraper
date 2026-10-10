@@ -196,6 +196,42 @@ class BrowserTransport:
 
         return self._call(_fetch())
 
+    def get_bytes(self, url: str) -> bytes | None:
+        """Fetch any URL (biasanya binary: gambar) dari dalam halaman yang sudah lolos CF.
+
+        Dipakai untuk aset statis ber-proteksi Cloudflare (mis. logo broker IDX)
+        yang tidak bisa diunduh dengan curl biasa.
+        """
+        page = self.ensure_open()
+
+        async def _fetch():
+            if page is None or page.is_closed():
+                raise RuntimeError("browser page closed (revive blocked or profile locked)")
+            data = await page.evaluate(
+                """async (u) => {
+                    const r = await fetch(u);
+                    if (!r.ok) return { status: r.status, b64: null };
+                    const buf = await r.arrayBuffer();
+                    let binary = '';
+                    const bytes = new Uint8Array(buf);
+                    const chunk = 0x8000;
+                    for (let i = 0; i < bytes.length; i += chunk) {
+                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                    }
+                    return { status: r.status, b64: btoa(binary) };
+                }""",
+                url,
+            )
+            self.last_status = data["status"]
+            if data["status"] != 200 or not data.get("b64"):
+                print(f"[warn] CF fetch {url} status {data['status']}", file=sys.stderr)
+                return None
+            import base64
+
+            return base64.b64decode(data["b64"])
+
+        return self._call(_fetch())
+
     def close(self) -> None:
         if self._loop is None:
             return
