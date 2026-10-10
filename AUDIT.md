@@ -20,18 +20,17 @@ next build sukses (14 route)**.
 | `src/idx_scraper/alert_rules.py` | Kosakata aturan pantauan (harga naik/turun, RSI, lonjakan volume) + logika evaluasi murni + latch anti-spam `RuleState` (re-arm setelah kondisi normal kembali). Tanpa I/O DB agar dipakai bersama API dan CLI worker. |
 | `src/idx_scraper/alerts_store.py` | CRUD daftar aturan ke `data/alerts.json` (JSON + tulis atomik temp-file→replace). Config pengguna sengaja di file, bukan DB — API tetap read-only. |
 | `src/idx_scraper/api/alerts.py` | Service aturan: validasi payload, dedup aturan identik, evaluasi live terhadap layer research Postgres (indikator & snapshot sama persis dengan yang dilihat dashboard). |
-| `src/idx_scraper/api/dividends.py` | Endpoint dividen: overview TTM, daftar semua emiten pembagi, detail per emiten (riwayat, total per tahun, growth), ledger aksi korporasi. |
 | `src/idx_scraper/api/simulation.py` | Lapisan API simulator: katalog strategi + default biaya, validasi, dan orkestrasi `run_backtest`. Tidak ada persistensi — murni komputasi. |
 | `src/idx_scraper/api/sector_lookup.json` | Layer pemetaan emiten→sektor hasil generate (Yahoo sector/industry), menutupi hampir seluruh emiten yang punya harga. |
 | `scripts/refresh_sector_map.py` | Generator `sector_lookup.json` + laporan coverage. |
-| `tests/test_alert_rules.py`, `tests/test_alerts_store.py`, `tests/test_dividends.py`, `tests/test_backtest_costs.py`, `tests/test_backtest_rebalance.py`, `tests/test_sector_map.py`, `tests/test_simulation.py` | Suite pengujian untuk semua fitur di atas. |
+| `tests/test_alert_rules.py`, `tests/test_alerts_store.py`, `tests/test_backtest_costs.py`, `tests/test_backtest_rebalance.py`, `tests/test_sector_map.py`, `tests/test_simulation.py` | Suite pengujian untuk semua fitur di atas. |
 
 **File berubah:**
 
 | File | Perubahan |
 |---|---|
-| `src/idx_scraper/api/app.py` | Registrasi endpoint: `/api/dividends/*`, `/api/stocks/{code}/dividends`, `/api/corporate-actions`, CRUD `/api/alerts` (+`/test`), `GET /api/backtest/config`, `POST /api/backtest/run`, helper `_parse_optional_date` (422 untuk format tanggal salah). |
-| `src/idx_scraper/api/schemas.py` | +341 baris: skema respons dividen, alert, backtest (request/config/result/ledger), quality tambahan. |
+| `src/idx_scraper/api/app.py` | Registrasi endpoint: `CRUD `/api/alerts` (+`/test`), `GET /api/backtest/config`, `POST /api/backtest/run`, helper `_parse_optional_date` (422 untuk format tanggal salah). |
+| `src/idx_scraper/api/schemas.py` | +341 baris: skema alert, backtest (request/config/result/ledger), quality tambahan. |
 | `src/idx_scraper/backtest.py` | Mesin backtest point-in-time: model biaya nyata (komisi/sisi, pajak jual, slippage, cap partisipasi terhadap nilai transaksi harian), frekuensi rebalance `daily/weekly/monthly` (di antara rebalance posisi dibiarkan drift), ledger per rebalance (trade, harga eksekusi, fee, posisi akhir), pemisahan metrik bruto vs neto + benchmark buy & hold. |
 | `src/idx_scraper/api/sector_map.py` | Dua layer pemetaan sektor: `SECTOR_MAP` kurasi manual (selalu menang) → `sector_lookup.json` hasil generate → fallback `"Lainnya"`. Vocabulary bucket kanonik (`BUCKETS`), `sector_for()`, `coverage()`. Menghapus ketergantungan pada map manual yang hanya menutup ~25% emiten. |
 | `src/idx_scraper/api/analytics.py` | Migrasi pemakaian sektor dari `SECTOR_MAP.get(...)` ke `sector_for(...)` (analisis sektor + RRG). |
@@ -48,18 +47,16 @@ next build sukses (14 route)**.
 | File | Fungsi |
 |---|---|
 | `app/pantau/page.tsx` | Halaman Pantau: watchlist + chart + pembuat aturan + status Telegram dalam satu alur. |
-| `app/dividen/page.tsx` | Halaman Dividen: statistik TTM, chart aktivitas per tahun, yield tertinggi, baru dibayar, semua emiten pembagi (filter/sort), panel detail per emiten, aksi korporasi. Disclaimer jujur soal tidak ada kalender ex-date mendatang. |
 | `app/backtest/page.tsx` | Simulator: pilih strategi & parameter, periode, modal, frekuensi rebalance, preset biaya (tanpa biaya / standar IDX / konservatif) + knob manual. Menampilkan metrik bruto vs neto vs buy & hold, dampak biaya, ledger rebalance, dan penjelasan cara membaca hasil. |
 | `components/AlertRules.tsx` | UI CRUD aturan pantauan (tipe, ambang, catatan) dengan status live per aturan. |
 | `components/TelegramStatus.tsx` | Cek koneksi bot + kirim pesan uji; panduan setup bila env belum diisi. |
 | `components/EquityCurveChart.tsx` | Chart kurva ekuitas + benchmark. |
 | `components/RebalanceLedger.tsx` | Tabel trade & posisi per sesi rebalance (bukti churn). |
-| `components/DividendYearChart.tsx`, `components/DividendDetailPanel.tsx` | Visualisasi dividen tahunan dan detail per emiten. |
 
-**File berubah:** `lib/types.ts` (mirror skema backend untuk dividen/alert/backtest),
+**File berubah:** `lib/types.ts` (mirror skema backend untuk alert/backtest),
 `lib/api.ts` (`runBacktest`, `fetchBacktestConfig`, `createAlert`, `deleteAlert`,
 `testTelegram`), `lib/hooks.ts` (hook SWR untuk semua endpoint baru),
-`components/Sidebar.tsx` (nav Pantau & Dividen), `README.md`.
+`components/Sidebar.tsx` (nav Pantau), `README.md`.
 
 ---
 
@@ -97,8 +94,8 @@ disentuh sama sekali.
 | Import sanity semua modul yang diedit + `py_compile` scripts | ✅ |
 | `tsc --noEmit` (frontend) | ✅ bersih |
 | `next build` (frontend) | ✅ sukses, 14 route |
-| Verifikasi runtime 2026-09-26: API hidup, CRUD alert (create→duplikat 422→delete→404), endpoint dividen & `POST /api/backtest/run` (240 hari bursa, 13 rebalance, drag 1,73%) | ✅ semua 200/422/404 sesuai harapan |
-| Verifikasi browser (headless Chrome): halaman `/pantau`, `/dividen`, `/backtest` ter-render lengkap dengan data | ✅ |
+| Verifikasi runtime 2026-09-26: API hidup, CRUD alert (create→duplikat 422→delete→404), endpoint `POST /api/backtest/run` (240 hari bursa, 13 rebalance, drag 1,73%) | ✅ semua 200/422/404 sesuai harapan |
+| Verifikasi browser (headless Chrome): halaman `/pantau`, `/backtest` ter-render lengkap dengan data | ✅ |
 
 ---
 
@@ -107,7 +104,7 @@ disentuh sama sekali.
 1. **Telegram opsional** — aturan tetap tersimpan & dievaluasi tanpa token;
    pengiriman butuh `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` di `idx-scraper/.env`
    (cek lewat halaman Pantau → "Kirim pesan uji").
-2. **Data historis harus di-seed** agar dividen, backtest, dan sinyal bermakna:
+2. **Data historis harus di-seed** agar backtest dan sinyal bermakna:
    `python -m idx_scraper.cli eod` lalu `... seed`, dan backfill 1 tahun via
    `scripts/backfill_raw_eod.py` bila perlu.
 3. **`sector_lookup.json` adalah artefak generate** — regenerasi via
@@ -1105,7 +1102,7 @@ apel-ke-apel, bukan dari catatan lama.
 1. **`max(trade_date) from research.latest_pit` (VIEW) tetap ±204 ms** — `DISTINCT
    ON` memaksa materialisasi 284.056 baris, jadi index ini tidak bisa menolong.
    Ini §13.4 butir 2 yang masih terbuka, dan dampaknya nyata: pola itu dipakai
-   ~8 tempat (`api/analytics.py`, `api/services.py` ×3, `api/dividends.py`,
+   ~8 tempat (`api/analytics.py`, `api/services.py` ×3,
    `health.py`, `live_capture.py` ×2) plus subquery
    `where trade_date = (select max(trade_date) from research.latest_pit)`.
    Catatan jujur: 204 ms itu **serial** (tanpa worker), jadi bukan sumber error

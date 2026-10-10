@@ -3,7 +3,7 @@
 Run locally:
     uvicorn idx_scraper.api.app:app --reload --port 8000
 
-This API is READ-ONLY. It does not ingest or mutate data — the APScheduler CLI
+This API is READ-ONLY. It does not ingest or mutate data â€” the APScheduler CLI
 worker remains the sole writer. There is currently NO authentication on these
 endpoints; they are intended for local/trusted-network use. Before exposing this
 service publicly, add authentication/authorization and rate limiting.
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import watchlist_store
 
-from . import alerts, analytics, dividends, services, simulation
+from . import alerts, analytics, services, simulation
 from .config import get_settings
 from .database import close_pool, get_cursor, init_pool
 from .schemas import (
@@ -31,10 +31,6 @@ from .schemas import (
     BacktestResult,
     BrokerActivity,
     BrokerFlow,
-    CorpActionRow,
-    DividendDetail,
-    DividendOverview,
-    DividendStock,
     ForeignFlow,
     HoldCheckResponse,
     MarketLeaders,
@@ -74,7 +70,7 @@ from .schemas import (
 def _warm_heavy_caches() -> None:
     """Hitung cache berat sekali saat startup (background thread, fire-and-forget).
 
-    Event study butuh ~2 menit saat dingin — tanpa warm-up, permintaan pertama
+    Event study butuh ~2 menit saat dingin â€” tanpa warm-up, permintaan pertama
     ke Ruang Keputusan/Event Study menggantung sampai selesai hitung. Kalau
     gagal (DB belum siap dsb.), cache terisi otomatis di permintaan berikutnya.
     """
@@ -196,7 +192,7 @@ def market_trade_summary(
 
 @app.get("/api/market/regime", response_model=MarketRegime)
 def market_regime() -> dict:
-    """Regime IHSG (ADX + realized vol) — konteks untuk semua halaman analisis."""
+    """Regime IHSG (ADX + realized vol) â€” konteks untuk semua halaman analisis."""
     return analytics.get_market_regime()
 
 
@@ -209,7 +205,7 @@ def market_leaders(
     metric: str = Query(default="volume", description="volume | value | frequency"),
     limit: int = Query(default=5, ge=1, le=50),
 ) -> dict:
-    """Top emiten by volume/value/frequency — realtime saat jam bursa, else EOD."""
+    """Top emiten by volume/value/frequency â€” realtime saat jam bursa, else EOD."""
     return services.get_market_leaders(metric, limit)
 
 @app.get("/api/market/top-brokers", response_model=TopBrokers)
@@ -370,7 +366,7 @@ def stock_decision(code: str) -> dict:
 
     Menggabungkan hold-check (verdict dasar), regime IHSG, sentimen aliran,
     jejak asing 10 sesi, base rate event study, dan level pembatalan teknikal
-    ke dalam satu respons — semua dari sumber yang sudah ada, cache 30 menit.
+    ke dalam satu respons â€” semua dari sumber yang sudah ada, cache 30 menit.
     """
     return analytics.get_stock_decision(code.upper())
 
@@ -454,7 +450,7 @@ def smart_money_track_record() -> dict:
     """Track record pola klasik jejak smart money (120 sesi terakhir).
 
     Berapa kali tiap pola muncul, dan forward return-nya (entry T+1) plus
-    alpha vs pasar — menjawab "pola ini terbukti tidak". Agregasi di modul
+    alpha vs pasar â€” menjawab "pola ini terbukti tidak". Agregasi di modul
     pure ``smart_money``; forward return + alpha dihitung di service
     ``analytics``. Cache 1 jam.
     """
@@ -466,8 +462,8 @@ def smart_money_patterns_board() -> dict:
     """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir.
 
     Dikelompokkan per pola (angka historisnya milik pola, bukan emiten) dan
-    diurutkan berdasar kekuatan bukti, sehingga `initiation` — pola dengan
-    catatan terkuat tapi jarang menyala — terlihat tanpa harus kebetulan
+    diurutkan berdasar kekuatan bukti, sehingga `initiation` â€” pola dengan
+    catatan terkuat tapi jarang menyala â€” terlihat tanpa harus kebetulan
     muncul di emiten yang sedang dibuka. Emiten di dalam tiap kelompok urut
     |net rupiah| dengan lantai likuiditas yang sama seperti radar. Cache 30
     menit.
@@ -565,7 +561,7 @@ def signals_track() -> dict:
     """Track record sinyal BUY/SELL: hit-rate, forward return, abnormal vs pasar.
 
     Statistik dipecah per jenis sinyal, horizon, dan regime IHSG saat sinyal
-    terbentuk — supaya "sinyal ini benar-benar berguna?" terjawab dengan angka,
+    terbentuk â€” supaya "sinyal ini benar-benar berguna?" terjawab dengan angka,
     bukan opini. Log diisi job harian (`idx signal-log`) atau backfill otomatis.
     """
     return analytics.get_signal_track()
@@ -600,48 +596,6 @@ def factors_overview() -> dict:
 def regime_history(days: int = Query(default=90, ge=30, le=500)) -> dict:
     """Histori regime harian + agregat (% waktu per regime, transisi)."""
     return analytics.get_regime_history(days=days)
-
-
-# ------------------------------------------------ dividends & corp actions
-
-
-@app.get("/api/dividends/overview", response_model=DividendOverview)
-def dividends_overview() -> dict:
-    """Dividend totals, history by year, recent payouts and the top trailing yields."""
-    return dividends.get_overview()
-
-
-@app.get("/api/dividends/stocks", response_model=list[DividendStock])
-def dividends_stocks(
-    min_yield: float | None = Query(default=None, ge=0, description="Yield TTM minimum (%)"),
-    sort: str = Query(default="yield", pattern="^(yield|cash|recent)$"),
-    limit: int = Query(default=200, ge=1, le=500),
-) -> list[dict]:
-    """Every emiten that has ever paid cash, with its trailing-12-month yield."""
-    return dividends.get_stocks(min_yield=min_yield, sort=sort, limit=limit)
-
-
-@app.get("/api/stocks/{code}/dividends", response_model=DividendDetail)
-def stock_dividends(code: str) -> dict:
-    """One emiten's cash-dividend history, annual totals and split history."""
-    result = dividends.get_stock(code)
-    if result is None:
-        raise HTTPException(
-            status_code=404, detail=f"Tidak ada data untuk {code.strip().upper()}"
-        )
-    return result
-
-
-@app.get("/api/corporate-actions", response_model=list[CorpActionRow])
-def corporate_actions(
-    code: str | None = Query(default=None, description="Filter satu emiten"),
-    action_type: str | None = Query(
-        default=None, pattern="^(dividend|split|reverse_split|bonus|rights)$"
-    ),
-    limit: int = Query(default=200, ge=1, le=500),
-) -> list[dict]:
-    """Raw corporate-action ledger (splits, reverse splits, dividends), newest first."""
-    return dividends.get_corporate_actions(code=code, action_type=action_type, limit=limit)
 
 
 # ------------------------------------------------------ alerts & backtest
@@ -683,7 +637,7 @@ def alerts_test() -> dict:
     return {
         "sent": sent,
         "detail": (
-            "Pesan uji terkirim — cek chat Telegram kamu."
+            "Pesan uji terkirim â€” cek chat Telegram kamu."
             if sent
             else "Gagal mengirim pesan uji. Cek token bot dan chat id."
         ),
@@ -700,7 +654,7 @@ def backtest_config() -> dict:
 def backtest_run(payload: BacktestRequest) -> dict:
     """Run one point-in-time backtest and return its equity curve + metrics.
 
-    Computation only — nothing is written to the database. The response is a
+    Computation only â€” nothing is written to the database. The response is a
     simulation over historical data, not a prediction (see `disclaimer`).
     """
     codes = payload.codes or settings.watchlist

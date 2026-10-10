@@ -55,7 +55,7 @@ class MarketTradeSummary(BaseModel):
     regular: MarketTradeSegment
     non_regular: MarketTradeSegment
     total: MarketTradeSegment
-    # Porsi non-reguler terhadap total pasar (0..1) — biasanya kecil.
+    # Porsi non-reguler terhadap total pasar (0..1) â€” biasanya kecil.
     non_regular_share_volume: float | None = None
     non_regular_share_value: float | None = None
 
@@ -129,9 +129,9 @@ class Signal(BaseModel):
     macd: float | None = None
     trend_up: bool
     live: bool
-    # Tanggal sesi bursa bar terakhir (YYYY-MM-DD) — untuk badge "update terakhir".
+    # Tanggal sesi bursa bar terakhir (YYYY-MM-DD) â€” untuk badge "update terakhir".
     as_of: str | None = None
-    # Jam backend menghitung sinyal ini (WIB, ISO) — untuk badge "diperbarui".
+    # Jam backend menghitung sinyal ini (WIB, ISO) â€” untuk badge "diperbarui".
     generated_at: str | None = None
 
 
@@ -328,7 +328,7 @@ class BrokerFlowDay(BaseModel):
 
 
 class BrokerClassificationRow(BaseModel):
-    """Kategori satu broker pada sesi terakhir — untuk audit klasifikasi."""
+    """Kategori satu broker pada sesi terakhir â€” untuk audit klasifikasi."""
 
     broker_code: str
     broker_name: str | None = None
@@ -338,7 +338,7 @@ class BrokerClassificationRow(BaseModel):
 class BrokerFlow(BaseModel):
     """Komposisi nilai transaksi per kategori broker (asing/lokal/BUMN).
 
-    Komposisi (turnover share), bukan net buy/sell — IDX tidak menyediakan
+    Komposisi (turnover share), bukan net buy/sell â€” IDX tidak menyediakan
     split beli/jual per firma. ``classification`` memaparkan kategori tiap
     broker sesi terakhir supaya map kurasi bisa diaudit dari UI.
     """
@@ -426,7 +426,7 @@ class BrokerActivityHistoryPoint(BaseModel):
     coverage: float
     drivers: list[BrokerActivityDriver]
     # Median skor seluruh emiten yang diskor tanggal yang sama (baseline pasar
-    # aktual — bukan angka teoretis 50).
+    # aktual â€” bukan angka teoretis 50).
     market_median: float | None = None
 
 
@@ -444,7 +444,7 @@ class BrokerActivitySector(BaseModel):
     """Pembanding skor di dalam satu sektor.
 
     ``comparable`` False = emiten jatuh ke bucket fallback "Lainnya", yang
-    bukan sektor sebenarnya — pembandingnya tidak berarti.
+    bukan sektor sebenarnya â€” pembandingnya tidak berarti.
     """
 
     name: str
@@ -554,7 +554,7 @@ class StockDecision(BaseModel):
 
     ``hold_check`` adalah SATU-SATUNYA sumber verdict (skor 0-100 + band);
     sisanya konteks yang tidak mengubah verdict. Semua field bisa None bila
-    sumbernya belum tersedia — UI menyajikannya apa adanya, bukan 0.
+    sumbernya belum tersedia â€” UI menyajikannya apa adanya, bukan 0.
     """
 
     code: str
@@ -603,14 +603,14 @@ class RecommendationRow(BaseModel):
     """Satu kandidat beli: skor + grade + level eksekusi + alasan.
 
     Level (``entry_*``/``stop``/``target``) selalu terisi untuk kandidat yang
-    masuk papan — tanpa level pembatalan yang bisa dihitung, kandidat tidak
+    masuk papan â€” tanpa level pembatalan yang bisa dihitung, kandidat tidak
     ditampilkan. ``position_pct`` = ukuran posisi sederhana (% modal) dari
     risiko 1% per posisi.
 
-    ``grade`` = **peringkat relatif pool hari itu** (C 25% · B 10% · A 2%
+    ``grade`` = **peringkat relatif pool hari itu** (C 25% Â· B 10% Â· A 2%
     teratas), bukan probabilitas dan bukan ambang skor absolut.
     ``horizon_days`` = horizon komposisi skor yang dipakai (``COMPONENT_WEIGHTS``;
-    default ``DEFAULT_HORIZON`` = 21 hari bursa) — jadi pembaca tahu klaimnya
+    default ``DEFAULT_HORIZON`` = 21 hari bursa) â€” jadi pembaca tahu klaimnya
     diukur pada jangka berapa.
     """
 
@@ -690,7 +690,7 @@ class RecommendationTrackRecent(BaseModel):
 
 
 class RecommendationTrack(BaseModel):
-    """Track record kandidat beli (per grade & horizon) — "rekomendasi terbukti?"."""
+    """Track record kandidat beli (per grade & horizon) â€” "rekomendasi terbukti?"."""
 
     candidates: int = 0
     grade_a: int = 0
@@ -747,7 +747,7 @@ class SectorRotation(BaseModel):
     """Rotasi sektor berbasis skor aktivitas broker (proksi aliran dana).
 
     ``unmapped_names`` = emiten berskor yang belum punya sektor sebenarnya
-    (bucket "Lainnya") dan karena itu tidak diikutkan — dilaporkan supaya
+    (bucket "Lainnya") dan karena itu tidak diikutkan â€” dilaporkan supaya
     cakupan rotasinya bisa dinilai apa adanya.
     """
 
@@ -878,135 +878,6 @@ class HoldCheckResponse(BaseModel):
     date: str | None = None
     generated_at: str | None = None
     items: list[HoldCheckItem]
-
-
-# ---------------------------------------------------- dividends & corp actions
-
-
-class DividendTotals(BaseModel):
-    """Dividend activity counts plus the trailing-yield distribution.
-
-    There is deliberately no "total cash distributed" figure: `cash_amount` is
-    a per-share number, so summing it across emiten would be meaningless.
-    """
-
-    events: int
-    codes: int
-    splits: int
-    first_ex_date: str | None = None
-    last_ex_date: str | None = None
-    ttm_events: int
-    ttm_codes: int
-    avg_ttm_yield: float | None = None
-    median_ttm_yield: float | None = None
-    max_ttm_yield: float | None = None
-
-
-class DividendYear(BaseModel):
-    """One calendar year of dividend activity (for the bar chart)."""
-
-    year: int
-    events: int
-    codes: int
-
-
-class DividendRecent(BaseModel):
-    """A cash dividend just paid out (there is no forward calendar)."""
-
-    code: str
-    name: str | None = None
-    ex_date: str | None = None
-    cash_amount: float | None = None
-    close: float | None = None
-
-
-class DividendYielder(BaseModel):
-    """Trailing dividend yield: last 12 months of cash / latest close."""
-
-    code: str
-    name: str | None = None
-    close: float | None = None
-    ttm_cash: float
-    ttm_events: int
-    yield_pct: float | None = None
-
-
-class DividendOverview(BaseModel):
-    as_of: str | None = None
-    generated_at: str | None = None
-    ttm_days: int
-    recent_days: int
-    totals: DividendTotals
-    by_year: list[DividendYear]
-    recent: list[DividendRecent]
-    top_yield: list[DividendYielder]
-    disclaimer: str
-
-
-class DividendStock(DividendYielder):
-    """One row of the all-emiten dividend table."""
-
-    total_events: int
-    # Cash paid per share summed over the emiten's whole history. Only the
-    # internal comparisons make sense; it is not split-adjusted.
-    total_cash_per_share: float
-    first_ex_date: str | None = None
-    last_ex_date: str | None = None
-
-
-class DividendPayment(BaseModel):
-    ex_date: str | None = None
-    cash_amount: float | None = None
-
-
-class DividendAnnual(BaseModel):
-    year: int
-    cash: float
-    events: int
-
-
-class SplitAction(BaseModel):
-    ex_date: str | None = None
-    action_type: str
-    ratio: float | None = None
-
-
-class DividendDetail(BaseModel):
-    """Per-emiten dividend history + split history.
-
-    `total_cash` is per-share cash summed over the whole history and is NOT
-    split-adjusted, so a split inflates it; `splits` is returned alongside so
-    the UI can warn about exactly that.
-    """
-
-    code: str
-    name: str | None = None
-    as_of: str | None = None
-    close: float | None = None
-    ttm_cash: float
-    ttm_events: int
-    yield_pct: float | None = None
-    total_cash: float
-    total_events: int
-    first_ex_date: str | None = None
-    last_ex_date: str | None = None
-    growth_pct: float | None = None
-    history: list[DividendPayment]
-    annual: list[DividendAnnual]
-    splits: list[SplitAction]
-    disclaimer: str
-
-
-class CorpActionRow(BaseModel):
-    """One row of the raw corporate-action ledger."""
-
-    code: str
-    name: str | None = None
-    ex_date: str | None = None
-    action_type: str
-    ratio: float | None = None
-    cash_amount: float | None = None
-    source: str | None = None
 
 
 # --------------------------------------------------------------- backtest
@@ -1353,7 +1224,7 @@ class SmartMoneyPatternsBoardGroup(BaseModel):
 
 
 class SmartMoneyPatternsBoard(BaseModel):
-    """Papan "pola terkuat hari ini" — dikelompokkan per pola, urut kekuatan bukti."""
+    """Papan "pola terkuat hari ini" â€” dikelompokkan per pola, urut kekuatan bukti."""
 
     date: str | None = None
     scanned: int = 0
@@ -1363,7 +1234,7 @@ class SmartMoneyPatternsBoard(BaseModel):
 
 
 class SmartMoneyMarketContext(BaseModel):
-    """Sebaran verdict seluruh pasar — pembanding verdict satu emiten.
+    """Sebaran verdict seluruh pasar â€” pembanding verdict satu emiten.
 
     ``distributing_share`` = porsi distribusi di antara emiten yang PUNYA arah
     (netral & data kurang keluar dari penyebut); itu pembanding yang benar
