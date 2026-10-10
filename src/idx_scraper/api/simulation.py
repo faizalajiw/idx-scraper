@@ -592,17 +592,24 @@ def run_backtest(
 
     reader = PITReader(settings.database_url)
     try:
-        all_days = reader.trading_days(date(2000, 1, 1), date(2100, 1, 1))
-        if not all_days:
+        first_all, last_all = reader.first_last()
+        if not first_all:
             raise ValueError("belum ada data harga di research.prices_pit")
 
-        first, last = all_days[0], all_days[-1]
-        end_day = end or last
-        start_day = start or first
+        end_day = end or last_all
+        start_day = start or first_all
         if start_day > end_day:
             raise ValueError("tanggal mulai tidak boleh setelah tanggal akhir")
 
-        days = [d for d in all_days if start_day <= d <= end_day]
+        # Jika start_day == first_all dan end_day == last_all (tidak ada input user),
+        # tetap perlu seluruh trading_days -> unavoidable DISTINCT scan, tapi ini kasus
+        # yang jarang (hanya backtest untuk seluruh window tanpa filter).
+        # Jika user input start/end (atau subset dari first/last), panggil
+        # trading_days dengan filter sempit yang sudah index-driven.
+        if start_day == first_all and end_day == last_all:
+            days = reader.trading_days(first_all, last_all)
+        else:
+            days = reader.trading_days(start_day, end_day)
         if len(days) > MAX_DAYS:
             days = days[-MAX_DAYS:]
         if len(days) < 2:

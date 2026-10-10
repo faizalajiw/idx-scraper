@@ -154,6 +154,22 @@ class PITReader:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def first_last(self) -> tuple[date | None, date | None]:
+        """Return ``(min_trade_date, max_trade_date)`` from ``prices_pit``.
+
+        Both endpoints are served by ``idx_prices_pit_trade_date``
+        (Index Only Scan, <0.2 ms, 0 parallel workers) — unlike
+        ``trading_days(date(2000,1,1), date(2100,1,1))`` which forces a
+        DISTINCT ON 284k-bar scan. Use this when callers only need the
+        window endpoints (most callers do).
+        """
+        row = self._conn.execute(
+            "select min(trade_date), max(trade_date) from research.prices_pit"
+        ).fetchone()
+        if not row or row[0] is None:
+            return None, None
+        return row[0], row[1]
+
     def as_of(
         self,
         sim_date: date,
@@ -498,11 +514,11 @@ class Backtester:
 def _demo() -> None:
     """Buy-and-hold BBRI over the backfilled window as a smoke test."""
     with PITReader() as reader:
-        days = reader.trading_days(date(2000, 1, 1), date(2100, 1, 1))
-        if not days:
+        first, last = reader.first_last()
+        if not first:
             print("no data")
             return
-        start, end = days[0], days[-1]
+        start, end = first, last
 
         def strategy(d: date, r: PITReader) -> dict[str, float]:
             return {"BBRI": 1.0}
