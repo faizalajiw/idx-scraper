@@ -22,9 +22,11 @@ import json
 import os
 import sys
 import threading
+import time
 from typing import Any
 
 IDX_BASE = "https://www.idx.co.id"
+_REVIVE_COOLDOWN_SEC = 600
 # Override via env supaya script manual bisa jalan berdampingan dengan
 # scheduler yang sedang memegang profile utama (Chrome menolak dua instance
 # pada user-data-dir yang sama).
@@ -52,6 +54,8 @@ class BrowserTransport:
         # HTTP status of the most recent get(); lets callers tell a 429 throttle
         # apart from a legitimately empty payload.
         self.last_status: int | None = None
+        # Jangan retry revive terlalu sering saat profile dikunci proses lain.
+        self._revive_blocked_until: float = 0.0
 
     # ---------------- background loop management ----------------
 
@@ -87,6 +91,9 @@ class BrowserTransport:
         Transport headful gampang mati karena user tidak sengaja menutup
         jendelanya. Tanpa revive, SEMUA fetch IDX gagal selamanya dengan
         "browser page closed" sampai `idx serve` di-restart manual.
+
+        Bila revive gagal (mis. profile masih dikunci Chrome lain), jangan
+        retry tiap request: tunda _REVIVE_COOLDOWN_SEC agar log tidak banjir.
         """
         self._ensure_loop()
         page = self._page
@@ -94,6 +101,8 @@ class BrowserTransport:
             return page
         if self._loop is None or not self._loop.is_running():
             return page  # loop juga mati -> biarkan _ensure_loop yang rebuild
+        if time.monotonic() < self._revive_blocked_until:
+            return page
 
         async def _reopen():
             # Tutup sisa context lama (kalau ada) sebelum buka yang baru.
@@ -109,7 +118,12 @@ class BrowserTransport:
         try:
             asyncio.run_coroutine_threadsafe(_reopen(), self._loop).result(timeout=180)
         except Exception as e:
-            print(f"[cf-transport] revive gagal: {e!r}", file=sys.stderr)
+            self._revive_blocked_until = time.monotonic() + _REVIVE_COOLDOWN_SEC
+            print(
+                f"[cf-transport] revive gagal: {e!r}; retry dalam {_REVIVE_COOLDOWN_SEC}s "
+                f"(profile {PROFILE_DIR} mungkin dikunci Chrome lain)",
+                file=sys.stderr,
+            )
         return self._page
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -159,8 +173,8 @@ class BrowserTransport:
         page = self.ensure_open()
 
         async def _fetch():
-            if page.is_closed():
-                raise RuntimeError("browser page closed")
+            if page is None or page.is_closed():
+                raise RuntimeError("browser page closed (revive blocked or profile locked)")
             url = f"{IDX_BASE}{path}"
             data = await page.evaluate(
                 """async (u) => {

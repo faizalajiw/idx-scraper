@@ -1137,7 +1137,7 @@ def cmd_serve(args) -> None:
     # live feed is polled one code at a time. Runs as a rolling background sweep
     # that self-gates on market hours and the IDX source.
     live_top = int(os.getenv("IDX_LIVE_TOP", "60"))
-    live_delay_ms = int(os.getenv("IDX_LIVE_DELAY_MS", "1000"))
+    live_delay_ms = int(os.getenv("IDX_LIVE_DELAY_MS", "2000"))
     live_capture = LiveCapture(
         client,
         top_n=live_top,

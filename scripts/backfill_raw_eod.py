@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+import pathlib
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg
@@ -51,10 +52,44 @@ def _ohl(v):
     return v if v else None
 
 
-def backfill(years: float) -> None:
-    dsn = os.environ["DATABASE_URL"]
-    end = datetime.now(WIB).date()
-    start = end - timedelta(days=round(365.25 * years))
+def load_env() -> None:
+    """Load .env file into os.environ if not already set."""
+    env_path = pathlib.Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        import dotenv
+        dotenv.load_dotenv(str(env_path), override=False)
+    # Fallback: manual parse if python-dotenv not available
+    if "DATABASE_URL" not in os.environ:
+        try:
+            import configparser
+            config = configparser.ConfigParser()
+            config.read(str(env_path))
+            if "DATABASE_URL" in config and "DATABASE_URL" in config["DEFAULT"]:
+                os.environ["DATABASE_URL"] = config["DEFAULT"]["DATABASE_URL"]
+        except Exception:
+            pass
+
+
+def backfill(years: float | None = None, start_date: date | None = None, end_date: date | None = None) -> None:
+    load_env()
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        print("[backfill] ERROR: DATABASE_URL not found in environment", file=sys.stderr)
+        sys.exit(1)
+    
+    if start_date is not None and end_date is not None:
+        # Mode catch-up: jalankan untuk rentang tanggal tertentu
+        start = start_date
+        end = end_date
+        print(f"[backfill] MODE CATCH-UP: {start} -> {end}")
+    elif years is not None:
+        # Mode default: backfill berdasarkan jumlah tahun dari hari ini
+        end = datetime.now(WIB).date()
+        start = end - timedelta(days=round(365.25 * years))
+        print(f"[backfill] MODE DEFAULT: {start} -> {end} ({years} tahun)")
+    else:
+        print("[backfill] ERROR: neither --years nor --start-date/--end-date provided", file=sys.stderr)
+        sys.exit(1)
 
     client = IDXClient()
     client.warmup()
@@ -147,9 +182,20 @@ def refresh_prices_pit(dsn: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--years", type=float, default=1.0, help="years of history to backfill")
+    ap.add_argument("--years", type=float, default=None, help="years of history to backfill (default mode)")
+    ap.add_argument("--start-date", type=lambda s: date.fromisoformat(s), help="start date for catch-up mode (YYYY-MM-DD)")
+    ap.add_argument("--end-date", type=lambda s: date.fromisoformat(s), help="end date for catch-up mode (YYYY-MM-DD)")
     args = ap.parse_args()
-    backfill(args.years)
+    
+    if args.start_date is not None and args.end_date is not None:
+        # Mode catch-up: jalankan untuk rentang tanggal tertentu
+        backfill(start_date=args.start_date, end_date=args.end_date)
+    elif args.years is not None:
+        # Mode default: backfill berdasarkan jumlah tahun dari hari ini
+        backfill(years=args.years)
+    else:
+        print("ERROR: provide either --years or --start-date/--end-date", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
