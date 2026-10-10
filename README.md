@@ -230,6 +230,15 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 
 ---
 
+## Logo Emiten (TradingView)
+* Script: `scripts/fetch_tradingview_logos.py` mengambil logo dari halaman `tradingview.com/symbols/IDX-{KODE}/` untuk setiap kode di `stock_summary_daily`.
+* Output: `idx-web/public/logos/{KODE}.png|svg` dan `idx-web/public/logos/manifest.json` (status `ok` / `fallback` / `failed`).
+* Jalankan (dari `idx-scraper/`): `.\.venv\Scripts\python.exe scripts\fetch_tradingview_logos.py`. Kode yang sudah `ok` dilewati; `--only BBCA,TLKM` untuk kode tertentu, `--force` untuk unduh ulang.
+* UI (`idx-web/components/TickerLogo.tsx`) memakai logo lokal bila `ok`, selain itu monogram.
+* **Hak cipta: [BELUM TERVERIFIKASI].** Logo milik masing-masing emiten dan TradingView. Gunakan hanya untuk tampilan internal; cek lisensi sebelum dipublikasikan.
+
+---
+
 ## Glossary
 * **EOD** – End‑of‑Day snapshot.
 * **PIT** – Point‑In‑Time, bitemporal view without look‑ahead bias.
