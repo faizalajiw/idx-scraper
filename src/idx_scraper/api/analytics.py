@@ -1309,6 +1309,18 @@ def get_sector_analysis(date: str | None = None) -> dict[str, Any]:
 # --------------------------------------------------------------- valuation
 
 
+def _frame_from_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """OHLCV frame dari baris research.latest_pit yang sudah terurut tanggal."""
+    df = pd.DataFrame(
+        [
+            (str(r["trade_date"]), _f(r["close"]), _f(r["high"]), _f(r["low"]), _f(r["volume"]))
+            for r in rows
+        ],
+        columns=["date", "close", "high", "low", "volume"],
+    )
+    df["close"] = pd.to_numeric(df["close"])
+    return df
+
 def _valuation_frame(cur: Any, code: str) -> pd.DataFrame | None:
     cur.execute(
         """select trade_date as date, close, high, low, volume from research.latest_pit
@@ -1526,97 +1538,88 @@ def _screener_rows() -> list[dict[str, Any]]:
     # Skor broker diambil di luar blok cursor: snapshot-nya membuka koneksi
     # sendiri untuk query panel faktor, jadi jangan tahan koneksi pool menunggu.
     broker_by_code, _broker_validated = broker_scores_by_code()
+    # Satu query bulk untuk semua emiten (dulu: ~3 query per emiten, N+1).
+    # Diurutkan per kode lalu tanggal, jadi baris terakhir tiap kode = data terbaru.
     with get_cursor() as cur:
-        cur.execute("select distinct code from research.latest_pit order by code")
-        codes = [r["code"] for r in cur.fetchall()]
-        names: dict[str, str | None] = {}
         cur.execute(
-            """select distinct on (code) code, name from research.latest_pit
-               order by code, trade_date desc"""
+            """select code, name, trade_date, close, high, low, volume, value, foreign_net
+               from research.latest_pit
+               order by code, trade_date"""
         )
-        for r in cur.fetchall():
-            names[r["code"]] = r["name"]
+        all_rows = cur.fetchall()
+    history: dict[str, list[dict[str, Any]]] = {}
+    for r in all_rows:
+        history.setdefault(r["code"], []).append(r)
 
     out: list[dict[str, Any]] = []
-    with get_cursor() as cur:
-        for code in codes:
-            df = _valuation_frame(cur, code)
-            if df is None or len(df) < 30:
-                continue
-            df = calculate_indicators(
-                df.assign(open=df["close"], high=df["close"], low=df["close"])
-            )
-            sig = generate_signal(df)
-            close = df["close"]
-            momo = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) > 21 else None
-            rsi = _f(df["RSI"].iloc[-1])
-            vol = df["volume"].fillna(0)
-            vol_ratio = float(vol.iloc[-1] / vol.tail(20).mean()) if vol.tail(20).mean() > 0 else None
+    for code, hist in history.items():
+        if len(hist) < 30:
+            continue
+        latest = hist[-1]
+        df = _frame_from_rows(hist)
+        df = calculate_indicators(
+            df.assign(open=df["close"], high=df["close"], low=df["close"])
+        )
+        sig = generate_signal(df)
+        close = df["close"]
+        momo = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) > 21 else None
+        rsi = _f(df["RSI"].iloc[-1])
+        vol = df["volume"].fillna(0)
+        vol_ratio = float(vol.iloc[-1] / vol.tail(20).mean()) if vol.tail(20).mean() > 0 else None
 
-            # --- metrik riset tambahan (ATR%, 52w high, hari sejak sinyal) ---
-            # ATR(14) Wilder-style rolling, % dari close (volatilitas komparabel
-            # antar emiten). High/low NULL (hari non-trading) -> diabaikan.
-            prev_close = close.shift(1)
-            tr = pd.concat(
-                [
-                    df["high"] - df["low"],
-                    (df["high"] - prev_close).abs(),
-                    (df["low"] - prev_close).abs(),
-                ],
-                axis=1,
-            ).max(axis=1)
-            atr = tr.rolling(14).mean()
-            atr_pct = (
-                float(atr.iloc[-1] / close.iloc[-1] * 100)
-                if pd.notna(atr.iloc[-1]) and close.iloc[-1] > 0
-                else None
-            )
-            # Jarak dari puncak 52 minggu (<= 0; min_periods 63 agar emiten baru
-            # tidak selalu -100%).
-            hi_252 = close.rolling(252, min_periods=63).max()
-            dist_52w = (
-                float(close.iloc[-1] / hi_252.iloc[-1] - 1.0)
-                if pd.notna(hi_252.iloc[-1])
-                else None
-            )
-            # Hari sejak sinyal BUY/SELL terakhir (rule = signal_series, sama
-            # dengan generate_signal). None = belum pernah bersinyal non-HOLD.
-            sigs = signal_series(df)
-            non_hold = sigs[sigs != "HOLD"]
-            days_since_signal = int(len(sigs) - 1 - non_hold.index[-1]) if len(non_hold) else None
+        # --- metrik riset tambahan (ATR%, 52w high, hari sejak sinyal) ---
+        # ATR(14) Wilder-style rolling, % dari close (volatilitas komparabel
+        # antar emiten). High/low NULL (hari non-trading) -> diabaikan.
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - prev_close).abs(),
+                (df["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr = tr.rolling(14).mean()
+        atr_pct = (
+            float(atr.iloc[-1] / close.iloc[-1] * 100)
+            if pd.notna(atr.iloc[-1]) and close.iloc[-1] > 0
+            else None
+        )
+        # Jarak dari puncak 52 minggu (<= 0; min_periods 63 agar emiten baru
+        # tidak selalu -100%).
+        hi_252 = close.rolling(252, min_periods=63).max()
+        dist_52w = (
+            float(close.iloc[-1] / hi_252.iloc[-1] - 1.0)
+            if pd.notna(hi_252.iloc[-1])
+            else None
+        )
+        # Hari sejak sinyal BUY/SELL terakhir (rule = signal_series, sama
+        # dengan generate_signal). None = belum pernah bersinyal non-HOLD.
+        sigs = signal_series(df)
+        non_hold = sigs[sigs != "HOLD"]
+        days_since_signal = int(len(sigs) - 1 - non_hold.index[-1]) if len(non_hold) else None
 
-            # Latest day liquidity + foreign net from EOD table
-            cur.execute(
-                """select value, foreign_net, close from research.latest_pit
-                   where code = %s order by trade_date desc limit 1""",
-                (code,),
-            )
-            eod = cur.fetchone()
-            value = _f(eod["value"]) if eod else None
-            fnet = _f(eod["foreign_net"]) if eod else None
-            last_close = _f(eod["close"]) if eod else _f(close.iloc[-1])
-
-            row = {
-                "code": code,
-                "name": names.get(code),
-                "close": last_close,
-                "percent": None,
-                "rsi": rsi,
-                "signal": sig,
-                "trend_up": bool((df["MA_Short"].iloc[-1] or 0) > (df["MA_Long"].iloc[-1] or 0)),
-                "momentum_20d": round(momo, 2) if momo is not None else None,
-                "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
-                "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
-                "dist_52w": round(dist_52w * 100, 2) if dist_52w is not None else None,
-                "days_since_signal": days_since_signal,
-                "ob_imbalance": ob.get(code, {}).get("ob_imbalance"),
-                "ob_absorption": ob.get(code, {}).get("ob_absorption"),
-                "broker_score": (broker_by_code.get(code) or {}).get("score"),
-                "foreign_net": fnet,
-                "value": value,
-                "hist_days": len(df),
-            }
-            out.append(row)
+        row = {
+            "code": code,
+            "name": latest["name"],
+            "close": _f(latest["close"]),
+            "percent": None,
+            "rsi": rsi,
+            "signal": sig,
+            "trend_up": bool((df["MA_Short"].iloc[-1] or 0) > (df["MA_Long"].iloc[-1] or 0)),
+            "momentum_20d": round(momo, 2) if momo is not None else None,
+            "vol_ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
+            "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+            "dist_52w": round(dist_52w * 100, 2) if dist_52w is not None else None,
+            "days_since_signal": days_since_signal,
+            "ob_imbalance": ob.get(code, {}).get("ob_imbalance"),
+            "ob_absorption": ob.get(code, {}).get("ob_absorption"),
+            "broker_score": (broker_by_code.get(code) or {}).get("score"),
+            "foreign_net": _f(latest["foreign_net"]),
+            "value": _f(latest["value"]),
+            "hist_days": len(df),
+        }
+        out.append(row)
 
     out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
     _research_cache_put("screener_rows", out, ttl=600.0)
