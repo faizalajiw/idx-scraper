@@ -10,6 +10,7 @@ dependencies = [
     "apscheduler>=3.10",
     "yfinance>=0.2.40",
     "pandas>=2.2",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

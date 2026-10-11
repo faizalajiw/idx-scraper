@@ -1034,6 +1034,16 @@ def _job_watchlist(client: IDXClient, storage, codes: list[str]) -> None:
     print(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed ({tag}): {n}")
 
 
+def _job_news_refresh() -> None:
+    """Tarik judul Stockbit Snips -> news_items. Error tidak menghentikan scheduler."""
+    try:
+        from .news import run_once
+
+        n = run_once()
+        print(f"[{datetime.now(WIB).isoformat()}] news: {n} item baru")
+    except Exception as e:
+        print(f"[err] news job: {e}", file=sys.stderr)
+
 def cmd_serve(args) -> None:
     client = IDXClient()
     storage = get_storage_from_env()
@@ -1074,6 +1084,12 @@ def cmd_serve(args) -> None:
             "args": [client, storage],
             "kwargs": {"label": label, "do_eod": do_eod},
         }
+
+    # Berita Snips 24/7 (tanpa gate jam bursa). Interval default 15 menit.
+    scheduler.add_job(
+        _job_news_refresh, "interval",
+        seconds=int(os.getenv("NEWS_INTERVAL", "900")), id="news_refresh",
+    )
 
     # Pra-pembukaan Sen-Jum 08:45 — recompute + clear cache (belum ada EOD baru).
     scheduler.add_job(

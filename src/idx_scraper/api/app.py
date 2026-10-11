@@ -3,7 +3,7 @@
 Run locally:
     uvicorn idx_scraper.api.app:app --reload --port 8000
 
-This API is READ-ONLY. It does not ingest or mutate data â€” the APScheduler CLI
+This API is READ-ONLY. It does not ingest or mutate data — the APScheduler CLI
 worker remains the sole writer. There is currently NO authentication on these
 endpoints; they are intended for local/trusted-network use. Before exposing this
 service publicly, add authentication/authorization and rate limiting.
@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from idx_scraper import watchlist_store
+from idx_scraper import news, watchlist_store
 
 from . import alerts, analytics, services, simulation
 from .config import get_settings
@@ -34,10 +34,10 @@ from .schemas import (
     ForeignFlow,
     HoldCheckResponse,
     MarketLeaders,
-    MarketNarration,
     MarketOverview,
     MarketRegime,
     MarketTradeSummary,
+    NewsList,
     RecommendationResponse,
     RecommendationTrack,
     ScreenerRow,
@@ -47,7 +47,6 @@ from .schemas import (
     SessionMovers,
     Signal,
     SignalTrack,
-    StockSearchResult,
     SmartMoneyPatternsBoard,
     SmartMoneyRadar,
     SmartMoneyStock,
@@ -59,6 +58,7 @@ from .schemas import (
     StockForeignFlow,
     StockOwnership,
     StockRecommendation,
+    StockSearchResult,
     TechnicalChart,
     TopBrokers,
     ValuationResponse,
@@ -71,7 +71,7 @@ from .schemas import (
 def _warm_heavy_caches() -> None:
     """Hitung cache berat sekali saat startup (background thread, fire-and-forget).
 
-    Event study butuh ~2 menit saat dingin â€” tanpa warm-up, permintaan pertama
+    Event study butuh ~2 menit saat dingin — tanpa warm-up, permintaan pertama
     ke Ruang Keputusan/Event Study menggantung sampai selesai hitung. Kalau
     gagal (DB belum siap dsb.), cache terisi otomatis di permintaan berikutnya.
     """
@@ -193,7 +193,7 @@ def market_trade_summary(
 
 @app.get("/api/market/regime", response_model=MarketRegime)
 def market_regime() -> dict:
-    """Regime IHSG (ADX + realized vol) â€” konteks untuk semua halaman analisis."""
+    """Regime IHSG (ADX + realized vol) — konteks untuk semua halaman analisis."""
     return analytics.get_market_regime()
 
 
@@ -206,7 +206,7 @@ def market_leaders(
     metric: str = Query(default="volume", description="volume | value | frequency"),
     limit: int = Query(default=5, ge=1, le=50),
 ) -> dict:
-    """Top emiten by volume/value/frequency â€” realtime saat jam bursa, else EOD."""
+    """Top emiten by volume/value/frequency — realtime saat jam bursa, else EOD."""
     return services.get_market_leaders(metric, limit)
 
 @app.get("/api/market/top-brokers", response_model=TopBrokers)
@@ -379,7 +379,7 @@ def stock_decision(code: str) -> dict:
 
     Menggabungkan hold-check (verdict dasar), regime IHSG, sentimen aliran,
     jejak asing 10 sesi, base rate event study, dan level pembatalan teknikal
-    ke dalam satu respons â€” semua dari sumber yang sudah ada, cache 30 menit.
+    ke dalam satu respons — semua dari sumber yang sudah ada, cache 30 menit.
     """
     return analytics.get_stock_decision(code.upper())
 
@@ -463,7 +463,7 @@ def smart_money_track_record() -> dict:
     """Track record pola klasik jejak smart money (120 sesi terakhir).
 
     Berapa kali tiap pola muncul, dan forward return-nya (entry T+1) plus
-    alpha vs pasar â€” menjawab "pola ini terbukti tidak". Agregasi di modul
+    alpha vs pasar — menjawab "pola ini terbukti tidak". Agregasi di modul
     pure ``smart_money``; forward return + alpha dihitung di service
     ``analytics``. Cache 1 jam.
     """
@@ -475,8 +475,8 @@ def smart_money_patterns_board() -> dict:
     """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir.
 
     Dikelompokkan per pola (angka historisnya milik pola, bukan emiten) dan
-    diurutkan berdasar kekuatan bukti, sehingga `initiation` â€” pola dengan
-    catatan terkuat tapi jarang menyala â€” terlihat tanpa harus kebetulan
+    diurutkan berdasar kekuatan bukti, sehingga `initiation` — pola dengan
+    catatan terkuat tapi jarang menyala — terlihat tanpa harus kebetulan
     muncul di emiten yang sedang dibuka. Emiten di dalam tiap kelompok urut
     |net rupiah| dengan lantai likuiditas yang sama seperti radar. Cache 30
     menit.
@@ -518,9 +518,11 @@ def sectors(date: str | None = Query(default=None)) -> dict:
     return analytics.get_sector_analysis(date=date)
 
 
-@app.get("/api/market/narration", response_model=MarketNarration)
-def market_narration() -> dict:
-    return analytics.get_market_narration()
+@app.get("/api/news/latest", response_model=NewsList)
+def news_latest(limit: int = Query(default=7, ge=1, le=50)) -> dict:
+    with get_cursor() as cur:
+        return {"items": news.latest(cur, limit=limit)}
+
 
 @app.post("/api/cache/clear")
 def cache_clear() -> dict:
@@ -574,7 +576,7 @@ def signals_track() -> dict:
     """Track record sinyal BUY/SELL: hit-rate, forward return, abnormal vs pasar.
 
     Statistik dipecah per jenis sinyal, horizon, dan regime IHSG saat sinyal
-    terbentuk â€” supaya "sinyal ini benar-benar berguna?" terjawab dengan angka,
+    terbentuk ? supaya "sinyal ini benar-benar berguna?" terjawab dengan angka,
     bukan opini. Log diisi job harian (`idx signal-log`) atau backfill otomatis.
     """
     return analytics.get_signal_track()
@@ -650,7 +652,7 @@ def alerts_test() -> dict:
     return {
         "sent": sent,
         "detail": (
-            "Pesan uji terkirim â€” cek chat Telegram kamu."
+            "Pesan uji terkirim — cek chat Telegram kamu."
             if sent
             else "Gagal mengirim pesan uji. Cek token bot dan chat id."
         ),
@@ -667,7 +669,7 @@ def backtest_config() -> dict:
 def backtest_run(payload: BacktestRequest) -> dict:
     """Run one point-in-time backtest and return its equity curve + metrics.
 
-    Computation only â€” nothing is written to the database. The response is a
+    Computation only — nothing is written to the database. The response is a
     simulation over historical data, not a prediction (see `disclaimer`).
     """
     codes = payload.codes or settings.watchlist

@@ -94,7 +94,7 @@ supaya tidak diandalkan.
 | Diklaim dokumen lama | Kenyataan |
 |---|---|
 | `research.fundamental`, `fundamental_score` | ❌ tidak ada. Tidak ada P/E–PBV di endpoint IDX gratis; `/valuation` hanya z‑score harga terhadap band‑nya sendiri |
-| `research.news`, `news_log` (“Analis Berita”) | ❌ tidak ada sumber berita sama sekali |
+| `research.news`, `news_log` (“Analis Berita”) | ❌ tabel itu belum ada. Berita kini masuk ke `news_items` (lihat *API Berita*) |
 | `research.tech_signal` | ❌ tidak ada; sinyal disimpan di `research.signal_log` |
 | `research.risk_log` (“Risk Management”) | ❌ tidak ada. Sizing/stop baru ada sebagai perhitungan di `research/recommend.py`, belum dipersist |
 | “Trader Agent” yang mengirim order | ❌ tidak ada. Yang tersedia hanya simulator backtest |
@@ -210,6 +210,13 @@ The scheduler (APScheduler, timezone WIB) starts with `serve`.
 | `_job_backfill_market_segment` | daily 16:10 WIB | Compute `research.market_segment_daily`. |
 | `health_check` | every 300 s | Verify today’s `raw_eod` & `index_quotes`; exit 1 if missing. |
 | `prune_logs` | daily 02:00 WIB | Delete log files older than 7 days. |
+| `news_refresh` | every `NEWS_INTERVAL` s (default 900), no market-hours gate | Tarik judul dari `snips.stockbit.com` ke `news_items`, lalu hapus berita dengan `published_at` > 7 hari (`prune`). |
+
+### API Berita
+| Endpoint | Fungsi |
+|---|---|
+| `GET /api/news/latest?limit=7` | Judul terbaru Stockbit Snips, urut `published_at` desc |
+| `GET /api/market/narration` | **Dihapus** (404) |
 
 ---
 
