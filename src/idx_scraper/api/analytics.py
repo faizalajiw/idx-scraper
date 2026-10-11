@@ -505,7 +505,7 @@ def get_smart_money_radar(days: int = 10) -> dict[str, Any]:
     """
     from ..smart_money import build_radar
 
-    days = max(2, min(days, 60))
+    days = max(1, min(days, 60))
     cache_key = f"smart_money_radar:{days}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
@@ -895,7 +895,7 @@ def get_smart_money_track_record() -> dict[str, Any]:
         entry = rows[i + 1].get("close")
         if entry is None or entry <= 0:
             continue
-        for h in (5, 10, 21):
+        for h in (1, 5, 10, 21):
             j = i + 1 + h
             exit_ = rows[j].get("close") if j < len(rows) else None
             if exit_ is None:

@@ -421,7 +421,7 @@ def stock_foreign_flow(
 
 @app.get("/api/smart-money/radar", response_model=SmartMoneyRadar)
 def smart_money_radar(
-    days: int = Query(default=10, ge=2, le=60, description="Jendela agregasi (hari bursa)"),
+    days: int = Query(default=10, ge=1, le=60, description="Jendela agregasi (hari bursa)"),
 ) -> dict:
     """Radar jejak smart money: emiten dengan aliran asing terkuat di pasar.
 

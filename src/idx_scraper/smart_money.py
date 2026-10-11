@@ -565,7 +565,7 @@ def pattern_track_record(
         label, direction = labels.get(pid, (pid, None))
         horizons: dict[str, Any] = {}
         n_resolved = 0
-        for h in (5, 10, 21):
+        for h in (1, 5, 10, 21):
             vals = [_f(r.get(f"fwd{h}")) for r in rows]
             vals = [v for v in vals if v is not None]
             abn = [_f(r.get(f"abn{h}")) for r in rows]
@@ -635,7 +635,7 @@ def _confidence_word(tstat: Any) -> str:
 
 
 #: Nama horizon (kunci dari ``pattern_track_record``) -> jumlah hari bursa.
-HORIZON_DAYS = {"fwd5": 5, "fwd10": 10, "fwd21": 21}
+HORIZON_DAYS = {"fwd1": 1, "fwd5": 5, "fwd10": 10, "fwd21": 21}
 
 
 def pattern_history(
