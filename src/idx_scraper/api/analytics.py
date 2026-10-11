@@ -51,7 +51,7 @@ def _research_cache_put(key: str, val: Any, ttl: float | None = None) -> None:
 def clear_research_cache() -> int:
     """Kosongkan cache in-process supaya menu langsung menyajikan data terbaru.
 
-    Dipanggil serve loop tiap pipeline refresh (pra-buka / close sesi) â€â€ tanpa
+    Dipanggil serve loop tiap pipeline refresh (pra-buka / close sesi) — tanpa
     ini Sentimen & Jejak Sinyal bisa menampilkan data basi hingga 1 jam.
     """
     n = len(_RESEARCH_CACHE)
@@ -318,7 +318,7 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
 def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_limit: int = 10) -> dict[str, Any]:
     """Aliran asing satu emiten: tren harian, flip, dan pembanding sektor.
 
-    Sumber ``research.latest_pit`` (``foreign_net`` dalam SAHAM â€â€ dikali close
+    Sumber ``research.latest_pit`` (``foreign_net`` dalam SAHAM — dikali close
     hari itu supaya rupiah). Agregasinya di modul pure
     ``idx_scraper.foreign_flow`` (dites tanpa DB), query di sini hanya
     menyiapkan baris ``{date, net_idr, buy_idr, sell_idr}``.
@@ -386,7 +386,7 @@ def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_
         rows = cur.fetchall()
 
         # Peer: emiten lain se-sektor, jendela SESI BURSA (N trade_date
-        # terakhir), bukan hari kalender â€â€ supaya label "10 sesi" di UI
+        # terakhir), bukan hari kalender — supaya label "10 sesi" di UI
         # selalu persis 10 hari bursa untuk semua emiten.
         sector = sector_for(code)
         peer_days_map: dict[str, list[dict[str, Any]]] = {}
@@ -454,7 +454,7 @@ _SMART_MONEY_HISTORY = 30
 def _smart_money_panel(history_days: int) -> dict[str, dict[str, Any]]:
     """Panel baris harian per emiten untuk N sesi terakhir (satu query).
 
-    Returns ``{code: {"name": ..., "rows": [...]}}`` â€â€ baris sudah dalam
+    Returns ``{code: {"name": ..., "rows": [...]}}`` — baris sudah dalam
     bentuk yang dibutuhkan ``smart_money`` (``date, net_idr, value, close,
     high, low, volume``), urut tanggal menaik per emiten. Baris dengan close
     NULL dilewati (tidak ada harga yang bisa dikalikan).
@@ -499,7 +499,7 @@ def get_smart_money_radar(days: int = 10) -> dict[str, Any]:
 
     Sumber ``research.latest_pit``; logika peringkat di modul pure
     ``idx_scraper.smart_money.build_radar`` (dites tanpa DB). Output dibagi
-    dua daftar â€â€ ``accumulation`` (net buy) dan ``distribution`` (net sell) â€â€
+    dua daftar — ``accumulation`` (net buy) dan ``distribution`` (net sell) —
     masing-masing top-``limit`` berdasar |net rupiah|. Cache 30 menit (data
     harian, tidak berubah intraday).
     """
@@ -531,12 +531,12 @@ _RADAR_TOP_N = 15
 
 
 def get_smart_money_breadth() -> dict[str, Any] | None:
-    """Sebaran verdict SELURUH pasar (jendela 10 sesi) â€â€ pembanding verdict.
+    """Sebaran verdict SELURUH pasar (jendela 10 sesi) — pembanding verdict.
 
     Dipakai jalur per-emiten untuk menjawab "emiten ini istimewa atau ikut
     arus?". Memakai panel pasar yang sama dengan radar (satu query), tanpa
     lantai likuiditas, dan aturan verdict yang sama dengan per-emiten. Cache
-    30 menit â€â€ harian, dan query-nya pasar-lebar, jadi jalur per-emiten tidak
+    30 menit — harian, dan query-nya pasar-lebar, jadi jalur per-emiten tidak
     boleh membayarnya berulang.
     """
     from ..smart_money import market_breadth
@@ -557,7 +557,7 @@ def get_smart_money_patterns_board() -> dict[str, Any]:
     """Papan "pola terkuat hari ini": pola yang menyala di sesi terakhir.
 
     Menggabungkan deteksi pola se-pasar (panel yang sama dengan radar) dengan
-    track record pola (cache 1 jam) supaya tiap kelompok membawa buktinya â€â€
+    track record pola (cache 1 jam) supaya tiap kelompok membawa buktinya —
     keyakinan, horizon, dan berapa persen arahnya benar. Cache 30 menit.
 
     Ini yang membuat `initiation` (pola dengan bukti terkuat, tapi hanya muncul
@@ -661,7 +661,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
 
     # Arti historis: pola yang muncul HARI INI ditempeli track record-nya,
     # supaya label ("Distribusi diam-diam") jadi klaim yang bisa dicek, dan
-    # horizon-nya ikut terbawa â€â€ pola akumulasi bercerita ~1 bulan, pola
+    # horizon-nya ikut terbawa — pola akumulasi bercerita ~1 bulan, pola
     # distribusi ~1 minggu. Track record di-cache 1 jam (hitungan mahal).
     # Kegagalan di sini tidak boleh mematikan banner: pola tetap tampil,
     # hanya tanpa klaim historis.
@@ -677,7 +677,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
             h = hist.get(str(p.get("id")))
             if h is not None:
                 p["history"] = h
-    except Exception:  # graceful degradation â€â€ banner tetap hidup
+    except Exception:  # graceful degradation — banner tetap hidup
         hist = {}
 
     # Urutan tampil ikut kekuatan bukti: pola dengan catatan paling bisa
@@ -689,7 +689,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
     breadth: dict[str, Any] | None = None
     try:
         breadth = get_smart_money_breadth()
-    except Exception as e:  # graceful degradation â€â€ banner tetap hidup
+    except Exception as e:  # graceful degradation — banner tetap hidup
         print(f"[warn] konteks pasar dilewati di smart-money: {e}", file=sys.stderr)
         breadth = None
 
@@ -738,7 +738,7 @@ def _sector_flow_context(code: str, sector: str) -> dict[str, Any] | None:
     Kode anggota sektor dari ``sector_map`` (kurasi + generated map); panel
     30 sesi terakhir hanya untuk kode itu (filter di SQL, bukan tarik semua
     pasar). Returns ``{sector_total, accumulating, distributing, position}``
-    â€â€ ``position`` kalimat plain-language, mis. "1 dari 8 emiten perbankan
+    — ``position`` kalimat plain-language, mis. "1 dari 8 emiten perbankan
     yang akumulasi". None jika anggota ber-data < 3.
     """
     from ..smart_money import (
@@ -843,13 +843,13 @@ _SMART_MONEY_TRACK_HISTORY = 120
 
 
 def get_smart_money_track_record() -> dict[str, Any]:
-    """Track record pola klasik jejak smart money ? "pola ini terbukti?"
+    """Track record pola klasik jejak smart money — "pola ini terbukti?"
 
     Mengumpulkan kejadian pola dari 120 sesi terakhir seluruh pasar
     (:func:`collect_pattern_episodes`), memberi forward return T+1
     (disiplin ``research.signal_log``) + alpha vs pasar equal-weight, lalu
     agregasi via :func:`pattern_track_record`. Ini layer "apakah pola
-    ini bisa dipercaya" â€â€ melengkapi banner/radar yang hanya memberi
+    ini bisa dipercaya" — melengkapi banner/radar yang hanya memberi
     kondisi hari ini.
 
     Cache 1 jam (hitungan mahal & harian; tak berubah intraday).
@@ -879,7 +879,7 @@ def get_smart_money_track_record() -> dict[str, Any]:
 
     episodes = collect_pattern_episodes(panel)
 
-    # Return pasar equal-weight per (tanggal kejadian, horizon) â€â€ dihitung
+    # Return pasar equal-weight per (tanggal kejadian, horizon) — dihitung
     # sekali lalu dipakai semua episode di tanggal/horizon yang sama.
     market: dict[tuple[str, int], float | None] = {}
 
@@ -978,7 +978,7 @@ def get_smart_money_watchlist(codes: list[str]) -> dict[str, Any]:
 
     Bentuk baris yang siap dirender: ``code, name, side, insufficient,
     net_sum_idr, netval_pct, streak, date, patterns`` (label pola). Tidak ada
-    hitungan baru â€â€ hanya memangkas ``get_smart_money_verdicts`` supaya kartu
+    hitungan baru — hanya memangkas ``get_smart_money_verdicts`` supaya kartu
     UI tidak menerima struktur berat (narasi, range).
     """
     items = get_smart_money_verdicts(codes)
@@ -1150,7 +1150,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
     study, dan level invalidasi teknikal yang bisa dipegang user awam.
 
     Semua lapisan dibaca dari sumber yang sudah ada (hold-check, sentimen,
-    event study, regime) â€â€ tidak ada hitungan baru yang klaim presisi.
+    event study, regime) — tidak ada hitungan baru yang klaim presisi.
     Cache 30 menit: verdict bergerak harian, konteks intraday cukup segar.
     """
     code = code.strip().upper()
@@ -1334,7 +1334,7 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
 
     No fundamentals are available from free IDX endpoints, so "undervalued" here
     means: price is stretched below its own statistical band (z-score of price
-    vs 60-day mean is low) while the medium trend is intact â€â€ i.e. quality dip.
+    vs 60-day mean is low) while the medium trend is intact — i.e. quality dip.
     "Overvalued" is the mirror image: price far above band with stretched RSI.
     This is a mean-reversion *screen*, not a fairness opinion.
     """
@@ -1427,7 +1427,7 @@ def get_screener(
     """Rule-based multi-factor screener ("AI screening" v1: transparent rules).
 
     Factors per stock: technical signal (SMA20/50+RSI rule), 20-day momentum,
-    RSI, volume ratio (today vs 20d avg â€â€ detects unusual activity), foreign
+    RSI, volume ratio (today vs 20d avg — detects unusual activity), foreign
     net, liquidity (traded value), order-book flow (ob_imbalance / ob_absorption
     dari snapshot intraday), plus skor aktivitas broker (proksi aliran, bobot
     dari IC bulanan). All filters are optional; combining them is the "strategy".
@@ -1477,7 +1477,7 @@ def get_screener(
 
 
 def search_stocks(q: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Cari emiten by kode atau nama â€â€ dipakai command palette frontend.
+    """Cari emiten by kode atau nama — dipakai command palette frontend.
 
     Query nama langsung dari research.latest_pit (bukan lewat _screener_rows):
     cukup kode + nama, tanpa menghitung indikator tiap emiten, jadi murah dan
@@ -1512,7 +1512,7 @@ def search_stocks(q: str, limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _screener_rows() -> list[dict[str, Any]]:
-    """Baris screener penuh (semua emiten, semua metrik) â€â€ cache 10 menit.
+    """Baris screener penuh (semua emiten, semua metrik) — cache 10 menit.
 
     Tanpa cache ini tiap permintaan screener memuat ulang dan menghitung indikator
     setiap emiten (~15-20s). Data hanya berubah tiap EOD, dan serve loop memanggil
@@ -1630,7 +1630,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
     """Faktor order-book terakhir per emiten (cache 30 menit).
 
     Dihitung dari snapshot intraday via research.orderbook; None bila emiten
-    tidak tercakup capture / snapshot terlalu tipis / sumber bermasalah â€â€
+    tidak tercakup capture / snapshot terlalu tipis / sumber bermasalah —
     screener tetap jalan tanpa kolom ini.
     """
     cached = _research_cache_get("ob_latest")
@@ -1650,7 +1650,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
                     "ob_imbalance": None if pd.isna(r.ob_imbalance) else round(float(r.ob_imbalance), 4),
                     "ob_absorption": None if pd.isna(r.ob_absorption) else round(float(r.ob_absorption), 4),
                 }
-        except Exception as e:  # graceful degradation â€â€ screener tetap hidup
+        except Exception as e:  # graceful degradation — screener tetap hidup
             print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
     _research_cache_put("ob_latest", out)
     return out
@@ -1689,7 +1689,7 @@ def _event_study_bundle() -> dict[str, Any]:
     for name in sorted(ev.EVENT_PRESETS):
         bundle["events"][name] = ev.run_event_study(panel, name, horizon=21, min_gap=10)
     # Hitungannya mahal (semua preset × seluruh panel, ~2 menit saat dingin)
-    # dan datanya harian â€â€ TTL 6 jam, bukan 1 jam default.
+    # dan datanya harian — TTL 6 jam, bukan 1 jam default.
     _research_cache_put("event_bundle", bundle, ttl=6 * 3600.0)
     return bundle
 
@@ -1872,9 +1872,9 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
 def get_sentiment(limit: int = 15) -> dict[str, Any]:
     """Sentimen posisi/aliran dari data yang sudah tersimpan (cache 1 jam).
 
-    Menggabungkan tiga sumber yang sudah kita miliki â€â€ arus asing
+    Menggabungkan tiga sumber yang sudah kita miliki — arus asing
     (``latest_pit.foreign_net``), ketimpangan & absorption buku intraday
-    (``research.orderbook``), dan breadth pasar â€â€ menjadi skor emiten
+    (``research.orderbook``), dan breadth pasar — menjadi skor emiten
     ``-1..+1`` plus gauge pasar ``0..100``. Tidak ada sumber/scraping baru, dan
     snapshot intraday hari T memang sudah tertutup pada close T (no look-ahead).
     """
@@ -1944,7 +1944,7 @@ def get_broker_flow(days: int = 20, top_n: int = 5) -> dict[str, Any]:
     """Komposisi nilai transaksi per kategori broker: asing / lokal / BUMN.
 
     Sumber: ``research.broker_daily`` (EOD per firma, seluruh pasar). Kategori
-    dari map kurasi kode broker (``idx_scraper.broker_flow``) â€â€ kode asing
+    dari map kurasi kode broker (``idx_scraper.broker_flow``) — kode asing
     (UBS, CGS, JPM, ...) dipisah dari lokal, dan sekuritas BUMN (Mandiri, BNI,
     BRI Danareksa, Bahana) dipisah sendiri.
 
@@ -2040,7 +2040,7 @@ _BROKER_ACTIVITY_LOOKBACK_DAYS = 260
 
 
 def _broker_activity_empty(market: dict[str, Any], reason: str) -> dict[str, Any]:
-    """Payload saat skor belum bisa dibentuk â€â€ eksplisit, tanpa angka rekaan."""
+    """Payload saat skor belum bisa dibentuk — eksplisit, tanpa angka rekaan."""
     return {
         "as_of": None,
         "validated": False,
@@ -2078,7 +2078,7 @@ def _broker_activity_meta(codes: list[str], as_of: Any) -> dict[str, dict[str, A
 
 
 def broker_activity_snapshot() -> dict[str, Any]:
-    """Snapshot skor aktivitas broker terbaru â€â€ SATU hitung untuk semua konsumen.
+    """Snapshot skor aktivitas broker terbaru — SATU hitung untuk semua konsumen.
 
     Dipakai tiga tempat: halaman Aktivitas Broker (`get_broker_activity`), filter
     Screener (`min_broker_score`), dan lapisan verdict Hold Check. Sengaja satu
@@ -2091,11 +2091,11 @@ def broker_activity_snapshot() -> dict[str, Any]:
     - ``reason``        : kenapa belum tervalidasi (None bila tervalidasi)
     - ``factors``       : hasil ``select_factors`` (termasuk yang gagal gate)
     - ``scores``        : DataFrame code/close/score/coverage/drivers; KOSONG bila
-                          belum tervalidasi â€â€ jangan dipakai sebagai skor 0
+                          belum tervalidasi — jangan dipakai sebagai skor 0
     - ``by_code``       : {CODE: {score, coverage, drivers}} untuk lookup cepat
 
     Skor hanya dari faktor yang lolos gate (|mean IC| >= 0,05 & |ICIR| >= 0,5),
-    arah mengikuti tanda IC â€â€ lihat ``research.broker_activity``.
+    arah mengikuti tanda IC — lihat ``research.broker_activity``.
     """
     cached = _research_cache_get("broker_activity_snapshot")
     if cached is not None:
@@ -2200,7 +2200,7 @@ def broker_activity_snapshot() -> dict[str, Any]:
     }
     if scored.empty:
         # Tervalidasi tapi tidak ada emiten dengan histori cukup: skor tetap
-        # kosong (bukan 0) â€â€ konsumen harus memperlakukannya sebagai "tidak ada".
+        # kosong (bukan 0) — konsumen harus memperlakukannya sebagai "tidak ada".
         snap["reason"] = (
             "Faktor sudah tervalidasi, tapi belum ada emiten dengan cukup data "
             "aliran untuk dihitung (butuh histori flow >= 21 hari)."
@@ -2300,7 +2300,7 @@ def _sector_peers(
     """Skor emiten lain di sektor yang sama, dari cross-section terakhir.
 
     Pembanding diambil dari emiten yang SUDAH punya skor. Emiten sektor ini yang
-    skornya belum terbentuk tidak muncul â€â€ bukan dianggap 0, karena "tidak ada
+    skornya belum terbentuk tidak muncul — bukan dianggap 0, karena "tidak ada
     data" dan "skornya jelek" adalah dua hal berbeda.
 
     Emiten di bucket fallback ``Lainnya`` ditandai ``comparable=False``:
@@ -2369,7 +2369,7 @@ def get_sector_rotation(lookback: int = 60, min_names: int = 3) -> dict[str, Any
     Rotasi berbasis JEJAK ALIRAN: sektor mana yang skor akumulasinya sedang naik.
 
     Tiap tanggal diagregasi per sektor (median skor + breadth), lalu rotasi
-    diukur dari perubahan median â€â€ bukan levelnya. Sektor dengan kurang dari
+    diukur dari perubahan median — bukan levelnya. Sektor dengan kurang dari
     ``min_names`` emiten berskor dibuang, dan emiten di bucket fallback
     "Lainnya" tidak diikutkan karena itu bukan sektor (jumlahnya dilaporkan
     terpisah sebagai ``unmapped_names`` supaya tetap jujur berapa yang tercakup).
@@ -2413,7 +2413,7 @@ def get_sector_rotation(lookback: int = 60, min_names: int = 3) -> dict[str, Any
 
     codes = sorted({str(c).upper() for c in panel["code"]})
     sector_of = {c: sector_for(c) for c in codes}
-    # Berapa emiten berskor yang belum punya sektor sebenarnya â€â€ dilaporkan,
+    # Berapa emiten berskor yang belum punya sektor sebenarnya — dilaporkan,
     # tidak disembunyikan, supaya cakupan rotasi bisa dinilai apa adanya.
     out["unmapped_names"] = sum(
         1 for c in (str(x).upper() for x in scores["code"]) if sector_for(c) == FALLBACK_SECTOR
@@ -2468,7 +2468,7 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
 
     Nilai terkini dibaca dari snapshot pasar supaya PERSIS sama dengan angka di
     halaman ranking. Riwayatnya dihitung ulang per tanggal dari panel yang sama
-    (``research.broker_activity.composite_score_history``) â€â€ tiap tanggal
+    (``research.broker_activity.composite_score_history``) — tiap tanggal
     di-score terhadap pasar HARI ITU, jadi garis riwayatnya sebanding antar waktu
     dan tidak tergeser oleh perubahan pasar hari ini.
 
@@ -2512,7 +2512,7 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
             "score": round(float(r["score"]), 1),
             "coverage": round(float(r["coverage"]), 2),
             "drivers": list(r["drivers"]),
-            # Baseline pasar hari itu â€â€ garis pembanding di chart timeline.
+            # Baseline pasar hari itu — garis pembanding di chart timeline.
             "market_median": round(float(r["market_median"]), 1)
             if r.get("market_median") is not None and pd.notna(r["market_median"])
             else None,
@@ -2551,7 +2551,7 @@ _RECOMMENDATION_HISTORY = 300
 RECOMMENDATION_LAYER_NOTE = (
     "Lapisan faktor IC dan aliran broker hanya ikut bila parameternya tervalidasi "
     "(lolos gate IC). Kalau belum, keduanya tidak menggerakkan skor sama sekali "
-    "â€â€ bukan diterapkan sebagai nol tersamar."
+    "— bukan diterapkan sebagai nol tersamar."
 )
 
 
@@ -2560,7 +2560,7 @@ def _recommendation_metrics() -> pd.DataFrame:
 
     Memakai panel pasar yang SAMA dengan radar/smart money
     (:func:`_smart_money_panel`), lalu menurunkannya lewat modul pure
-    ``research.recommendation_log.metrics_frame`` â€â€ supaya definisi pola dan
+    ``research.recommendation_log.metrics_frame`` — supaya definisi pola dan
     angka di daftar kandidat tidak pernah berbeda dari halaman lain.
     """
     cached = _research_cache_get("recommendation_metrics")
@@ -2593,7 +2593,7 @@ def _recommendation_context() -> dict[str, Any]:
 
     Lapisan faktor IC dan aliran broker dihitung di sini SEKALI untuk seluruh
     pasar, lalu di-injeksi per emiten. Bila gate IC belum terpenuhi, keduanya
-    kosong dan tidak menggerakkan skor â€â€ transparan lewat ``layers``.
+    kosong dan tidak menggerakkan skor — transparan lewat ``layers``.
     """
     cached = _research_cache_get("recommendation_context")
     if cached is not None:
@@ -2606,7 +2606,7 @@ def _recommendation_context() -> dict[str, Any]:
     factor_validated = False
     factor_note = (
         "Belum ada faktor umum yang lolos gate IC (|IC| >= 0,05 & |ICIR| >= 0,5) "
-        "pada run terakhir â€â€ lapisan faktor tidak dipakai."
+        "pada run terakhir — lapisan faktor tidak dipakai."
     )
     try:
         from ..research.composite import factor_adjustment, market_factor_ranks
@@ -2621,14 +2621,14 @@ def _recommendation_context() -> dict[str, Any]:
                     if adj:
                         factor_adj[str(code).upper()] = adj
                 factor_validated = True
-                factor_note = "Lapisan faktor aktif â€â€ bobot dari run IC tervalidasi."
+                factor_note = "Lapisan faktor aktif — bobot dari run IC tervalidasi."
     except Exception as e:  # DB kosong / query gagal: lapisan tidak aktif
         print(f"[warn] lapisan faktor rekomendasi dilewati: {e}", file=sys.stderr)
 
     broker_adj: dict[str, float] = {}
     broker_validated = False
     broker_note = (
-        "Faktor aliran (proksi aktivitas broker) belum lolos gate IC â€â€ lapisan "
+        "Faktor aliran (proksi aktivitas broker) belum lolos gate IC — lapisan "
         "aliran tidak dipakai."
     )
     try:
@@ -2640,7 +2640,7 @@ def _recommendation_context() -> dict[str, Any]:
                 adj, _ = verdict_adjustment(row.get("score"), True)
                 if adj:
                     broker_adj[str(code).upper()] = adj
-            broker_note = "Lapisan aliran broker aktif â€â€ faktor aliran lolos gate IC."
+            broker_note = "Lapisan aliran broker aktif — faktor aliran lolos gate IC."
     except Exception as e:
         print(f"[warn] lapisan broker rekomendasi dilewati: {e}", file=sys.stderr)
 
@@ -2659,7 +2659,7 @@ def _recommendation_context() -> dict[str, Any]:
 
 
 def recommendation_record_inputs() -> dict[str, Any]:
-    """Input lapisan untuk job log rekomendasi (tanpa metrik â€â€ job memuat panelnya).
+    """Input lapisan untuk job log rekomendasi (tanpa metrik — job memuat panelnya).
 
     Dipakai worker CLI supaya baris yang ditulis ke ``research.recommendation_log``
     memakai bobot pola & lapisan yang SAMA dengan yang tampil di API.
@@ -2675,7 +2675,7 @@ def recommendation_record_inputs() -> dict[str, Any]:
 
 
 def _with_sizing(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Lengkapi tiap kandidat dengan ukuran posisi (% modal) â€â€ risiko 1%/posisi."""
+    """Lengkapi tiap kandidat dengan ukuran posisi (% modal) — risiko 1%/posisi."""
     from ..research.recommend import position_size_pct
 
     for c in candidates:
@@ -2687,12 +2687,12 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     """Papan kandidat beli se-pasar untuk sesi terakhir (read-only).
 
     Menggabungkan: setup teknikal + entry timing (modul pure ``recommend``),
-    bukti pola jejak smart money (track record, bukan klaim), dan â€â€ HANYA bila
-    tervalidasi â€â€ lapisan faktor IC serta aliran broker. Tiap kandidat membawa
+    bukti pola jejak smart money (track record, bukan klaim), dan — HANYA bila
+    tervalidasi — lapisan faktor IC serta aliran broker. Tiap kandidat membawa
     zona entry, stop, target, R/R, dan ukuran posisi sederhana.
 
     Cache 30 menit (metrik harian, tidak berubah intraday). Papan kosong berarti
-    tidak ada kandidat yang lolos gate hari itu â€â€ bukan error.
+    tidak ada kandidat yang lolos gate hari itu — bukan error.
     """
     limit = max(1, min(limit, 100))
     min_grade = str(min_grade).upper()
@@ -2819,7 +2819,7 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
         if pd.Timestamp(row["date"]) != pd.Timestamp(last_date):
             out["reason"] = (
                 f"Data terakhir {code} ({pd.Timestamp(row['date']).date()}) bukan sesi "
-                f"terakhir pasar ({out['as_of']}) â€â€ tidak ada kandidat untuk sesi itu."
+                f"terakhir pasar ({out['as_of']}) — tidak ada kandidat untuk sesi itu."
             )
         else:
             out["reason"] = (
@@ -2834,11 +2834,11 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
 
 
 def get_recommendation_track() -> dict[str, Any]:
-    """Track record kandidat beli (per grade & horizon) ? "rekomendasi terbukti?".
+    """Track record kandidat beli (per grade & horizon) — "rekomendasi terbukti?".
 
     Membaca ``research.recommendation_log`` (kandidat harian) lalu menilai
     return forward T+1 + abnormal vs pasar. Kalau log belum pernah diisi,
-    mengembalikan payload kosong dengan alasan â€â€ bukan angka rekaan. Cache 1 jam
+    mengembalikan payload kosong dengan alasan — bukan angka rekaan. Cache 1 jam
     (hitungan mahal & harian, tak berubah intraday).
     """
     cache_key = "recommendation_track"
@@ -2861,6 +2861,6 @@ def get_recommendation_track() -> dict[str, Any]:
         out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
                "reason": "Tabel research.recommendation_log belum ada / belum diisi."}
     if not out.get("candidates") and not out.get("reason"):
-        out["reason"] = "Belum ada kandidat tercatat â€â€ jalankan `idx recommendations`."
+        out["reason"] = "Belum ada kandidat tercatat — jalankan `idx recommendations`."
     _research_cache_put(cache_key, out, ttl=3600.0)
     return out
