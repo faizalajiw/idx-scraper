@@ -387,7 +387,7 @@ def _summarize(sub: pd.DataFrame, signal: str, regime: str | None, horizon: int)
             "mean_fwd": round(float(fwd.mean()), 6),
             "median_fwd": round(float(fwd.median()), 6),
             "mean_abnormal": round(float(abn.mean()), 6) if not abn.empty else None,
-            "t_stat": _round_opt(_nw_tstat(fwd)),
+            "t_stat": _round_opt(_nw_tstat(abn)) if not abn.empty else None,
             "avg_mfe": _round_opt(sub[f"mfe_{horizon}"].mean()),
             "avg_mae": _round_opt(sub[f"mae_{horizon}"].mean()),
         }
@@ -426,7 +426,7 @@ def summarize_outcomes(
 
     cols = ["code", "date", *[f"{p}_{k}" for k in horizons for p in ("fwd", "mfe", "mae", "abn")]]
     merged = log.merge(outcomes[cols], on=["code", "date"], how="left")
-    merged["regime"] = merged["regime"].fillna("TIDAK DIKETAHUI")
+    merged["regime"] = merged["regime"].fillna("Belum terdeteksi")
 
     overall: list[dict[str, Any]] = []
     by_regime: list[dict[str, Any]] = []

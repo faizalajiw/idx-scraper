@@ -10,6 +10,7 @@ from idx_scraper.research.sentiment import (
     label_for,
     market_gauge,
     orderbook_component,
+    orderbook_fresh,
     percentile_ranks,
 )
 
@@ -201,3 +202,26 @@ def test_build_without_orderbook_still_works():
     out = build(_rows(), ob_by_code=None)
     assert out["stats"]["analyzed"] == 3
     assert len(out["accumulation"]) >= 1
+
+
+# --------------------------------------------------------------------------- #
+# Kesegaran order-book
+# --------------------------------------------------------------------------- #
+
+
+def test_orderbook_fresh_when_date_matches_session():
+    ob = {"ACCS": {"ob_imbalance": 0.5, "ob_absorption": None, "ob_date": "2026-10-09"}}
+    assert orderbook_fresh(ob, "2026-10-09") is True
+
+
+def test_orderbook_stale_when_date_older_than_session():
+    ob = {"ACCS": {"ob_imbalance": 0.5, "ob_absorption": -0.3, "ob_date": "2026-10-08"}}
+    assert orderbook_fresh(ob, "2026-10-09") is False
+
+
+def test_orderbook_not_fresh_without_date_or_values():
+    assert orderbook_fresh({"ACCS": {"ob_imbalance": 0.5}}, "2026-10-09") is False
+    assert orderbook_fresh({"ACCS": {"ob_imbalance": None, "ob_absorption": None, "ob_date": "2026-10-09"}}, "2026-10-09") is False
+    assert orderbook_fresh({}, "2026-10-09") is False
+    assert orderbook_fresh(None, "2026-10-09") is False
+    assert orderbook_fresh({"ACCS": {"ob_imbalance": 0.5, "ob_date": "2026-10-09"}}, None) is False

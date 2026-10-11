@@ -1652,6 +1652,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
                 out[r.code] = {
                     "ob_imbalance": None if pd.isna(r.ob_imbalance) else round(float(r.ob_imbalance), 4),
                     "ob_absorption": None if pd.isna(r.ob_absorption) else round(float(r.ob_absorption), 4),
+                    "ob_date": str(pd.Timestamp(r.date).date()),
                 }
         except Exception as e:  # graceful degradation — screener tetap hidup
             print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)

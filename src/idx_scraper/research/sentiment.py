@@ -411,6 +411,25 @@ def load_latest(dsn: str) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def orderbook_fresh(
+    ob_by_code: dict[str, dict[str, Any]] | None,
+    as_of: Any,
+) -> bool:
+    """True bila ada faktor buku dengan ``ob_date`` = tanggal sesi ``as_of``.
+
+    Tanpa ``ob_date`` per kode (format lama) hasilnya False: kita tidak bisa
+    membuktikan kesegarannya, jadi tidak diklaim tersedia.
+    """
+    if not ob_by_code or as_of is None:
+        return False
+    target = str(as_of)[:10]
+    return any(
+        str(v.get("ob_date") or "")[:10] == target
+        and (v.get("ob_imbalance") is not None or v.get("ob_absorption") is not None)
+        for v in ob_by_code.values()
+    )
+
+
 def compute(
     dsn: str,
     index_pct: float | None = None,
@@ -424,7 +443,9 @@ def compute(
     as_of = max((r["trade_date"] for r in rows if r.get("trade_date")), default=None)
     out["as_of"] = str(as_of) if as_of is not None else None
     out["generated_at"] = datetime.now(WIB).isoformat(timespec="seconds")
-    out["orderbook_available"] = bool(ob_by_code)
+    # Buku hanya dianggap tersedia bila ada faktor dari sesi yang sama dengan
+    # as_of. Snapshot lama (mis. berhenti beberapa hari) tidak boleh diklaim segar.
+    out["orderbook_available"] = orderbook_fresh(ob_by_code, as_of)
     out["disclaimer"] = (
         "Sentimen ini dihitung dari jejak transaksi yang sudah tersimpan "
         "(arus asing peringkat pasar, ketimpangan buku intraday, breadth) — "
