@@ -255,7 +255,7 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
     """
     with get_cursor() as cur:
         cur.execute("select max(trade_date) from research.latest_pit where foreign_net is not null")
-        max_date = cur.fetchone()[0]
+        max_date = cur.fetchone()["max"]
 
         cur.execute(
             """select trade_date as date,
@@ -1535,7 +1535,7 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
 
     with get_cursor() as cur:
         cur.execute("select max(trade_date) from research.latest_pit")
-        max_date = cur.fetchone()[0]
+        max_date = cur.fetchone()["max"]
 
         cur.execute(
             """select distinct on (code) code, name from research.latest_pit

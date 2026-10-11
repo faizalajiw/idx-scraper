@@ -209,7 +209,7 @@ def get_market_overview() -> dict[str, Any]:
 
         # Full-market EOD totals from the research superset (latest trade_date).
         cur.execute("select max(trade_date) from research.latest_pit")
-        max_date = cur.fetchone()[0]
+        max_date = cur.fetchone()["max"]
 
         cur.execute(
             """select sum(volume) as total_volume,
