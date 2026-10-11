@@ -38,6 +38,28 @@ python -m idx_scraper.cli serve
 ```
 The scheduler starts automatically and runs only on weekdays between 09:00‑16:00 WIB.
 
+#### Cara menjalankan backend (agar data selalu update)
+
+Backend terdiri dari dua proses yang harus jalan bersamaan, di folder `idx-scraper` dengan venv aktif:
+
+| Proses | Perintah | Fungsi |
+| --- | --- | --- |
+| API (FastAPI) | `python -m uvicorn idx_scraper.api.app:app --port 8000` | Melayani endpoint `/api/*` untuk frontend (`idx-web`, `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`) |
+| Scheduler | `python -m idx_scraper.cli serve` | Menarik dan menyimpan data IDX (harga, broker, foreign flow) ke database |
+
+```powershell
+# Terminal 1: API
+python -m uvicorn idx_scraper.api.app:app --port 8000
+
+# Terminal 2: Scheduler (wajib jalan agar data terisi)
+python -m idx_scraper.cli serve
+```
+
+- Jika hanya API yang jalan, dashboard tetap tampil tetapi data tidak bertambah.
+- Scheduler hanya bekerja Senin–Jumat 09:00–16:00 WIB. Di luar jam itu, API melayani data EOD terakhir dari `research.latest_pit`.
+- Data broker mengikuti hari bursa. Pada Sabtu/Minggu atau hari libur, log `broker summary ...: 0 baris` adalah perilaku normal, bukan error.
+- Cek API: `curl http://localhost:8000/health`.
+
 ### 4. Optional one‑off commands
 ```powershell
 python -m idx_scraper.cli snapshot          # fetch a single snapshot
