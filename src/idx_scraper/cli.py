@@ -742,6 +742,67 @@ def cmd_eod(args) -> None:
         storage.close()
 
 
+def _eod_fresh_for(day) -> tuple[bool, bool]:
+    """Cek kesegaran EOD untuk ``day`` (tanggal WIB).
+
+    Mengembalikan ``(ada EOD saham, ada close indeks resmi >= 16:00)``.
+    Dipakai startup catchup ``serve`` dan fallback ``IDX-EOD``: satu definisi
+    "sudah lengkap" supaya keduanya tidak saling meniarakan pekerjaan.
+    """
+    import psycopg
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        return (False, False)
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select 1 from research.latest_pit "
+            "where trade_date = %s limit 1",
+            (day,),
+        )
+        has_stocks = cur.fetchone() is not None
+        cur.execute(
+            "select 1 from index_quotes "
+            "where code = 'COMPOSITE' "
+            "and (captured_at at time zone 'Asia/Jakarta')::date = %s "
+            "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16 "
+            "limit 1",
+            (day,),
+        )
+        has_index = cur.fetchone() is not None
+    return (has_stocks, has_index)
+
+
+def cmd_refresh(args) -> None:
+    """One-shot full refresh pipeline (EOD + recompute + clear cache).
+
+    Inti yang sama dengan job terjadwal ``refresh_s2`` di ``serve``, tapi bisa
+    dipanggil berdiri sendiri. Dipakai task Windows ``IDX-EOD`` supaya slot
+    16:05/16:20 tetap terisi walau ``serve`` sedang mati.
+
+    ``--skip-if-fresh`` membuat run susulan (16:20) tidak mengulang penuh bila
+    slot 16:05 sudah mengisi EOD saham + close indeks hari ini.
+    """
+    if getattr(args, "skip_if_fresh", False):
+        today = datetime.now(WIB).date()
+        has_stocks, has_index = _eod_fresh_for(today)
+        if has_stocks and has_index:
+            print(
+                f"[refresh] data EOD {today.isoformat()} sudah lengkap "
+                "(saham + indeks) — dilewati (--skip-if-fresh)"
+            )
+            return
+    client = IDXClient()
+    storage = get_storage_from_env()
+    try:
+        _job_pipeline_refresh(
+            client, storage, label="manual refresh (task 16:05/16:20)", do_eod=True
+        )
+    finally:
+        client.close()
+        storage.close()
+
+
 def cmd_seed(args) -> None:
     """Seed historical data for watchlist tickers."""
     storage = get_storage_from_env()
@@ -1083,6 +1144,13 @@ def cmd_serve(args) -> None:
             "trigger": "cron",
             "args": [client, storage],
             "kwargs": {"label": label, "do_eod": do_eod},
+            # Job yang terlewat karena mesin tidur/shutdown TETAP dijalankan
+            # setelah bangun, selama masih dalam jendela 2 jam. Tanpa ini
+            # APScheduler memakai grace 1 detik: bangun jam 16:32 berarti
+            # slot 16:05 dibuang tanpa jejak (penyebab EOD kosong 12 Okt).
+            # coalesce=True mencegah tumpukan run bila beberapa slot lewat.
+            "misfire_grace_time": 7200,
+            "coalesce": True,
         }
 
     # Berita Snips 24/7 (tanpa gate jam bursa). Interval default 15 menit.
@@ -1194,28 +1262,12 @@ def cmd_serve(args) -> None:
     # Prevents missed refreshes when scheduler restarts after the cron window.
     # Checks BOTH prices_pit (stock EOD) AND index_quotes (COMPOSITE official close).
     try:
-        import psycopg as _pg
-
         _dsn = os.getenv("DATABASE_URL")
         if _dsn:
             _today = datetime.now(WIB).date()
-            with _pg.connect(_dsn) as _conn, _conn.cursor() as _cur:
-                _cur.execute(
-                    "select 1 from research.latest_pit "
-                    "where trade_date = %s limit 1",
-                    (_today,),
-                )
-                _has_today_stocks = _cur.fetchone() is not None
-                # Also check if COMPOSITE has an official 16:00 EOD close for today
-                _cur.execute(
-                    "select 1 from index_quotes "
-                    "where code = 'COMPOSITE' "
-                    "and (captured_at at time zone 'Asia/Jakarta')::date = %s "
-                    "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16 "
-                    "limit 1",
-                    (_today,),
-                )
-                _has_today_index = _cur.fetchone() is not None
+            # Cek kesegaran EOD saham + close indeks resmi (helper bersama
+            # dengan fallback IDX-EOD supaya definisi "sudah lengkap" satu).
+            _has_today_stocks, _has_today_index = _eod_fresh_for(_today)
             now_wib = datetime.now(WIB)
             wd = now_wib.weekday()  # 0=Mon..6=Sun
             past_close = now_wib.hour >= 16
@@ -1297,6 +1349,15 @@ def main() -> None:
         help="cek data EOD hari bursa terakhir sudah masuk (exit 1 kalau telat)",
     )
     sub.add_parser("serve", help="start continuous polling loop")
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="one-shot full refresh pipeline (EOD + recompute + clear cache)",
+    )
+    p_refresh.add_argument(
+        "--skip-if-fresh",
+        action="store_true",
+        help="lewati bila EOD saham + close indeks hari ini sudah ada",
+    )
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
     p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
                           help="force source (optional; omit to just show state)")
@@ -1336,6 +1397,8 @@ def main() -> None:
         cmd_trade_summary(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "refresh":
+        cmd_refresh(args)
     elif args.command == "source":
         from .source_state import force_source, get_state
         if getattr(args, "set", None):
