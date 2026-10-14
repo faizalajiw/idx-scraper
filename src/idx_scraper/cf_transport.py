@@ -1,18 +1,21 @@
-"""Cloudflare-protected transport for the IDX unofficial endpoints.
+"""Transport IDX — jalur utama tanpa browser.
 
-IDX sits behind Cloudflare's managed challenge. Once Cloudflare locks an IP in,
-plain TLS impersonation (curl_cffi) is rejected with 403 "Just a moment...",
-and a separately-acquired ``cf_clearance`` cookie is useless because it is tied
-to a specific user-agent + IP and chronology.
+Versi lama modul ini menyatakan IDX wajib lewat Chrome headful karena curl_cffi
+selalu kena 403. Itu sudah tidak berlaku (diuji 15 Okt 2026): dengan
+``impersonate="chrome124"``, seluruh endpoint JSON IDX — GetIndexList,
+GetStockSummary, GetBrokerSummary, GetTradingInfoDaily, GetSecuritiesStock —
+menjawab 200 tanpa kuki dan tanpa browser, 23 percobaan berturut-turut selama
+45 menit, 0 gagal. Cloudflare IDX cukup puas dengan fingerprint TLS curl_cffi;
+tidak ada challenge JS yang perlu dipecahkan.
 
-The reliable path is to keep ONE real browser session alive and make every
-request from inside that same page via ``page.evaluate(fetch(...))``, which
-shares the page's (already-cleared) Cloudflare cookies and user-agent.
+Karena itu jalur utamanya ``HttpTransport``: `idx serve` bisa jalan di server
+Linux tanpa Chrome, tanpa Xvfb, dan tanpa profil persisten yang mudah terkunci
+(chrome yatim menahan profil = EOD masuk 0 baris, akar masalah lama).
 
-This module runs a persistent Chromium (``channel="chrome"``, this machine's
-installed Chrome) on a dedicated background event-loop thread and issues IDX
-JSON requests through the same page, so a single browser session serves the
-whole lifetime of an ``IDXClient`` (including repeated scheduler polling).
+``BrowserTransport`` tetap dipertahankan sebagai cadangan bila suatu hari
+Cloudflare memperketat, dan ``AutoTransport`` memilih di antara keduanya.
+Modul ini hanya mengimpor playwright di dalam BrowserTransport, jadi jalur HTTP
+tidak pernah menyentuh Playwright sama sekali.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ import threading
 import time
 from typing import Any
 
+from curl_cffi import requests as cf_requests
+
 IDX_BASE = "https://www.idx.co.id"
 _REVIVE_COOLDOWN_SEC = 600
 # Override via env supaya script manual bisa jalan berdampingan dengan
@@ -35,6 +40,19 @@ PROFILE_DIR = os.environ.get("IDX_CHROME_PROFILE_DIR") or os.path.join(
     "idx-scraper-chrome-profile",
 )
 CHALLENGE_TITLES = ("just a moment", "tunggu sebentar", "checking your browser")
+
+# Target impersonate curl_cffi. Menaikkan nilainya adalah satu-satunya perubahan
+# yang perlu bila Cloudflare IDX memperketat pemeriksaan fingerprint.
+IMPERSONATE = os.environ.get("IDX_IMPERSONATE") or "chrome124"
+# Header disamakan dengan XHR halaman IDX sendiri; urutannya ikut terbaca CF.
+_HTTP_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+    "Referer": f"{IDX_BASE}/",
+    "X-Requested-With": "XMLHttpRequest",
+}
+# Lama jalur HTTP diistirahatkan setelah ditolak, sebelum dicoba lagi.
+_HTTP_BLOCKED_SEC = int(os.environ.get("IDX_HTTP_COOLDOWN_SEC") or "600")
 
 
 def _is_challenge(title: str) -> bool:
@@ -261,5 +279,147 @@ class BrowserTransport:
                 loop.call_soon_threadsafe(loop.stop)
             self._loop = None
             self._ready.clear()
+
+
+class HttpTransport:
+    """Transport tanpa browser: satu sesi curl_cffi untuk seluruh endpoint IDX.
+
+    Kontraknya sama dengan BrowserTransport supaya bisa saling tukar:
+    - ``get(path)``  -> JSON (dict/list) pada 200, ``None`` pada non-200/non-JSON
+    - ``get(path)``  -> melempar exception bila koneksi gagal (transport mati),
+      sama seperti BrowserTransport yang melempar saat halaman tak bisa dipakai
+    - ``last_status`` menyimpan HTTP status terakhir agar 429 bisa dibedakan
+      dari payload kosong yang sah
+    """
+
+    def __init__(self, impersonate: str | None = None) -> None:
+        self.impersonate = impersonate or IMPERSONATE
+        self._session = cf_requests.Session()
+        self.last_status: int | None = None
+
+    def ensure_open(self) -> Any:
+        """Tidak ada yang perlu dibuka — ada agar API-nya seragam."""
+        return self
+
+    def get(self, path: str) -> Any | None:
+        url = f"{IDX_BASE}{path}"
+        r = self._session.get(
+            url, impersonate=self.impersonate, headers=_HTTP_HEADERS, timeout=30
+        )
+        self.last_status = r.status_code
+        if r.status_code != 200:
+            print(f"[warn] IDX {path} status {r.status_code}", file=sys.stderr)
+            return None
+        try:
+            return r.json()
+        except Exception:
+            print(f"[warn] IDX {path} non-JSON body", file=sys.stderr)
+            return None
+
+    def get_bytes(self, url: str) -> bytes | None:
+        """Unduh aset statis (mis. logo broker). Best-effort: None bila gagal."""
+        try:
+            r = self._session.get(url, impersonate=self.impersonate, timeout=30)
+        except Exception as e:
+            print(f"[warn] http fetch {url} gagal: {e!r}", file=sys.stderr)
+            return None
+        self.last_status = r.status_code
+        if r.status_code != 200:
+            print(f"[warn] http fetch {url} status {r.status_code}", file=sys.stderr)
+            return None
+        return r.content
+
+    def close(self) -> None:
+        try:
+            self._session.close()
+        except Exception:
+            pass
+
+
+class AutoTransport:
+    """curl_cffi dulu; pindah sementara ke browser bila IDX menolaknya.
+
+    Tambahan browser hanya terpakai kalau HTTP benar-benar gagal, jadi di mesin
+    tanpa Chrome IDX tetap jalan. Setelah HTTP ditolak, jalur HTTP diistirahatkan
+    ``IDX_HTTP_COOLDOWN_SEC`` detik (pola sama dengan ``_revive_blocked_until``
+    di BrowserTransport) supaya tiap request tidak membayar timeout + buka Chrome.
+    """
+
+    def __init__(
+        self, http_factory: Any = None, browser_factory: Any = None
+    ) -> None:
+        self._http_factory = http_factory or HttpTransport
+        self._browser_factory = browser_factory or BrowserTransport
+        self._http: Any = None
+        self._browser: Any = None
+        self._http_blocked_until = 0.0
+        self.last_status: int | None = None
+
+    @property
+    def http(self) -> Any:
+        if self._http is None:
+            self._http = self._http_factory()
+        return self._http
+
+    @property
+    def browser(self) -> Any:
+        if self._browser is None:
+            self._browser = self._browser_factory()
+        return self._browser
+
+    def ensure_open(self) -> Any:
+        # Hanya menyiapkan HTTP; Chrome tidak dibuka sampai memang dibutuhkan.
+        return self.http.ensure_open()
+
+    def get(self, path: str) -> Any | None:
+        if time.monotonic() >= self._http_blocked_until:
+            raw = None
+            try:
+                raw = self.http.get(path)
+            except Exception as e:
+                print(f"[transport] HTTP {path} gagal: {e!r}", file=sys.stderr)
+            if raw is not None:
+                self.last_status = self.http.last_status
+                return raw
+            self._http_blocked_until = time.monotonic() + _HTTP_BLOCKED_SEC
+            print(
+                f"[transport] HTTP ditolak (status {self.http.last_status}) — "
+                f"pindah ke browser {_HTTP_BLOCKED_SEC}s",
+                file=sys.stderr,
+            )
+        raw = self.browser.get(path)
+        self.last_status = self.browser.last_status
+        return raw
+
+    def get_bytes(self, url: str) -> bytes | None:
+        data = self.http.get_bytes(url)
+        if data is not None:
+            return data
+        return self.browser.get_bytes(url)
+
+    def close(self) -> None:
+        for t in (self._http, self._browser):
+            if t is not None:
+                try:
+                    t.close()
+                except Exception:
+                    pass
+
+
+def make_transport() -> Any:
+    """Pilih transport dari env ``IDX_TRANSPORT``.
+
+    - ``auto`` (default) — HTTP dulu, browser hanya bila IDX menolak
+    - ``http``           — tanpa browser sama sekali (server Linux tanpa Chrome)
+    - ``browser``        — perilaku lama: selalu lewat Chrome
+    """
+    mode = (os.getenv("IDX_TRANSPORT") or "auto").strip().lower()
+    if mode == "http":
+        return HttpTransport()
+    if mode == "browser":
+        return BrowserTransport()
+    if mode != "auto":
+        print(f"[warn] IDX_TRANSPORT={mode!r} tidak dikenal — dipakai 'auto'", file=sys.stderr)
+    return AutoTransport()
 
 

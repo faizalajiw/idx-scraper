@@ -16,7 +16,7 @@ import yfinance as yf
 from curl_cffi import requests as cf_requests
 from pydantic import BaseModel
 
-from .cf_transport import BrowserTransport
+from .cf_transport import make_transport
 from .models import EodStockRow, IndexQuote, StockQuote
 
 WIB = timezone(timedelta(hours=7))
@@ -25,23 +25,23 @@ IDX_BASE = "https://www.idx.co.id"
 
 class IDXClient:
     def __init__(self) -> None:
-        # Transport is created lazily — in Yahoo-only / cooldown mode we never
-        # want to launch Chrome or touch IDX at all.
-        self.session: BrowserTransport | None = None
+        # Transport dibuat malas — di mode Yahoo-only / cooldown kita tidak
+        # ingin menyentuh IDX sama sekali, apalagi membuka Chrome.
+        self.session: Any | None = None
         self._warmed = False
-        # Scheduler jobs and the live-capture sweep share this client; without a
-        # lock two threads can both build a BrowserTransport, and Chromium
-        # refuses a second instance on the same user-data-dir.
+        # Job scheduler dan sapuan live-capture berbagi client ini; tanpa kunci
+        # dua thread bisa membangun transport dua kali.
         self._lock = threading.Lock()
 
-    def _ensure_session(self) -> BrowserTransport:
+    def _ensure_session(self) -> Any:
         if self.session is None:
             with self._lock:
                 if self.session is None:
-                    self.session = BrowserTransport()
+                    self.session = make_transport()
         return self.session
 
     def warmup(self) -> None:
+        """Siapkan transport sekali. Di jalur HTTP ini praktis gratis."""
         if self._warmed:
             return
         self._ensure_session().ensure_open()
@@ -49,13 +49,11 @@ class IDXClient:
             self._warmed = True
 
     def reachable(self) -> bool:
-        """Is IDX reachable *through the same browser transport* used for data?
+        """Apakah IDX bisa dijangkau lewat transport yang dipakai untuk data?
 
-        Cloudflare locks an IP in with a challenge; plain TLS impersonation
-        (curl_cffi) keeps getting 403'd even after the user clears the challenge
-        in the shared Chrome profile. The authoritative probe is therefore the
-        browser page itself: if the index list parses, we know real data can
-        flow. Returns True on a parseable JSON list/dict, else False."""
+        Probe-nya adalah permintaan sungguhan ke endpoint indeks: kalau JSON-nya
+        terurai, data nyata memang mengalir. True bila list/dict berisi, selain
+        itu False."""
         try:
             raw = self._get_json("/primary/home/GetIndexList")
         except Exception:

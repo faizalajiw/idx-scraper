@@ -20,6 +20,12 @@ supabase = [
 postgres = [
     "psycopg[binary]>=3.1",
 ]
+browser = [
+    # Opsional: hanya untuk cadangan BrowserTransport (IDX_TRANSPORT=browser,
+    # atau saat AutoTransport jatuh ke Chrome). Jalur HTTP tidak butuh ini,
+    # jadi server Linux tanpa Chrome tidak perlu memasangnya sama sekali.
+    "playwright>=1.40",
+]
 api = [
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.2",

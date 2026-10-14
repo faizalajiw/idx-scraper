@@ -27,8 +27,11 @@ IDX_WATCHLIST_INTERVAL=60
 IDX_MARKET_OPEN=09:00
 IDX_MARKET_CLOSE=16:00
 
-# Chrome profile that has passed the Cloudflare challenge
-IDX_CHROME_PROFILE_DIR=C:\Users\<you>\AppData\Local\idx-scraper-chrome-p3
+# Transport IDX: auto (HTTP dulu, Chrome cadangan) | http (tanpa browser) | browser
+IDX_TRANSPORT=auto
+
+# Hanya perlu bila memakai Chrome (IDX_TRANSPORT=browser atau fallback auto):
+# IDX_CHROME_PROFILE_DIR=C:\Users\<you>\AppData\Local\idx-scraper-chrome-p3
 ```
 > **Tip** – Set `IDX_STORAGE=supabase` and add `SUPABASE_DB_URL=...` when running in production.
 
@@ -145,10 +148,30 @@ berperingkat se‑pasar** dengan level eksekusi.
 
 ---
 
-## Cloudflare Bypass (Chrome Profile)
-IDX endpoints are protected by Cloudflare. The scraper uses Playwright‑Chrome in *persistent* mode and re‑uses cookies from a profile that has already solved the challenge.
+## IDX & Cloudflare (tanpa browser)
+Endpoint JSON IDX memang di belakang Cloudflare, tapi **tidak butuh browser**.
+curl_cffi sudah cukup: dengan `impersonate="chrome124"` seluruh endpoint yang
+dipakai (`GetIndexList`, `GetStockSummary`, `GetBrokerSummary`,
+`GetTradingInfoDaily`, `GetSecuritiesStock`) menjawab 200 tanpa kuki apa pun.
+Diuji 15 Okt 2026: 23/23 permintaan 200 selama 45 menit tanpa satu pun proses
+browser hidup. (Catatan lama di dokumen ini — "wajib Chrome headful" — sudah
+tidak berlaku.)
 
-1. Export a working Chrome profile (e.g. *Profile 3*) to a dedicated folder:
+| `IDX_TRANSPORT` | Perilaku |
+|---|---|
+| `auto` (default) | HTTP dulu; Chrome dibuka **hanya** kalau IDX menolak, lalu HTTP diistirahatkan `IDX_HTTP_COOLDOWN_SEC` (default 600s) |
+| `http` | Tanpa browser sama sekali — mode server Linux, tanpa Chrome & Xvfb |
+| `browser` | Selalu lewat Chrome (perilaku lama) |
+
+`IDX_IMPERSONATE` (default `chrome124`) adalah satu-satunya tombol bila suatu
+hari Cloudflare memperketat pemeriksaan fingerprint.
+
+### Cadangan: Chrome headful (opsional)
+Hanya terpakai bila `IDX_TRANSPORT=auto` dan IDX menolak jalur HTTP, atau bila
+`IDX_TRANSPORT=browser`. Butuh Google Chrome terpasang dan Playwright
+(`pip install -e ".[browser]"`); di Linux tanpa display jalankan di bawah `xvfb-run`.
+
+1. Export a working Chrome profile (e.g. *Profile 3*) to a dedicated folder:
 ```powershell
 $src = "$env:LOCALAPPDATA\Google\Chrome\User Data"
 $dst = "$env:LOCALAPPDATA\idx-scraper-chrome-p3"
@@ -273,7 +296,7 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 * **PIT** – Point‑In‑Time, bitemporal view without look‑ahead bias.
 * **Regular market** – Trades during official IDX session (09:00‑16:00 WIB).
 * **Non‑regular market** – After‑hours / pre‑market trades (captured via Yahoo fallback).
-* **Chrome Transport** – Playwright‑Chrome process that re‑uses Cloudflare cookies.
+* **Chrome Transport** – Playwright‑Chrome process yang me‑reuse kuki Cloudflare. Cadangan opsional; jalur utama sekarang HTTP murni (`HttpTransport`).
 * **Back‑fill** – Re‑compute historic aggregates after a schema or source change.
 
 ---
