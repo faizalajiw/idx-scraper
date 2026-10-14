@@ -63,6 +63,9 @@ python -m idx_scraper.cli serve
 - Data broker mengikuti hari bursa. Pada Sabtu/Minggu atau hari libur, log `broker summary ...: 0 baris` adalah perilaku normal, bukan error.
 - Cek API: `curl http://localhost:8000/health`.
 
+> **Deploy produksi (Linux):** lihat [DEPLOY-LINUX.md](DEPLOY-LINUX.md) — spec server,
+> PostgreSQL + urutan skema, unit & timer systemd, nginx + TLS, backup/restore, dan runbook kegagalan.
+
 ### 4. Optional one‑off commands
 ```powershell
 python -m idx_scraper.cli snapshot          # fetch a single snapshot
