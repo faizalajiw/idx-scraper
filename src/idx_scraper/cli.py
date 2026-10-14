@@ -1105,7 +1105,57 @@ def _job_news_refresh() -> None:
     except Exception as e:
         print(f"[err] news job: {e}", file=sys.stderr)
 
+# --- penjaga satu instance ------------------------------------------------
+_SERVE_LOCK_FD: int | None = None
+
+
+def _serve_lock_path() -> Path:
+    """Letak berkas kunci `serve` (bisa ditimpa lewat IDX_SERVE_LOCK)."""
+    env = os.getenv("IDX_SERVE_LOCK")
+    if env:
+        return Path(env)
+    base = os.getenv("LOCALAPPDATA")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "idx-scraper" / "serve.lock"
+
+
+def _take_single_instance_lock() -> bool:
+    """Ambil kunci eksklusif `serve`; False bila instance lain sudah pegang.
+
+    Dua `serve` = dua Chrome berebut profil yang sama -> browser saling
+    menendang dan EOD masuk 0 baris. Kunci dilepas otomatis oleh OS saat
+    proses mati, jadi tidak ada kunci basi yang perlu dibersihkan manual.
+    """
+    global _SERVE_LOCK_FD
+    path = _serve_lock_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _SERVE_LOCK_FD = fd  # tahan buka agar kunci hidup selama proses hidup
+    return True
+
+
 def cmd_serve(args) -> None:
+    if not _take_single_instance_lock():
+        print(
+            "[serve] instance lain sedang berjalan — keluar tanpa start.\n"
+            "        (dua serve = dua Chrome berebut profil yang sama, EOD jadi 0 baris)\n"
+            f"        kunci: {_serve_lock_path()}"
+        )
+        return
     client = IDXClient()
     storage = get_storage_from_env()
     watchlist = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
