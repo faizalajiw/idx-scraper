@@ -14,7 +14,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import news, watchlist_store
@@ -443,6 +443,30 @@ def stock_smart_money(code: str) -> dict:
     konteks sektor = berapa emiten se-sektor yang searah. Cache 30 menit.
     """
     return analytics.get_stock_smart_money(code.upper())
+
+
+@app.get("/api/stocks/{code}/dossier")
+def stock_dossier(code: str) -> dict:
+    """Dossier analisis satu emiten: gabungan sumber yang sudah ada, dengan tanggal
+    sesi dan penanda stale per bagian. Tidak menghitung skor baru."""
+    from . import dossier
+
+    return dossier.build_dossier(code)
+
+
+@app.get("/api/stocks/{code}/dossier.pdf")
+def stock_dossier_pdf(code: str) -> Response:
+    """Export dossier satu emiten sebagai PDF (data sama dengan endpoint dossier)."""
+    from . import dossier, dossier_pdf
+
+    data = dossier.build_dossier(code)
+    pdf = dossier_pdf.render_dossier_pdf(data)
+    filename = f"dossier-{data['code']}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/stocks/{code}/ownership", response_model=StockOwnership)
