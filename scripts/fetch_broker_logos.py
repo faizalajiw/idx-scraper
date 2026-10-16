@@ -30,7 +30,7 @@ import os
 import struct
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +99,7 @@ def save_manifest(entries: dict[str, dict[str, Any]]) -> None:
     payload = {
         "source": "idx.co.id/StaticData/Brokers/Logo",
         "license_note": "[BELUM TERVERIFIKASI] Logo milik masing-masing broker dan Bursa Efek Indonesia.",
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "counts": {
             s: sum(1 for e in entries.values() if e["status"] == s)
             for s in ("ok", "fallback", "failed")
@@ -118,7 +118,7 @@ def fetch_one(transport: Any, code: str) -> dict[str, Any]:
         "bytes": None,
         "status": "failed",
         "reason": None,
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     last_status: int | None = None
     for ext in CANDIDATE_EXT:
@@ -127,7 +127,7 @@ def fetch_one(transport: Any, code: str) -> dict[str, Any]:
             time.sleep(RATE_LIMIT_S)
             try:
                 data = transport.get_bytes(url)
-            except Exception as exc:  # noqa: BLE001 - catat dan lanjut
+            except Exception as exc:  # catat dan lanjut
                 entry["reason"] = f"browser: {exc}"
                 return entry
             last_status = transport.last_status

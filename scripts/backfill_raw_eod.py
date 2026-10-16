@@ -20,9 +20,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 import time
-import pathlib
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg

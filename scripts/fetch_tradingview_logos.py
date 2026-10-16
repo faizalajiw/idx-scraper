@@ -29,7 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -128,7 +128,7 @@ def save_manifest(entries: dict[str, dict[str, Any]]) -> None:
     payload = {
         "source": "tradingview",
         "license_note": "[BELUM TERVERIFIKASI] Logo milik masing-masing emiten dan TradingView.",
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "counts": {
             s: sum(1 for e in entries.values() if e["status"] == s)
             for s in ("ok", "fallback", "failed")
@@ -149,7 +149,7 @@ def fetch_one(code: str) -> dict[str, Any]:
         "bytes": None,
         "status": "failed",
         "reason": None,
-        "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "checked_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     try:
         html = http_get(entry["page_url"], "text/html").decode("utf-8", errors="replace")
@@ -159,7 +159,7 @@ def fetch_one(code: str) -> dict[str, Any]:
         else:
             entry["reason"] = f"HTTP {exc.code} pada halaman simbol"
         return entry
-    except Exception as exc:  # noqa: BLE001 - catat dan lanjut
+    except Exception as exc:  # catat dan lanjut
         entry["reason"] = f"halaman: {exc}"
         return entry
 
@@ -172,7 +172,7 @@ def fetch_one(code: str) -> dict[str, Any]:
     try:
         data = http_get(logo_url, "image/png,image/svg+xml,image/*")
         fmt, _ = validate_image(data)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         entry["reason"] = f"logo: {exc}"
         return entry
 
