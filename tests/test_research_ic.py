@@ -14,6 +14,7 @@ import pytest
 
 from idx_scraper.research.factors import compute_factors
 from idx_scraper.research.ic import (
+    _nw_std,
     _shift_by_pos,
     _spearman,
     forward_returns,
@@ -208,6 +209,30 @@ def test_summarize_t_stat_white_noise():
     sem = vals.std(ddof=1) / math.sqrt(40)
     klasik = vals.mean() / sem
     assert abs(row["t_stat"] - klasik) / abs(klasik) < 0.30
+
+
+def test_nw_std_menolak_varian_yang_runtuh():
+    # gamma0 = 0.0216 (ic_std 0.147) dengan varian NW nyaris nol: artefak
+    # numerik, bukan t besar -> None (pemanggil: semantik dispersion nol).
+    assert _nw_std(0.0216, 7e-19, 6) is None
+    assert _nw_std(0.0216, -0.09, 6) is None  # varian negatif (Bartlett)
+    # varian sehat -> std of mean seperti biasa
+    assert _nw_std(0.0216, 0.0216, 6) == pytest.approx(math.sqrt(0.0216 / 6))
+
+
+def test_summarize_tidak_pernah_keluarkan_t_stat_raksasa():
+    """Regresi 16 Okt 2026: n_days=6 + lag 5 -> t-stat -3.5e8 (kolom NUMERIC meluap).
+
+    IC berselang-seling membuat kovarians Bartlett saling menghapus sehingga
+    varian NW jatuh ke ~0. Hasilnya harus inf/NaN atau angka wajar - jangan
+    pernah ratusan juta.
+    """
+    vals = [0.5, 0.1] * 5  # 10 hari, autokorelasi negatif kuat
+    ic_df = pd.DataFrame(
+        {"date": pd.date_range("2026-01-01", periods=len(vals), freq="B"), "f": vals}
+    )
+    t = summarize(ic_df, ["f"]).iloc[0]["t_stat"]
+    assert not math.isfinite(t) or abs(t) < 1e3
 
 
 def test_quintile_monotonic():

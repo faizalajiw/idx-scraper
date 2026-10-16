@@ -185,6 +185,24 @@ def rank_ic(
     return pd.DataFrame(out_rows)
 
 
+# Varian Newey-West di bawah fraksi ini dari gamma0 praktis nol: pembobotan
+# Bartlett bisa saling menghapus kovarians sehingga t-stat meledak tanpa makna
+# statistik (ob_imbalance, 16 Okt 2026: T=6, lag=5 -> t = -3.5e8, dan
+# -inf saat variannya jatuh ke negatif).
+NW_VAR_REL_FLOOR = 1e-12
+
+
+def _nw_std(gamma0: float, nw_var: float, t_len: int) -> float | None:
+    """Std of mean (Newey-West), None kalau variannya tak layak dipercaya.
+
+    None -> pemanggil memakai semantik "dispersion nol" (t-stat +inf/-inf),
+    sama seperti kasus std=0: derau numerik bukan bukti t besar.
+    """
+    if nw_var <= 0 or nw_var < gamma0 * NW_VAR_REL_FLOOR:
+        return None
+    return math.sqrt(nw_var / t_len)
+
+
 def summarize(ic_df: pd.DataFrame, factors: list[str]) -> pd.DataFrame:
     """Agregat IC harian: mean, std, ICIR, hit-rate, t-stat (Newey-West lag 5)."""
     rows = []
@@ -205,7 +223,7 @@ def summarize(ic_df: pd.DataFrame, factors: list[str]) -> pd.DataFrame:
             cov = (demeaned.iloc[l:] * demeaned.iloc[:-l].values).mean()
             w = 1.0 - l / (lag + 1.0)  # Bartlett kernel
             nw_var += 2.0 * w * cov
-        nw_std = math.sqrt(nw_var / T) if nw_var > 0 else None
+        nw_std = _nw_std(gamma0, nw_var, T)
         rows.append(
             {
                 "factor": f,

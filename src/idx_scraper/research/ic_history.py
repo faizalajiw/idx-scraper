@@ -83,6 +83,36 @@ def derive_weights(
     return {f: w / total for f, w in per_factor.items() if w > 0}
 
 
+# Batas absolut kolom research.factor_ic_history (DDL: research/monthly_ic.py):
+# mean_ic/icir/t_stat NUMERIC(12,6), hit_rate/weight NUMERIC(8,6). Nilai di luar
+# batas ini - termasuk inf dari IC konstan (std=0) dan t-stat dari varian
+# Newey-West yang runtuh - tidak bisa disimpan apa adanya; NULL lebih jujur
+# daripada angka palsu.
+_COLUMN_LIMITS = {
+    3: 999_999.999999,  # mean_ic
+    4: 999_999.999999,  # icir
+    5: 999_999.999999,  # t_stat
+    6: 99.999999,  # hit_rate
+    9: 99.999999,  # weight
+}
+
+
+def _storable(index: int, value: Any) -> Any:
+    """NULL-kan nilai yang tak bisa ditampung NUMERIC (non-finite / di luar batas).
+
+    NaN (faktor tanpa coverage) dan inf (IC konstan) dua-duanya harus jadi NULL:
+    NUMERIC menolak inf dengan "numeric field overflow" - dan satu nilai saja
+    menggagalkan seluruh upsert - sementara NaN meracuni agregasi pembaca
+    (avg/max ikut NaN), sedangkan NULL diabaikan seperti semestinya.
+    """
+    limit = _COLUMN_LIMITS.get(index)
+    if limit is None or not isinstance(value, float):
+        return value
+    if not math.isfinite(value) or abs(value) > limit:
+        return None
+    return value
+
+
 def save_ic_summary(
     cur: Any,
     run_date: Any,
@@ -128,11 +158,9 @@ def save_ic_summary(
                 )
             )
     for row in rows:
-        # NaN (faktor tanpa coverage) -> NULL: numerik NaN di Postgres meracuni
-        # agregasi (avg/max ikut NaN), NULL diabaikan seperti semestinya.
-        clean = tuple(
-            None if isinstance(v, float) and math.isnan(v) else v for v in row
-        )
+        # Nilai yang tak bisa ditampung kolom -> NULL (lihat _storable): inf dan
+        # t-stat raksasa menggagalkan upsert, NaN meracuni agregasi pembaca.
+        clean = tuple(_storable(i, v) for i, v in enumerate(row))
         cur.execute(_UPSERT_SQL, clean)
     weights = derive_weights(
         summaries.get(horizon_for_weights, []), horizon=horizon_for_weights
