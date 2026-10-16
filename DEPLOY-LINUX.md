@@ -33,7 +33,7 @@ Tiga proses, satu database:
 | **API** | `uvicorn idx_scraper.api.app:app` | Melayani `/api/*` untuk frontend |
 | **Web** | `next start` | UI Next.js; browser memanggil API dari sisi klien |
 
-Scheduler harus **selalu hidup**. Di Windows jadwal EOD 16:05/16:20 hidup di dalam
+Scheduler harus **selalu hidup**. Di Windows jadwal EOD 16:10 hidup di dalam
 prosesnya (APScheduler), jadi kalau prosesnya mati atau mesinnya tidur, jadwalnya
 hilang begitu saja. Itu akar masalah berulang yang kita kejar.
 
@@ -59,16 +59,22 @@ Di systemd, satu proses tidak bisa lolos dari pengawasan begitu.
 ### Jadi timer dipakai untuk apa, kalau `serve` sudah punya jadwal sendiri?
 
 Ini bagian yang jujur perlu diklarifikasi: **`idx serve` sudah menjalankan sendiri
-EOD 16:05 & 16:20 di dalam APScheduler.** Timer `idx-eod.timer` bukan pengganti,
-melainkan **jaring kedua** untuk kasus:
+EOD 16:10 di dalam APScheduler, plus jaring kedua `eod_fallback` yang dicek ulang
+setiap jam 16:30–20:30.** Timer `idx-eod.timer` bukan pengganti, melainkan
+**cadangan kalau `serve` sendiri yang mati** — satu-satunya lubang yang tidak bisa
+ditutup dari dalam proses:
 
-- `serve` sedang restart/berhenti tepat pukul 16:05 (deploy, OOM, `systemctl restart`);
-- job gagal karena throttle IDX 429 dan tidak ada percobaan ulang;
-- mesin baru hidup lagi setelah mati, dan startup catchup tidak menangkap semuanya.
+- `serve` mati sebelum 16:30 dan tidak hidup lagi hari itu (OOM, `systemctl stop`);
+- mesin mati lebih lama daripada jendela backfill: startup `serve` menambal
+  **5 hari bursa terakhir** (`IDX_BACKFILL_DAYS`), yang lebih tua dari itu tidak
+  ditarik otomatis — pakai `idx eod <YYYYMMDD>`.
 
 Karena `idx refresh --skip-if-fresh` **idempoten** (kalau data hari ini sudah lengkap,
-ia langsung keluar), menjalankannya dua kali tidak berbahaya. Biayanya nol, manfaatnya
-nyata. **Rekomendasi: pasang timer-nya.**
+ia langsung keluar), menjalankannya dua kali tidak berbahaya. Biayanya nol. Di
+Windows, padanan timer ini dulu berupa task `IDX-EOD`, tapi **dihapus 15 Okt 2026**:
+di sana jaring kedua sudah hidup di dalam `serve` (`eod_fallback` 16:30), jadi satu
+penjadwal saja. Di systemd `serve` diawasi `Restart=always`, sehingga lubangnya jauh
+lebih kecil — timer ini opsional.
 
 ---
 
@@ -115,7 +121,7 @@ Urutkan begini; jangan lompat ke unit systemd sebelum 1–7 selesai.
 2. **Zona waktu WIB** — semua jadwal mengasumsikan waktu Jakarta:
    ```bash
    sudo timedatectl set-timezone Asia/Jakarta
-   sudo timedatectl set-ntp true   # chrony/systemd-timesyncd: 16:05 harus tepat
+   sudo timedatectl set-ntp true   # chrony/systemd-timesyncd: 16:10 harus tepat
    ```
 3. **User non-root** untuk aplikasi:
    ```bash
@@ -266,7 +272,8 @@ menunjuk ke situ; `cli.py` memanggil `load_dotenv()` sendiri).
 | `IDX_ALERT_INTERVAL` | `300` | detik antar-evaluasi alert |
 | `IDX_LIVE_TOP` / `IDX_LIVE_DELAY_MS` | `60` / `2000` | jumlah emiten & jeda sapuan live capture |
 | `IDX_HOLIDAYS` | (kosong) | daftar hari libur bursa, mis. `2026-12-25,2027-01-01` |
-| `IDX_EOD_DEADLINE_HOUR` | `17` | batas jam untuk menilai EOD "terlambat" di `idx health` |
+| `IDX_EOD_DEADLINE_HOUR` | `16` | jam (WIB) sejak kapan EOD hari ini dianggap "telat". **Harus ≤ jam job `health_eod` (16:45)**, kalau tidak alarmnya tidak pernah berbunyi |
+| `IDX_BACKFILL_DAYS` | `5` | berapa hari bursa ke belakang yang dicek ulang saat `serve` start & tiap tick jaring sore (menambal lubang mesin yang tidur/off). `0` = matikan |
 
 ### API & integrasi
 
@@ -428,12 +435,17 @@ MemoryMax=1G
 WantedBy=multi-user.target
 ```
 
-### `/etc/systemd/system/idx-eod.service` + `idx-eod.timer`
+### `/etc/systemd/system/idx-eod.service` + `idx-eod.timer` (opsional)
+
+Jaring kedua EOD sudah hidup di dalam `serve` (`eod_fallback`, dicek tiap jam
+16:30–20:30) — jadi timer ini hanya perlu kalau Anda ingin cadangan untuk kasus
+`serve` mati. Kalau pasang, jadwalkan di **16:30** (jam yang sama dengan cek
+pertama di dalam `serve`).
 
 ```ini
 # idx-eod.service
 [Unit]
-Description=IDX EOD refresh (jaring kedua untuk 16:05 & 16:20)
+Description=IDX EOD refresh (cadangan kalau serve mati)
 After=network-online.target postgresql.service
 
 [Service]
@@ -450,11 +462,18 @@ TimeoutStartSec=30min
 ```ini
 # idx-eod.timer
 [Unit]
-Description=Jadwal EOD IDX: Senin-Jumat 16:05 & 16:20 WIB
+Description=Jadwal EOD IDX: Senin-Jumat 16:30 WIB (cadangan)
 
 [Timer]
-OnCalendar=Mon-Fri 16:05:00
-OnCalendar=Mon-Fri 16:20:00
+# 16:30 = cek pertama job `eod_fallback` di `idx serve`. Karena `--skip-if-fresh`
+# idempoten, menjalankannya bersamaan dengan serve tidak menggandakan kerja.
+OnCalendar=Mon-Fri 16:30:00
+# Baris tambahan: padanan "diulang tiap jam sampai 20:30". Berguna kalau mesin
+# tidur/baru hidup malam; hapus kalau tidak perlu.
+OnCalendar=Mon-Fri 17:30:00
+OnCalendar=Mon-Fri 18:30:00
+OnCalendar=Mon-Fri 19:30:00
+OnCalendar=Mon-Fri 20:30:00
 # Jalankan yang terlewat begitu mesin hidup kembali (padanan StartWhenAvailable)
 Persistent=true
 AccuracySec=30s
@@ -484,11 +503,11 @@ journalctl -u idx-serve -f          # log langsung
 
 > **Idempoten, jadi aman berulang.** `--skip-if-fresh` memeriksa dulu apakah EOD
 > saham dan close indeks hari ini sudah ada; kalau sudah, ia keluar tanpa menulis
-> apa pun. Karena itu `serve` dan timer boleh sama-sama menjadwalkan 16:05.
+> apa pun. Karena itu `serve` dan timer boleh sama-sama menjadwalkan 16:30.
 
 > **Catatan:** `OnCalendar` memakai zona waktu sistem. Pastikan
 > `timedatectl set-timezone Asia/Jakarta` sudah dijalankan, atau tulis
-> `OnCalendar=Mon-Fri 16:05:00 Asia/Jakarta` secara eksplisit.
+> `OnCalendar=Mon-Fri 16:10:00 Asia/Jakarta` secara eksplisit.
 
 ---
 
@@ -683,13 +702,26 @@ Semua ini bisa ditinggalkan di Windows, dan **sebaiknya**:
 | `scripts/run-hidden.vbs`, semua `.bat` | Diganti unit systemd |
 | `IDX_CHROME_PROFILE_DIR=C:\Users\...` | **Jangan disalin**; di Linux jadi folder sampah. Pakai `IDX_TRANSPORT=http` |
 | Kuki `cf_clearance` di profil `p3` | Tidak berlaku di IP/server baru — dan tidak dibutuhkan |
-| Task Scheduler (`IDX-Serve`, `IDX-API`, `IDX-Web`, `IDX-EOD`) | `idx-serve.service`, `idx-api.service`, `idx-web.service`, `idx-eod.timer` |
+| Task Scheduler (`IDX-Serve`, `IDX-API`, `IDX-Web` — Sen-Jum 08:45, `S4U`, jalan tanpa login) | `idx-serve.service`, `idx-api.service`, `idx-web.service` (+ `idx-eod.timer` opsional) |
+| Task `IDX-Stack-Daily` (dihapus 16 Okt 2026) | Duplikat tiga task di atas: aksinya sama (serve/api/web), tapi `InteractiveToken` — tidak jalan tanpa sesi login dan diblokir saat laptop pakai baterai (`DisallowStartIfOnBatteries=true`). Yang hilang hanya watchdog 30 menit; di Linux itu tugas `Restart=always` |
+| Task `IDX-EOD` (dihapus 15 Okt 2026) | Tidak ada padanannya — jaring kedua EOD kini hidup di dalam `serve` (`eod_fallback` 16:30), jadi tidak perlu penjadwal kedua |
+| `scripts/guard-port.ps1` (penjaga port launcher) | Tidak perlu — satu unit per port + `Restart=always` sudah menjamin satu instance |
 | Playwright / Google Chrome | Hanya bila memakai `IDX_TRANSPORT=browser` atau `auto` yang jatuh ke browser. Untuk jalur HTTP, **tidak dipasang sama sekali** |
 
 Alasannya ada di [README → IDX & Cloudflare](README.md#idx--cloudflare-tanpa-browser):
 curl_cffi murni sudah menembus endpoint IDX — diuji 23/23 permintaan 200 selama
 45 menit, tanpa kuki, tanpa browser, tanpa satu pun proses Chrome hidup. Jadi server
 Linux ini bisa benar-benar tanpa Chrome, tanpa Xvfb, tanpa profil persisten.
+
+> **Mengaktifkan kode baru di Windows (tanpa admin).** `serve` berjalan di konteks
+> task tersimpan (session 0), jadi prosesnya **tidak bisa dihentikan dari shell
+> biasa** ("access denied") dan `cmd` juga tidak bisa append ke `_serve.log` selama
+> handle proses lama masih hidup. Jalannya: buat `_restart-serve.flag`, lalu
+> `Start-ScheduledTask -TaskName IDX-Serve` — `scripts/restart-serve.ps1` (dipanggil
+> `start-serve.bat`) menghentikan serve lama, menunggu log bebas, baru menyalakan
+> yang baru. Tanpa flag, `start-serve.bat` tidak menghentikan apa pun, jadi
+> penjadwalan harian tetap aman. Jejaknya di `_restart-serve.log`. Di Linux tidak
+> perlu: `sudo systemctl restart idx-serve`.
 
 > **Satu batasan yang jujur:** `scripts/fetch_broker_logos.py` (aset logo, di luar
 > pipeline data) masih memakai `BrowserTransport`. Kalau ingin memperbarui logo di
@@ -710,13 +742,15 @@ Linux ini bisa benar-benar tanpa Chrome, tanpa Xvfb, tanpa profil persisten.
 [ ] idx health -> tidak ada keluhan
 [ ] idx refresh --skip-if-fresh -> EOD hari bursa terakhir masuk, 963 emiten
 [ ] npm ci && npm run build di idx-web (NEXT_PUBLIC_API_BASE_URL sudah benar)
-[ ] 4 unit + 1 timer terpasang & enabled
+[ ] 4 unit terpasang & enabled (timer EOD opsional)
 [ ] systemctl status idx-serve idx-api idx-web -> active (running)
-[ ] systemctl list-timers idx-eod.timer -> menyala Sen-Jum 16:05 & 16:20
+[ ] journalctl -u idx-serve | grep eod_fallback -> job jaring kedua terdaftar (16:30-20:30)
+[ ] journalctl -u idx-serve | grep catchup -> startup: "EOD hari ini sudah lengkap" + tanggal lampau yang dicek ulang
+[ ] (kalau timer dipasang) systemctl list-timers idx-eod.timer -> Sen-Jum 16:30 (+17:30..20:30)
 [ ] nginx + certbot; https://domain/ tampil; https://domain/api/health menjawab
 [ ] ufw: hanya 22/80/443
 [ ] backup harian jalan; RESTORE DIUJI sekali
-[ ] pantau 16:05 hari bursa pertama: journalctl -u idx-eod -f  -> sukses
+[ ] pantau 16:10 & 16:30 hari bursa pertama: journalctl -u idx-serve -f -> rantai sukses, lalu "EOD hari ini sudah lengkap"
 [ ] max(trade_date) di research.latest_pit = hari bursa terakhir
 [ ] catat commit produksi: git rev-parse --short HEAD
 ```

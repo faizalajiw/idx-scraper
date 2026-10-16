@@ -11,8 +11,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import dotenv
@@ -274,22 +275,24 @@ def _next_weekday_at(dow: int, hour: int, minute: int) -> datetime:
     return target + timedelta(days=days_ahead)
 
 
-def _job_broker_eod() -> None:
-    """Broker summary EOD (bandarmologi) -> research.broker_daily, 16:30 WIB.
+def _job_broker_eod() -> int:
+    """Broker summary EOD (bandarmologi) -> research.broker_daily.
 
-    20 menit setelah close resmi supaya endpoint IDX sudah memuat data final
+    ~20 menit setelah close resmi supaya endpoint IDX sudah memuat data final
     hari itu. Idempoten per tanggal — aman dijalankan ulang.
     """
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
     if not dsn:
-        return
+        return 0
     try:
         from scripts.backfill_broker_eod import backfill_broker_eod
 
         n, d = backfill_broker_eod(dsn)
         print(f"[{datetime.now(WIB).isoformat()}] broker summary {d}: {n} baris")
+        return n
     except Exception as e:
         print(f"[err] broker summary job: {e}", file=sys.stderr)
+        return 0
 
 
 def _job_health_eod() -> None:
@@ -413,6 +416,30 @@ def cmd_ic(args) -> None:
     print(f"bobot composite terbaru: {out['weights']}")
 
 
+def _boleh_tulis_close_index(now: datetime | None = None) -> bool:
+    """True kalau baris "close resmi hari ini" sudah boleh ditulis (>= 16:00 WIB).
+
+    Close resmi hanya ada setelah closing auction. Menulisnya lebih awal bukan
+    tanpa akibat: ``backfill_index_eod_idx`` menstempel barisnya
+    ``captured_at = hari ini 16:00`` — satu-satunya jam yang dihitung sebagai
+    close oleh ``_eod_fresh_for`` dan ``check_eod_health``, dan baris berstempel
+    paling baru di ``index_quotes``. Kalau job ini ikut jalan di pra-buka (08:50)
+    atau close Sesi I (12:00) seperti dulu, nilai jam itu tersimpan berlabel
+    16:00, sehingga:
+
+    1. dua pembaca dashboard (``analytics._latest_index``, ``services.get_market_overview``)
+       mengambilnya lewat ``order by captured_at desc limit 1`` — nilai pra-buka /
+       tengah hari tampil sebagai IHSG hari itu, dan mengalahkan snapshot polling
+       selama sisa sesi (polling berstempel jam berjalan, selalu lebih tua dari 16:00);
+    2. ``_eod_fresh_for``/``check_eod_health`` mengklaim close hari ini sudah ada,
+       jadi ``--skip-if-fresh`` dan alarm menilai hari itu "beres" tanpa dasar.
+
+    Sebelum 16:00 biarkan snapshot polling yang mengisi dashboard: nilai terakhir
+    memang bukan close, tapi setidaknya bukan angka yang salah label.
+    """
+    return (now or datetime.now(WIB)).hour >= 16
+
+
 def _job_index_eod_close() -> None:
     """Tulis close resmi IHSG dari IDX live tiap hari bursa jam 16:10 WIB.
 
@@ -421,6 +448,8 @@ def _job_index_eod_close() -> None:
     Snapshot polling terakhir (mis. 15:59) ditimpa lewat baris idempotent
     captured_at 16:00 WIB + isi index_summary_daily (seri harian benchmark).
     """
+    if not _boleh_tulis_close_index():
+        return  # belum lewat close — lihat alasannya di `_boleh_tulis_close_index`
     if not _is_market_hours() and datetime.now(WIB).weekday() >= 5:
         return  # weekend guard (cron sudah bursa-only, ini double safety)
     dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
@@ -438,11 +467,83 @@ def _job_index_eod_close() -> None:
         print(f"[err] index EOD close job: {e}", file=sys.stderr)
 
 
-def _job_eod_full(client: IDXClient, storage) -> None:
-    """Full market EOD snapshot at market close."""
-    from datetime import datetime
-    date_str = datetime.now(WIB).strftime("%Y%m%d")
-    rows = client.fetch_stock_summary(date_str)
+# IDX kadang menolak endpoint BERAT (GetStockSummary, GetBrokerSummary) hanya
+# sesaat: 15 Okt 2026 pukul 16:10 dan 16:15 keduanya 403, sementara permintaan
+# identik pukul 17:40 berhasil (963 baris dalam 0,3 s). Pipeline lama sekali
+# jalan lalu menyerah, jadi EOD sehari hilang tanpa percobaan kedua. Jeda di
+# bawah memberi kesempatan ulang cepat; kalau jendela penolakan panjang (seperti
+# 15 Okt), yang menutupnya adalah job `eod_fallback` di dalam `serve` — dicek
+# ulang tiap jam 16:30–20:30 sampai EOD hari itu benar-benar terisi, bukan lagi
+# task Windows `IDX-EOD` yang sudah dihapus.
+_EOD_RETRY_DELAYS: tuple[int, ...] = (60, 180)
+
+
+def _retry_percobaan(now: datetime | None = None) -> int:
+    """Jumlah percobaan untuk langkah EOD berat, menurut jam WIB.
+
+    Sebelum jam close (16:00) EOD pasar memang belum terbit — ``refresh_s1``
+    12:00 membuktikannya tiap hari dengan 0 baris. Di jendela itu percobaan
+    ulang cuma membuang ~4 menit dan menambah beban IDX tanpa bisa berhasil,
+    jadi dimatikan (1 percobaan). Sesudah close, retry penuh.
+    """
+    now = now or datetime.now(WIB)
+    return len(_EOD_RETRY_DELAYS) + 1 if now.hour >= 16 else 1
+
+
+def _retry_step(label: str, step, *, percobaan: int | None = None) -> int:
+    """Jalankan ``step()`` sampai mengembalikan baris > 0.
+
+    ``percobaan`` default 1 + ``len(_EOD_RETRY_DELAYS)`` ulangan; kirim
+    ``percobaan=1`` untuk sekali jalan tanpa ulangan (lihat ``_retry_percobaan``).
+
+    Hanya untuk langkah yang hasilnya pasti berisi pada hari bursa dan idempoten
+    per tanggal (EOD saham selalu 963 baris, broker summary selalu 88 firma).
+    Langkah yang "0 baris" bisa berarti wajar — mis. close indeks saat barisnya
+    sudah ada — sengaja TIDAK dibungkus di sini.
+    """
+    if percobaan is None:
+        percobaan = len(_EOD_RETRY_DELAYS) + 1
+    baris = 0
+    for i in range(percobaan):
+        try:
+            baris = step() or 0
+        except Exception as e:
+            baris = 0
+            print(f"[err] {label}: {e}", file=sys.stderr)
+        if baris > 0:
+            return baris
+        if i + 1 < percobaan:
+            jeda = _EOD_RETRY_DELAYS[min(i, len(_EOD_RETRY_DELAYS) - 1)]
+            print(
+                f"[warn] {label}: 0 baris — percobaan {i + 2}/{percobaan} "
+                f"dalam {jeda}s",
+                file=sys.stderr,
+            )
+            time.sleep(jeda)
+    if percobaan > 1:
+        print(
+            f"[err] {label}: tetap kosong setelah {percobaan} percobaan",
+            file=sys.stderr,
+        )
+    return baris
+
+
+def _simpan_eod_hari(client: IDXClient, storage, day: date) -> int:
+    """Tarik + simpan EOD satu tanggal bursa (idempoten). Kembalikan jumlah baris.
+
+    Dipakai tiga jalur yang butuh arti yang sama persis: close hari ini
+    (``_job_eod_full``), permintaan manual (``idx eod [tanggal]``), dan backfill
+    hari lampau (``_backfill_hari_lampau``). IDX melayani tanggal lampau di
+    endpoint yang sama (``GetStockSummary?date=YYYYMMDD``), jadi jalur mundur
+    tidak butuh sumber lain.
+
+    Tiga tujuan tulis — sama seperti pipeline 16:10: tabel polos
+    (``stock_summary_daily``), superset riset (``raw_eod`` + ``prices_pit``), dan
+    agregat pasar reguler/non-reguler.
+    """
+    rows = client.fetch_stock_summary(day.strftime("%Y%m%d"))
+    if not rows:
+        return 0
     count = 0
     for r in rows:
         try:
@@ -450,12 +551,19 @@ def _job_eod_full(client: IDXClient, storage) -> None:
             count += 1
         except Exception:
             pass
-    print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
     _ingest_eod_research(rows)
     try:
         _upsert_segment_day(rows)
     except Exception as e:
-        print(f"[err] agregat pasar reguler/non-reguler: {e}", file=sys.stderr)
+        print(f"[err] agregat pasar reguler/non-reguler {day}: {e}", file=sys.stderr)
+    return count
+
+
+def _job_eod_full(client: IDXClient, storage) -> int:
+    """Full market EOD snapshot at market close. Kembalikan jumlah baris."""
+    count = _simpan_eod_hari(client, storage, datetime.now(WIB).date())
+    print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
+    return count
 
 def _clear_api_cache() -> None:
     """Flush the API in-process analytic cache so menus show fresh data at once.
@@ -474,32 +582,63 @@ def _clear_api_cache() -> None:
     except Exception as e:
         print(f"[warn] gagal clear cache API: {e}", file=sys.stderr)
 
+# Kunci lintas-job: dua pipeline bersamaan (mis. rantai 16:10 yang molor bertemu
+# job ulang 16:30) berarti dua klien IDX berebut sumber yang sama — persis yang
+# bikin EOD 0 baris. Yang kedua dilewati, bukan diantrikan: yang pertama sudah
+# mengerjakan pekerjaan yang sama.
+_PIPELINE_BUSY = threading.Lock()
+
+
 def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: bool) -> None:
-    """Satu siklus refresh pipeline untuk 8 menu (Narasi/Screener/Valuasi/Hold
-    Check/Jejak Sinyal/Foreign Flow/Sentimen/Sektor).
+    """Satu siklus refresh — hanya satu pipeline boleh jalan pada satu waktu.
+
+    Job yang datang saat pipeline lain masih hidup dilewati dengan pesan
+    ``pipeline lain masih berjalan``; pekerjaannya sudah tercakup yang sedang
+    jalan (semua langkah idempoten per tanggal).
+    """
+    if not _PIPELINE_BUSY.acquire(blocking=False):
+        print(
+            f"[warn] {label}: pipeline lain masih berjalan — dilewati",
+            file=sys.stderr,
+        )
+        return
+    try:
+        _pipeline_refresh_body(client, storage, label=label, do_eod=do_eod)
+    finally:
+        _PIPELINE_BUSY.release()
+
+
+def _pipeline_refresh_body(client: IDXClient, storage, *, label: str, do_eod: bool) -> None:
+    """Inti satu siklus refresh (tanpa kunci lintas-job).
 
     ``do_eod`` True hanya di close sesi hari bursa (ada data EOD pasar hari ini);
     pra-buka & akhir pekan cukup recompute + koreksi IHSG dari Yahoo + clear
     cache. Semua sub-job idempoten & dibungkus try/except supaya satu gagal
     tidak menghentikan yang lain. Sengaja TIDAK dijaga _is_market_hours().
+
+    Dua langkah yang bergantung pada endpoint berat IDX (EOD saham, broker
+    summary) diberi percobaan ulang lewat ``_retry_step``; sisanya DB murni.
+    Percobaan ulang dimatikan sebelum jam close — lihat ``_retry_percobaan``.
     """
     print(f"[{datetime.now(WIB).isoformat()}] pipeline refresh — {label}")
+    percobaan = _retry_percobaan()
     if do_eod:
-        try:
-            _job_eod_full(client, storage)
-        except Exception as e:
-            print(f"[err] refresh EOD: {e}", file=sys.stderr)
+        _retry_step(
+            "EOD saham",
+            lambda: _job_eod_full(client, storage),
+            percobaan=percobaan,
+        )
     for name, fn in (
         ("index EOD close", _job_index_eod_close),
         ("regime harian", _job_regime_daily),
         ("jejak sinyal", _job_signal_log),
         ("rekomendasi", _job_recommendations),
-        ("broker summary", _job_broker_eod),
     ):
         try:
             fn()
         except Exception as e:
             print(f"[err] refresh {name}: {e}", file=sys.stderr)
+    _retry_step("broker summary", _job_broker_eod, percobaan=percobaan)
     _clear_api_cache()
     # Alert jejak smart money: verdict jendela 10 sesi baru berubah sekarang
     # (ada data EOD baru), jadi ini titik yang tepat untuk cek transisi +
@@ -723,20 +862,11 @@ def cmd_eod(args) -> None:
     storage = get_storage_from_env()
     try:
         if args.date:
-            rows = client.fetch_stock_summary(args.date)
+            day = datetime.strptime(args.date, "%Y%m%d").replace(tzinfo=WIB).date()
         else:
-            from datetime import datetime
-            date_str = datetime.now(WIB).strftime("%Y%m%d")
-            rows = client.fetch_stock_summary(date_str)
-        count = 0
-        for r in rows:
-            try:
-                storage.insert_eod_stock(r)
-                count += 1
-            except Exception:
-                pass
+            day = datetime.now(WIB).date()
+        count = _simpan_eod_hari(client, storage, day)
         print(f"EOD fetch done — {count} stocks stored")
-        _ingest_eod_research(rows)
     finally:
         client.close()
         storage.close()
@@ -746,8 +876,8 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
     """Cek kesegaran EOD untuk ``day`` (tanggal WIB).
 
     Mengembalikan ``(ada EOD saham, ada close indeks resmi >= 16:00)``.
-    Dipakai startup catchup ``serve`` dan fallback ``IDX-EOD``: satu definisi
-    "sudah lengkap" supaya keduanya tidak saling meniarakan pekerjaan.
+    Dipakai startup catchup ``serve`` dan jaring EOD sore ``_eod_catchup``: satu
+    definisi "sudah lengkap" supaya keduanya tidak saling meniarakan pekerjaan.
     """
     import psycopg
 
@@ -773,15 +903,206 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
     return (has_stocks, has_index)
 
 
+def _hari_bursa(day: date) -> bool:
+    """True kalau ``day`` hari bursa: Sen–Jum dan bukan libur ``IDX_HOLIDAYS``.
+
+    Tanpa cek libur, jaring EOD sore menjalankan pipeline penuh di hari libur
+    nasional (data pasar memang tidak ada) — menit terbuang plus alarm palsu.
+    """
+    if day.weekday() >= 5:
+        return False
+    from .health import parse_holidays
+
+    return day not in parse_holidays()
+
+
+# Berapa hari bursa ke belakang yang dicek ulang `_backfill_hari_lampau`.
+# 5 hari bursa ~ 1 minggu kalender: cukup untuk mesin yang tidur/off beberapa
+# hari, tapi tidak menjelajah setahun tiap kali laptop baru dinyalakan setelah
+# lama mati. Lubang lebih tua dari ini tidak ditarik otomatis — pakai
+# `idx eod <YYYYMMDD>` (saham) lalu `idx refresh` (menu turunannya).
+_BACKFILL_HARI = int(os.getenv("IDX_BACKFILL_DAYS", "5"))
+
+
+def _hari_bursa_mundur(mulai: date, jumlah: int) -> list[date]:
+    """``jumlah`` hari bursa terakhir yang ``<= mulai``, terbaru dulu (murni).
+
+    Batas langkah sengaja dipasang: cukup melewati akhir pekan + libur panjang,
+    tapi loop tidak bisa berputar tanpa akhir kalau ``IDX_HOLIDAYS`` diisi aneh.
+    """
+    out: list[date] = []
+    for i in range(jumlah * 4 + 14):
+        d = mulai - timedelta(days=i)
+        if _hari_bursa(d):
+            out.append(d)
+            if len(out) == jumlah:
+                break
+    return out
+
+
+def _backfill_hari_lampau(
+    client: IDXClient, storage, *, label: str, lapor_lubang_index: bool = False
+) -> int:
+    """Tarik ulang EOD hari bursa lampau yang bolong. Kembalikan jumlah hari terisi.
+
+    Kenapa perlu: ``_eod_catchup_hari_ini`` hanya melihat HARI INI. Kalau mesin
+    tidur atau mati melewati seluruh jendela sore (16:10–22:30), hari itu tidak
+    pernah kembali dengan sendirinya — dan ``idx health`` pun tidak menangkapnya,
+    karena ia membandingkan tanggal TERBARU, bukan lubang di tengah. Fungsi ini
+    menutupnya dari dua kesempatan yang sudah ada: startup ``serve`` dan jaring
+    sore ``eod_fallback``.
+
+    Cakupan jujur:
+
+    - **Saham** ditarik di sini (``fetch_stock_summary`` melayani tanggal lampau,
+      ``_simpan_eod_hari`` menulis ketiga tujuan tulisnya).
+    - **Close resmi indeks** tidak: satu-satunya sumbernya endpoint IDX live
+      (``GetIndexList``) yang selalu berarti "hari ini", jadi tanggal lampau
+      hanya bisa ditambal manual — lihat catatan di README. ``lapor_lubang_index``
+      menyalakan satu baris laporan untuk itu (dipakai jalur startup saja supaya
+      log sore tidak berisik).
+    - **Menu turunan** (regime, jejak sinyal, rekomendasi, broker) disegarkan
+      sekali di akhir kalau ada yang ditarik; jendela langganan mereka 1 bulan,
+      jadi tanggal yang baru masuk ikut terhitung.
+
+    Biaya saat tidak ada lubang: satu query DB per tanggal (≈ nol). Tanggal yang
+    IDX balas 0 baris tidak diingat-ingat — cek berikutnya boleh mencoba lagi,
+    karena 0 baris bisa berarti libur tak terdaftar atau IDX sedang menolak.
+    """
+    if _BACKFILL_HARI <= 0:
+        return 0
+    sekarang = datetime.now(WIB)
+    kandidat = [
+        d
+        for d in _hari_bursa_mundur(sekarang.date(), _BACKFILL_HARI)
+        if d != sekarang.date()  # hari ini sudah ditangani `_eod_catchup_hari_ini`
+    ]
+    if not kandidat:
+        return 0
+
+    kosong: list[date] = []
+    tanpa_index: list[date] = []
+    for day in kandidat:
+        ada_saham, ada_index = _eod_fresh_for(day)
+        if not ada_saham:
+            kosong.append(day)
+        if not ada_index:
+            tanpa_index.append(day)
+
+    if lapor_lubang_index and tanpa_index:
+        print(
+            f"[catchup] {label}: {len(kandidat)} hari bursa lampau dicek, "
+            f"{len(tanpa_index)} di antaranya tanpa close indeks resmi "
+            f"({', '.join(str(d) for d in tanpa_index)}) — close indeks hanya "
+            "tersedia dari endpoint IDX live, jadi tanggal lampau tidak bisa "
+            "ditarik ulang otomatis"
+        )
+    if not kosong:
+        return 0
+
+    terisi = 0
+    for day in kosong:
+        try:
+            baris = _simpan_eod_hari(client, storage, day)
+        except Exception as e:
+            print(f"[err] backfill {day}: {e}", file=sys.stderr)
+            continue
+        if baris:
+            terisi += 1
+            print(f"[catchup] {label}: EOD {day} ditarik ulang — {baris} emiten")
+        else:
+            print(
+                f"[warn] {label}: IDX membalas 0 baris untuk {day} — "
+                "boleh dicoba lagi di cek berikutnya",
+                file=sys.stderr,
+            )
+    if terisi:
+        # Tanpa EOD: tidak ada sesi pasar baru, yang perlu jalan hanya recompute
+        # menu turunan. Lock lintas-job tetap dipakai — kalau rantai 16:10 masih
+        # berjalan, recompute rantai itu sudah mencakup pekerjaan ini.
+        _job_pipeline_refresh(
+            client, storage, label=f"backfill {label}", do_eod=False
+        )
+    return terisi
+
+
+def _eod_catchup(
+    client: IDXClient, storage, *, label: str, lapor_lubang_index: bool = False
+) -> str:
+    """Pastikan EOD lengkap; kerjakan yang kurang. Satu definisi.
+
+    Dipakai dua pemanggil — job ``eod_fallback`` (tiap jam 16:30–20:30, di dalam
+    ``serve``) dan startup catchup ``serve`` — supaya keduanya memakai definisi
+    "sudah lengkap" yang sama (``_eod_fresh_for``) dan tidak saling meniarakan
+    pekerjaan.
+
+    Dua fase: hari ini dulu, lalu hari bursa lampau yang bolong
+    (``_backfill_hari_lampau``) — lihat alasannya di docstring fungsi itu.
+
+    Kembalikan hasil fase HARI INI: ``bukan-hari-bursa`` | ``pipeline`` |
+    ``indeks`` | ``lengkap``.
+    """
+    hasil = _eod_catchup_hari_ini(client, storage, label=label)
+    _backfill_hari_lampau(
+        client, storage, label=label, lapor_lubang_index=lapor_lubang_index
+    )
+    return hasil
+
+
+def _eod_catchup_hari_ini(client: IDXClient, storage, *, label: str) -> str:
+    """Fase "hari ini" dari ``_eod_catchup`` (dipisah supaya fase lampau selalu ikut).
+
+    Kembalikan ``bukan-hari-bursa`` | ``pipeline`` | ``indeks`` | ``lengkap``.
+    """
+    now_wib = datetime.now(WIB)
+    if not _hari_bursa(now_wib.date()) or now_wib.hour < 16:
+        print(f"[catchup] {label}: dilewati (pasar belum tutup atau bukan hari bursa)")
+        return "bukan-hari-bursa"
+    ada_saham, ada_indeks = _eod_fresh_for(now_wib.date())
+    if not ada_saham:
+        print(
+            f"[catchup] {label}: EOD saham {now_wib:%Y-%m-%d} belum ada — "
+            "menjalankan pipeline penuh..."
+        )
+        _job_pipeline_refresh(client, storage, label=f"catchup {label}", do_eod=True)
+        return "pipeline"
+    if not ada_indeks:
+        print(
+            f"[catchup] {label}: close resmi COMPOSITE {now_wib:%Y-%m-%d} belum ada — "
+            "menjalankan index EOD close..."
+        )
+        _job_index_eod_close()
+        _clear_api_cache()
+        return "indeks"
+    print(f"[catchup] {label}: EOD hari ini sudah lengkap (saham OK, index OK)")
+    return "lengkap"
+
+
+def _job_eod_fallback(client: IDXClient, storage) -> None:
+    """Jaring kedua EOD — Sen–Jum, tiap jam 16:30–20:30 WIB, DI DALAM ``serve``.
+
+    Menggantikan task Windows ``IDX-EOD`` (dihapus 15 Okt 2026): penjadwalan
+    hanya di satu tempat, jadi tidak ada lagi dua pipeline yang bisa bertabrakan
+    di sore hari. Kalau rantai 16:10 berhasil, job ini keluar dalam ~1 detik
+    (satu query DB, tanpa request IDX). Kalau gagal, ia menjalankan pipeline
+    penuh — menutup jendela penolakan IDX yang lebih panjang daripada retry
+    60/180 detik di dalam rantai.
+
+    Diulang tiap jam karena mesin bisa tidur melewati slot 16:10: proses ``serve``
+    ikut beku (bukan mati), dan ``misfire_grace_time`` 2 jam membuat cek terakhir
+    menyala begitu mesin bangun — sepanjang masih sebelum ~22:30.
+    """
+    _eod_catchup(client, storage, label="ulang EOD sore")
+
+
 def cmd_refresh(args) -> None:
     """One-shot full refresh pipeline (EOD + recompute + clear cache).
 
     Inti yang sama dengan job terjadwal ``refresh_s2`` di ``serve``, tapi bisa
-    dipanggil berdiri sendiri. Dipakai task Windows ``IDX-EOD`` supaya slot
-    16:05/16:20 tetap terisi walau ``serve`` sedang mati.
+    dipanggil berdiri sendiri untuk mengisi slot yang terlewat secara manual.
 
-    ``--skip-if-fresh`` membuat run susulan (16:20) tidak mengulang penuh bila
-    slot 16:05 sudah mengisi EOD saham + close indeks hari ini.
+    ``--skip-if-fresh`` membuat pemanggilan berulang tidak mengulang penuh bila
+    EOD saham + close indeks hari ini sudah terisi.
     """
     if getattr(args, "skip_if_fresh", False):
         today = datetime.now(WIB).date()
@@ -796,7 +1117,7 @@ def cmd_refresh(args) -> None:
     storage = get_storage_from_env()
     try:
         _job_pipeline_refresh(
-            client, storage, label="manual refresh (task 16:05/16:20)", do_eod=True
+            client, storage, label="manual refresh (idx refresh)", do_eod=True
         )
     finally:
         client.close()
@@ -874,7 +1195,7 @@ def cmd_ownership(args) -> None:
     Sumber gratis per-emiten (``GetCompanyProfilesDetail``). Jalankan berkala
     (mingguan/bulanan) supaya aksi pemilik — siapa menambah/mengurangi — bisa
     dihitung dari selisih dua snapshot. Scheduler juga menjalankannya otomatis
-    tiap Senin 06:45 WIB untuk emiten watchlist (lihat ``_job_ownership``).
+    tiap Senin 16:30 WIB untuk emiten watchlist (lihat ``_job_ownership``).
     """
     client = IDXClient()
     snap = getattr(args, "date", None)
@@ -931,8 +1252,9 @@ def cmd_alerts(args) -> None:
 def cmd_health(args) -> None:
     """Cek apakah data EOD hari bursa terakhir sudah masuk.
 
-    Exit code 1 kalau sudah lewat deadline (default 17:00 WIB) dan data belum
-    ada — biar bisa dipakai cron: ``idx health || kirim-alert``.
+    Exit code 1 kalau sudah lewat deadline (``IDX_EOD_DEADLINE_HOUR``, default
+    pukul 16:00 WIB) dan data belum ada — biar bisa dipakai cron:
+    ``idx health || kirim-alert``.
     """
     from .health import check_eod_health
 
@@ -1182,11 +1504,21 @@ def cmd_serve(args) -> None:
     # Refresh pipeline 8 menu (Narasi/Screener/Valuasi/Hold Check/Jejak
     # Sinyal/Foreign Flow/Sentimen/Sektor) pada jadwal WIB yang diminta.
     # Semua job ini SENGAJA bypass _is_market_hours() dan clear cache API.
-    #   - Sen-Jum 08:45  pra-pembukaan (waktu input) -> recompute + clear cache
+    #   - Sen-Jum 08:50  pra-pembukaan (waktu input) -> recompute + clear cache
     #   - Sen-Kam 12:00  close Sesi I  -> EOD + recompute
     #   - Jum     11:30  close Sesi I  -> EOD + recompute
-    #   - Sen-Jum 16:00  close Sesi II -> EOD + recompute (offset kecil utk Yahoo)
+    #   - Sen-Jum 16:10  close Sesi II -> EOD + recompute (offset utk Yahoo)
     #   - Sab-Min 08:45 & 16:00        -> recompute + clear cache (tanpa EOD)
+    #
+    # URUTAN SORE — satu arah, tidak ada dua job yang hidup bersamaan:
+    #   16:10 refresh_s2    rantai EOD (terukur 4,6 menit; retry maks +4 menit)
+    #   16:30 eod_fallback  jaring kedua EOD; keluar ~1 detik kalau 16:10 berhasil
+    #   16:45 health_eod    alarm — SELALU setelah fallback, supaya tidak berbunyi
+    #                       di hari yang sebenarnya terselamatkan (DB murni)
+    #   16:50 daily_ic      evaluasi IC (DB murni)
+    #   17:00 ownership     buka klien IDX sendiri (Senin) — 50 menit dari 16:10
+    # Pipeline yang saling menimpa dilewati lewat kunci `_PIPELINE_BUSY`, jadi
+    # rantai yang molor tidak bisa bertemu job berikutnya secara bersamaan.
     # ------------------------------------------------------------------
     def _refresh(label: str, do_eod: bool):
         return {
@@ -1197,7 +1529,7 @@ def cmd_serve(args) -> None:
             # Job yang terlewat karena mesin tidur/shutdown TETAP dijalankan
             # setelah bangun, selama masih dalam jendela 2 jam. Tanpa ini
             # APScheduler memakai grace 1 detik: bangun jam 16:32 berarti
-            # slot 16:05 dibuang tanpa jejak (penyebab EOD kosong 12 Okt).
+            # slot 16:10 dibuang tanpa jejak (penyebab EOD kosong 12 Okt).
             # coalesce=True mencegah tumpukan run bila beberapa slot lewat.
             "misfire_grace_time": 7200,
             "coalesce": True,
@@ -1209,10 +1541,14 @@ def cmd_serve(args) -> None:
         seconds=int(os.getenv("NEWS_INTERVAL", "900")), id="news_refresh",
     )
 
-    # Pra-pembukaan Sen-Jum 08:45 — recompute + clear cache (belum ada EOD baru).
+    # Pra-pembukaan Sen-Jum 08:50 - recompute + clear cache (belum ada EOD baru).
+    # 08:50, bukan 08:45: task Windows (IDX-Serve/API/Web) menyalakan serve 08:45.
+    # Jadwal yang lebih awal dari launcher akan terlewat di hari reboot - serve
+    # lahir setelah jamnya lewat, jadi APScheduler menghitung jadwal berikutnya
+    # (besok) dan recompute pra-buka hilang sehari tanpa alarm apa pun.
     scheduler.add_job(
-        **_refresh("pra-buka Sen-Jum 08:45", do_eod=False),
-        day_of_week="mon-fri", hour=8, minute=45, id="refresh_preopen",
+        **_refresh("pra-buka Sen-Jum 08:50", do_eod=False),
+        day_of_week="mon-fri", hour=8, minute=50, id="refresh_preopen",
     )
     # Close Sesi I: Sen-Kam 12:00, Jum 11:30 — tarik EOD + recompute.
     scheduler.add_job(
@@ -1223,21 +1559,37 @@ def cmd_serve(args) -> None:
         **_refresh("close Sesi I Jum 11:30", do_eod=True),
         day_of_week="fri", hour=11, minute=30, id="refresh_s1_fri",
     )
-    # Close Sesi II Sen-Jum 16:00 — offset 5 menit supaya Yahoo daily bar final.
+    # Close Sesi II Sen-Jum 16:10 — offset 10 menit supaya Yahoo daily bar final.
     scheduler.add_job(
-        **_refresh("close Sesi II Sen-Jum 16:00", do_eod=True),
-        day_of_week="mon-fri", hour=16, minute=5, id="refresh_s2",
+        **_refresh("close Sesi II Sen-Jum 16:10", do_eod=True),
+        day_of_week="mon-fri", hour=16, minute=10, id="refresh_s2",
     )
-    # Susulan +15 menit — jaring bar harian yang telat final dari Yahoo.
+    # Jaring kedua EOD — Sen-Jum, tiap jam 16:30-20:30 WIB, DI DALAM serve.
+    # 15 Okt 2026 task Windows `IDX-EOD` dihapus supaya penjadwalan sore hanya ada
+    # di satu tempat (tidak ada lagi dua pipeline yang bisa bertabrakan).
+    # Kalau rantai 16:10 berhasil: satu query DB lalu keluar (~1 detik, tanpa
+    # request IDX). Kalau gagal, ia menjalankan pipeline penuh.
+    # DIULANG tiap jam sampai 20:30 karena dua hal yang tidak ditutup retry:
+    #   1. IDX menolak endpoint berat lebih lama daripada retry 60+180 detik
+    #      (persis kasus 15 Okt);
+    #   2. laptop tidur melewati slot 16:10 — proses `serve` ikut beku, dan
+    #      `misfire_grace_time` 2 jam membuat cek ini menyala begitu mesin
+    #      bangun, sepanjang masih sebelum ~22:30.
+    # 20 menit setelah 16:10 = rantai terpanjang (~16:22 dengan retry) sudah
+    # selesai; kalau toh belum, kunci `_PIPELINE_BUSY` mencegah tabrakan.
     scheduler.add_job(
-        **_refresh("close Sesi II susulan Sen-Jum 16:20", do_eod=True),
-        day_of_week="mon-fri", hour=16, minute=20, id="refresh_s2_late",
+        _job_eod_fallback, "cron", day_of_week="mon-fri", hour="16-20", minute=30,
+        args=[client, storage], id="eod_fallback",
+        misfire_grace_time=7200, coalesce=True,
     )
-    # Health-check EOD — Sen-Jum 17:00 WIB. Kalau job EOD 16:05/16:20 gagal
-    # diam-diam, ini yang memberi tahu (log scheduler + Telegram), supaya
-    # dashboard tidak diam-diam menampilkan data kemarin.
+    # Health-check EOD — Sen-Jum 16:45 WIB. SENGAJA setelah eod_fallback (16:30):
+    # alarm harus menilai hasil jaring kedua, bukan hasil percobaan pertama.
+    # Kalau ditaruh sebelum fallback, hari yang berhasil diselamatkan tetap
+    # memicu Telegram "EOD TELAT" — alarm palsu yang lama-lama diabaikan.
+    # PENTING: alarm hanya berbunyi setelah `IDX_EOD_DEADLINE_HOUR` (default 16).
+    # Jangan memindahkan job ini ke jam sebelum itu — cek akan lolos tanpa suara.
     scheduler.add_job(
-        _job_health_eod, "cron", day_of_week="mon-fri", hour=17, minute=0,
+        _job_health_eod, "cron", day_of_week="mon-fri", hour=16, minute=45,
         id="health_eod",
     )
     # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
@@ -1249,22 +1601,27 @@ def cmd_serve(args) -> None:
         **_refresh("akhir pekan 16:00", do_eod=False),
         day_of_week="sat,sun", hour=16, minute=0, id="refresh_weekend_pm",
     )
-    # IC analysis HARIAN — 06:30 WIB (pra-buka, sebelum refresh 08:45).
-    # Sebelumnya bulanan (tanggal 1); karena panel flow baru bertambah tiap
-    # hari dan gate IC tinggal menunggu sampel memadai, evaluasi harian
-    # memastikan faktor aliran langsung terpakai begitu lolos gate — bobot
-    # composite hold-check otomatis mengikuti hasil terbaru.
+    # IC analysis HARIAN — 16:50 WIB, di ujung urutan sore. Sebelumnya bulanan
+    # (tanggal 1); karena panel flow baru bertambah tiap hari dan gate IC tinggal
+    # menunggu sampel memadai, evaluasi harian memastikan faktor aliran langsung
+    # terpakai begitu lolos gate — bobot composite hold-check otomatis mengikuti.
+    # Murni DB, tapi tetap ditaruh setelah rantai EOD supaya sore hari tidak ada
+    # dua job yang hidup bersamaan sama sekali.
     scheduler.add_job(
-        _job_monthly_ic, "cron", day_of_week="mon-fri", hour=6, minute=30,
+        _job_monthly_ic, "cron", day_of_week="mon-fri", hour=16, minute=50,
         id="daily_ic",
     )
-    # Snapshot pemegang saham — Senin 06:45 WIB (di luar jam bursa, supaya tidak
-    # berebut profil Cloudflare dengan EOD fetch). Interval 1 minggu dengan
-    # start_date Senin berikutnya; dengan begitu tetap ada satu run saat boot
-    # tanpa menunggu cron harian.
+    # Snapshot pemegang saham — Senin 17:00 WIB. Job ini membuka klien IDX
+    # sendiri, jadi jaraknya ke refresh_s2 (16:10) dijaga lebar: kalau IDX
+    # menolak jalur HTTP dan transport jatuh ke Chrome, dua klien bersamaan akan
+    # berebut profil yang sama dan KEDUANYA gagal ("Opening in existing browser
+    # session"). Rantai 16:10 selesai ~16:15 (terpanjang ~16:22 dengan retry),
+    # jadi 17:00 menyisakan ~38 menit — bukan lagi batas tipis 15 menit.
+    # Interval 1 minggu dengan start_date Senin berikutnya; dengan begitu tetap
+    # ada satu run saat boot tanpa menunggu cron harian.
     scheduler.add_job(
         _job_ownership, "interval", weeks=1,
-        start_date=_next_weekday_at(0, 6, 45),
+        start_date=_next_weekday_at(0, 17, 0),
         id="ownership_weekly", replace_existing=True,
     )
     # Live per-emiten capture — GetStockSummary whole-market is EOD-only, so the
@@ -1304,45 +1661,29 @@ def cmd_serve(args) -> None:
     print(f"watchlist: {watchlist[:10]}...")
     print(f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
           f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
-    print("refresh pipeline 8 menu — Sen-Jum 08:45, Sen-Kam 12:00 / Jum 11:30, "
-          "Sen-Jum 16:05 & 16:20; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
-    print("ownership snapshot — Senin 06:45 WIB (watchlist)")
+    print("refresh pipeline 8 menu - Sen-Jum 08:50, Sen-Kam 12:00 / Jum 11:30, "
+          "Sen-Jum 16:10; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
+    print("jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
+          "kalau EOD hari ini sudah lengkap); "
+          "health EOD 16:45; IC 16:50; ownership Senin 17:00")
+    print(f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
+          "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
+          "tidak bisa ditarik otomatis");
 
     # --- Startup catchup: if today's EOD data is missing, run it now -------
     # Prevents missed refreshes when scheduler restarts after the cron window.
-    # Checks BOTH prices_pit (stock EOD) AND index_quotes (COMPOSITE official close).
+    # Logika yang sama dipakai job `eod_fallback` (16:30) lewat `_eod_catchup`,
+    # jadi definisi "sudah lengkap" di sore hari hanya ada satu. Jalur startup
+    # sekaligus melaporkan lubang close indeks hari lampau (tidak bisa ditarik
+    # otomatis) — di jalur sore laporan itu sengaja dimatikan supaya log bersih.
     try:
-        _dsn = os.getenv("DATABASE_URL")
-        if _dsn:
-            _today = datetime.now(WIB).date()
-            # Cek kesegaran EOD saham + close indeks resmi (helper bersama
-            # dengan fallback IDX-EOD supaya definisi "sudah lengkap" satu).
-            _has_today_stocks, _has_today_index = _eod_fresh_for(_today)
-            now_wib = datetime.now(WIB)
-            wd = now_wib.weekday()  # 0=Mon..6=Sun
-            past_close = now_wib.hour >= 16
-            is_trading_day = wd < 5
-
-            if is_trading_day and past_close:
-                if not _has_today_stocks:
-                    print(f"[catchup] data EOD saham {now_wib.strftime('%Y-%m-%d')} belum ada — "
-                          "menjalankan full refresh pipeline...")
-                    _job_pipeline_refresh(
-                        client, storage,
-                        label=f"startup catchup {now_wib.strftime('%Y-%m-%d')}",
-                        do_eod=True,
-                    )
-                elif not _has_today_index:
-                    print(f"[catchup] close resmi COMPOSITE {now_wib.strftime('%Y-%m-%d')} belum ada — "
-                          "menjalankan index EOD close...")
-                    _job_index_eod_close()
-                    _clear_api_cache()
-                else:
-                    print("[catchup] data EOD hari ini sudah lengkap (saham OK, index OK)")
-            else:
-                print(f"[catchup] check EOD selesai "
-                      f"(pasar {'sudah tutup' if past_close else 'belum tutup'}, "
-                      f"{'hari kerja' if is_trading_day else 'akhir pekan'})")
+        if os.getenv("DATABASE_URL"):
+            _eod_catchup(
+                client,
+                storage,
+                label=f"startup {datetime.now(WIB):%Y-%m-%d}",
+                lapor_lubang_index=True,
+            )
     except Exception as e:
         print(f"[warn] catchup check gagal: {e}", file=sys.stderr)
 

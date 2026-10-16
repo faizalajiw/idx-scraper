@@ -6,13 +6,17 @@
 -- (fallback: konstanta FACTOR_WEIGHTS di composite.py).
 --
 -- Idempotent: primary key (run_date, factor, horizon) — analysis ulang untuk
--- tanggal yang sama menimpa baris lama, tidak menduplikasi.
+-- tanggal yang sama menimpa baris lama, tidak menduplikasi. Kolom `run_date`
+-- sengaja TIDAK punya PRIMARY KEY sendiri: satu run menulis beberapa faktor ×
+-- horizon, dan kunci tunggal di `run_date` akan menolak baris kedua (atau
+-- menimpanya) — kunci gabungan inilah yang dipakai `ic_history._UPSERT_SQL`
+-- (`on conflict (run_date, factor, horizon)`).
 -- ============================================================================
 
 CREATE SCHEMA IF NOT EXISTS research;
 
 CREATE TABLE IF NOT EXISTS research.factor_ic_history (
-    run_date      DATE PRIMARY KEY
+    run_date      DATE        NOT NULL
                   DEFAULT (current_date),
     factor        TEXT        NOT NULL,
     horizon       INTEGER     NOT NULL,

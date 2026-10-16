@@ -35,3 +35,6 @@ scripts/_*.py
 /_serve.log
 /_api.log
 /_uvicorn.log
+# Penanda restart `serve` (lihat scripts/restart-serve.ps1): kalau ikut ter-commit,
+# deploy berikutnya akan memicu restart tak sengaja.
+/_restart-serve.flag

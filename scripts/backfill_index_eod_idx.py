@@ -18,13 +18,16 @@ Guard hari libur & change kosong:
   hari bursa terakhir (index_summary_daily), bukan disimpan 0 mentah.
 
 Idempotent: aman dijalankan berulang (dipanggil scheduler harian di
-cli._job_index_eod_close jam 16:10 WIB). Butuh Chrome profile yang sudah
-lolos Cloudflare (IDX_CHROME_PROFILE_DIR) sama seperti scrape EOD lainnya.
+cli._job_index_eod_close jam 16:10 WIB). Lewat transport HTTP (curl_cffi) —
+tidak butuh Chrome profile; set IDX_TRANSPORT=http di server.
 
-Jalankan (Windows PowerShell, dari idx-scraper/):
-    Get-Content .env | ... ; $env:PYTHONPATH="src"
-    $env:IDX_CHROME_PROFILE_DIR = Join-Path $env:LOCALAPPDATA "idx-scraper-chrome-p3"
+Jalankan (dari idx-scraper/; .env memuat DATABASE_URL):
+    $env:PYTHONPATH="src"
     python -m scripts.backfill_index_eod_idx
+
+Batas: hanya untuk HARI INI — GetIndexList selalu berarti "sekarang". Tanggal
+lampau tidak bisa ditambal di sini; saham lewat `idx eod <YYYYMMDD>`, close
+indeks hanya lewat scripts/backfill_index_eod.py (Yahoo, provenance beda).
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Health-check data EOD — peringatan kalau data hari bursa belum masuk.
 
-Kenapa ada: job EOD (`refresh_s2` 16:05 / `refresh_s2_late` 16:20) bisa gagal
+Kenapa ada: job EOD (`refresh_s2` 16:10) bisa gagal
 diam-diam — Cloudflare, koneksi DB putus, atau scheduler mati. Dashboard lalu
 cuma menampilkan data hari sebelumnya tanpa ada yang sadar. Check ini
 membandingkan tanggal terbaru di layer PIT (`research.latest_pit`) dan close
@@ -9,7 +9,7 @@ peringatan lewat log scheduler + Telegram.
 
 Dipakai oleh:
 - ``idx health`` — cek manual; exit code 1 kalau data telat (bisa dipakai cron)
-- job ``health_eod`` di ``idx serve`` — Sen–Jum 17:00 WIB, kirim Telegram kalau telat
+- job ``health_eod`` di ``idx serve`` — Sen–Jum 16:45 WIB, kirim Telegram kalau telat
 
 Catatan: tanpa kalender libur bursa, hari libur nasional ikut dianggap hari
 bursa. Set ``IDX_HOLIDAYS=2026-12-25,2027-01-01`` (ISO, dipisah koma) untuk
@@ -25,7 +25,9 @@ from datetime import date, datetime, timedelta, timezone
 WIB = timezone(timedelta(hours=7))
 
 # Lewat jam ini (WIB) di hari kerja, EOD hari ini dianggap telat kalau belum ada.
-EOD_DEADLINE_HOUR = int(os.getenv("IDX_EOD_DEADLINE_HOUR", "17"))
+# Default 16: harus konsisten dengan jadwal `refresh_s2` (16:10) dan `health_eod`
+# (16:45) — kalau dinaikkan ke 17, job health 16:45 tidak akan pernah berbunyi.
+EOD_DEADLINE_HOUR = int(os.getenv("IDX_EOD_DEADLINE_HOUR", "16"))
 
 
 def parse_holidays(raw: str | None = None) -> set[date]:

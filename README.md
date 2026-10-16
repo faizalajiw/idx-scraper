@@ -228,15 +228,77 @@ All endpoints accept an optional API key (`X‑API‑KEY`) read from `.env` (`ID
 ## Scheduler & Jobs
 The scheduler (APScheduler, timezone WIB) starts with `serve`.
 
-| Job ID | Schedule | Action |
+| Job ID | Schedule (WIB) | Action |
 |--------|----------|--------|
-| `idx` | every 60 s (market hours) | Fetch index quote & rotate browser‑probe. |
-| `wl` | every 60 s (market hours) | Fetch watch‑list quotes. |
-| `_job_index_eod_close` | daily 16:05 WIB | Back‑fill official IHSG close (`scripts/backfill_index_eod_idx.py`). |
-| `_job_backfill_market_segment` | daily 16:10 WIB | Compute `research.market_segment_daily`. |
-| `health_check` | every 300 s | Verify today’s `raw_eod` & `index_quotes`; exit 1 if missing. |
-| `prune_logs` | daily 02:00 WIB | Delete log files older than 7 days. |
+| `idx` | every 60 s (market hours) | Fetch index quote & rotate browser‑probe. |
+| `wl` | every 60 s (market hours) | Fetch watch‑list quotes. |
+| *live capture* | rolling sweep (market hours) | `IDX_LIVE_TOP` liquid + 20 movers, `IDX_LIVE_DELAY_MS` per request. |
 | `news_refresh` | every `NEWS_INTERVAL` s (default 900), no market-hours gate | Tarik judul dari `snips.stockbit.com` ke `news_items`, lalu hapus berita dengan `published_at` > 7 hari (`prune`). |
+| `refresh_preopen` | Mon-Fri 08:50 | Recompute 8 menu + clear API cache (no EOD). |
+| `refresh_s1` | Mon‑Thu 12:00 | EOD Sesi I + recompute. |
+| `refresh_s1_fri` | Fri 11:30 | EOD Sesi I + recompute. |
+| `refresh_s2` | Mon‑Fri **16:10** | EOD Sesi II + recompute (`_job_index_eod_close` 16:10, then `research.market_segment_daily`). Same pipeline as `idx refresh`. |
+| `eod_fallback` | Mon‑Fri **16:30, lalu tiap jam s/d 20:30** | Jaring kedua EOD (`_eod_catchup`): kalau EOD hari ini sudah lengkap, keluar dalam ~1 detik (satu query DB, tanpa request IDX); kalau belum, jalankan pipeline penuh. Diulang tiap jam karena dua hal yang tidak ditutup retry: penolakan IDX yang bertahan >4 menit, dan **laptop yang tidur** (proses `serve` ikut beku, bukan mati) — dengan `misfire_grace_time` 2 jam, cek terakhir masih menyala kalau mesin bangun sebelum ~22:30. Menggantikan task Windows `IDX-EOD` yang dihapus 15 Okt 2026. |
+| `health_eod` | Mon‑Fri **16:45** | Verify today's EOD is in; log + Telegram if late. Sengaja SETELAH `eod_fallback` supaya alarm menilai hasil jaring kedua, bukan percobaan pertama. Alarm only fires at/after `IDX_EOD_DEADLINE_HOUR`. |
+| `daily_ic` | Mon‑Fri **16:50** | IC analysis → `research.factor_ic_history` (bobot composite). Murni DB, tidak menyentuh IDX. |
+| `ownership_weekly` | Monday **17:00** (weekly) | Snapshot pemegang saham watchlist → `research.ownership`. Dijarakkan lebar dari `refresh_s2` (50 menit) supaya tidak berebut profil Chrome bila transport jatuh ke browser. |
+| `refresh_weekend_am` | Sat‑Sun 08:45 | Recompute + clear cache (market closed). |
+| `refresh_weekend_pm` | Sat‑Sun 16:00 | Recompute + clear cache (market closed). |
+| `alerts` | every `IDX_ALERT_INTERVAL` s (default 300) | Telegram alerts (signals + watch rules); only registered when the bot token is set. |
+
+Jadwal ini dikunci oleh `tests/test_serve_schedule.py` — mengubah jam tanpa
+memperbarui tes akan gagal. Tes itu menjaga empat invarian: `health_eod` tidak
+pernah sebelum `IDX_EOD_DEADLINE_HOUR`, jaring kedua (`eod_fallback`) selalu
+>12 menit setelah rantai 16:10, alarm selalu setelah jaring kedua, dan tidak ada
+dua job cron yang jatuh di menit yang sama pada hari yang sama. Jaring kedua itu
+sendiri diulang tiap jam sampai 20:30 dengan `misfire_grace_time` 2 jam: slot
+yang terlewat karena mesin tidur tetap dikerjakan begitu mesin bangun.
+
+Urutan di dalam `refresh_s2`: EOD saham → close indeks → regime → jejak sinyal →
+rekomendasi → broker summary → clear cache. Dua langkah yang menyentuh endpoint
+berat IDX (**EOD saham**, **broker summary**) diulang sampai 3 percobaan dengan
+jeda 60 s lalu 180 s — IDX pernah menolaknya `403` hanya sesaat (15 Okt 2026:
+16:10 dan 16:15 gagal, 17:40 permintaan identik berhasil 963 baris dalam 0,3 s).
+Percobaan ulang itu **dimatikan sebelum jam close** (`_retry_percobaan`): di
+`refresh_s1` 12:00 EOD pasar memang belum terbit, jadi retry di sana hanya
+membuang menit dan menambah beban IDX. Penolakan yang bertahan lebih lama
+daripada dua retry ditutup job `eod_fallback`, yang mengulang ceknya tiap jam
+16:30–20:30 sampai EOD hari itu benar-benar terisi.
+
+Dua pipeline tidak pernah berjalan bersamaan: kunci `_PIPELINE_BUSY` melewati
+job kedua (pekerjaannya sudah tercakup yang sedang jalan). Perilaku ini dikunci
+`tests/test_eod_retry.py` dan `tests/test_eod_fallback.py`.
+
+### Lubang hari bursa lampau
+`eod_fallback` dan startup `serve` sama‑sama memanggil `_eod_catchup`, dan itu
+sekarang **dua fase**: hari ini dulu (`_eod_catchup_hari_ini`), lalu hari bursa
+lampau yang bolong (`_backfill_hari_lampau`, default 5 hari bursa — atur lewat
+`IDX_BACKFILL_DAYS`, `0` mematikan). Fase kedua ada karena cek "hari ini" tidak
+bisa menyembuhkan sehari yang hilang: kalau mesin tidur/off melewati seluruh
+jendela sore (16:10–22:30), tanggal itu tidak pernah kembali — dan `health_eod`
+tidak menangkapnya, karena ia membandingkan tanggal **terbaru**, bukan lubang di
+tengah. Karena `serve` yang tidak pernah di‑restart pun tetap menjalankan tick
+sore, lubang itu tertutup tanpa menunggu start ulang proses.
+
+Biaya saat tidak ada lubang: satu query DB per tanggal (≈ nol, nol request IDX).
+Kalau ada yang ditarik: `_simpan_eod_hari` menulis tiga tujuan yang sama seperti
+pipeline 16:10 (tabel polos, `raw_eod` + `prices_pit`, agregat pasar), lalu menu
+turunan disegarkan sekali (`do_eod=False`; jendela 1 bulan di dalamnya sudah
+mencakup tanggal yang baru masuk). Cakapan yang jujur: **saham** bisa ditarik
+ulang (endpoint IDX yang sama melayani tanggal lampau), **close resmi indeks
+tidak** — satu‑satunya sumbernya `GetIndexList` live, jadi `serve` hanya
+melaporkan tanggal yang belum punya close indeks saat startup. Kalau itu perlu,
+jalur yang tersedia hanya backfill Yahoo (`python -m scripts.backfill_index_eod
+--days 90`, provenance `Yahoo`). Dikunci `tests/test_backfill_hari.py`.
+
+Job `_job_index_eod_close` sengaja **tidak menulis apa pun sebelum 16:00 WIB**
+(`_boleh_tulis_close_index`). Dulu pra‑buka 08:45 & close Sesi I 12:00 ikut
+memanggilnya, dan `backfill_index_eod_idx` menstempel barisnya
+`captured_at = hari ini 16:00` — satu‑satunya jam yang dihitung sebagai close
+oleh `_eod_fresh_for` & `check_eod_health`, sekaligus baris terbaru yang dibaca
+dashboard (`order by captured_at desc`). Nilai pra‑buka/tengah hari pun tampil
+sebagai "IHSG hari ini" dan mengalahkan snapshot polling sepanjang sisa sesi.
+Sebelum close, biarkan snapshot polling yang isinya benar‑benar segar.
 
 ### API Berita
 | Endpoint | Fungsi |
