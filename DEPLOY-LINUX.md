@@ -262,7 +262,7 @@ menunjuk ke situ; `cli.py` memanggil `load_dotenv()` sendiri).
 
 | Variabel | Default | Keterangan |
 | --- | --- | --- |
-| `IDX_IMPERSONATE` | `chrome124` | target fingerprint curl_cffi; satu-satunya tombol bila Cloudflare memperketat |
+| `IDX_IMPERSONATE` | `chrome124` | target fingerprint curl_cffi; satu-satunya tombol bila Cloudflare memperketat. **16 Okt 2026**: keluarga Chrome (`chrome124/131/136`) ditolak `403`, `safari18_0` & `firefox135` dijawab `200` |
 | `IDX_HTTP_COOLDOWN_SEC` | `600` | lama jalur HTTP diistirahatkan setelah ditolak, sebelum jatuh ke browser (hanya relevan di mode `auto`) |
 | `IDX_MARKET_OPEN` / `IDX_MARKET_CLOSE` | `09:00` / `16:00` | jam bursa WIB |
 | `IDX_INDEX_INTERVAL` | `60` | detik antar-poll indeks (penggerak utama ukuran `index_quotes`) |
@@ -664,7 +664,7 @@ Aturan penting: **cetak commit yang sedang dipakai produksi** setiap kali deploy
 
 | Gejala | Cek | Tindakan |
 | --- | --- | --- |
-| EOD 0 baris | `journalctl -u idx-serve \| grep -i -E 'status (403\|429)\|ditolak'` | Throttle/penolakan IDX. Jalankan `idx refresh --skip-if-fresh`; bila 403 menetap, naikkan `IDX_IMPERSONATE` (mis. `chrome131`) |
+| EOD 0 baris | `journalctl -u idx-serve \| grep -i -E 'status (403\|429)\|ditolak'` | Throttle/penolakan IDX. Jalankan `idx refresh --skip-if-fresh`; bila 403 menetap, ganti `IDX_IMPERSONATE` ke `safari18_0` atau `firefox135` (16 Okt 2026: keluarga Chrome `chrome124/131/136` dijawab `403`) |
 | `idx health` bilang EOD tertinggal | `select max(trade_date) from research.latest_pit` | Hari libur bursa? isi `IDX_HOLIDAYS`. Bukan? jalankan `idx refresh --skip-if-fresh` |
 | Serve mati berulang | `systemctl status idx-serve`, `NRestarts` | Lihat `journalctl -u idx-serve -n 100`. Sering OOM → naikkan RAM atau `MemoryMax` |
 | `serve` menolak start: "instance lain sedang berjalan" | `ls -l ~/.local/state/idx-scraper/serve.lock` | Kunci aktif. Cari proses `idx_scraper.cli serve` lain, atau (bila yakin tak ada) hentikan unit lalu start ulang |

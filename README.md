@@ -169,6 +169,12 @@ tidak berlaku.)
 `IDX_IMPERSONATE` (default `chrome124`) adalah satu-satunya tombol bila suatu
 hari Cloudflare memperketat pemeriksaan fingerprint.
 
+**Uji 16 Okt 2026**: keluarga Chrome sudah ditolak (`chrome124`, `chrome131`,
+`chrome136` → `403` di `GetIndexList`), sedangkan `safari18_0` dan `firefox135`
+dijawab `200`. Kalau EOD tiba-tiba 0 baris dengan `status 403`, ganti ke
+`IDX_IMPERSONATE=safari18_0` dulu sebelum menuduh yang lain — dan catat tanggal
+ujinya, karena fingerprint bisa tertutup lagi kapan saja.
+
 ### Cadangan: Chrome headful (opsional)
 Hanya terpakai bila `IDX_TRANSPORT=auto` dan IDX menolak jalur HTTP, atau bila
 `IDX_TRANSPORT=browser`. Butuh Google Chrome terpasang dan Playwright
