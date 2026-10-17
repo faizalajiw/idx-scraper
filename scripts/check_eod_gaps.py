@@ -8,23 +8,34 @@ melewati tanggal yang sudah terisi.
 
 Yang dilakukan skrip ini:
 1. Daftar hari kerja di rentang (default: min..max ``trade_date`` yang ada)
-   yang belum punya satu baris pun.
+   yang belum punya satu baris pun. Tanggal yang lebih tua dari
+   ``JENDELA_RETENSI_HARI`` (720) dilewati TANPA fetch: IDX menjawab 503 untuknya
+   dan tanggalnya tak akan pernah bisa ditambal, jadi sweep tidak boleh terus
+   membakar 3 request / ~120 s per tanggal mati itu. ``--dates`` yang disebut
+   operator tetap dihormati (override eksplisit, tanpa potongan jendela).
 2. Untuk tiap tanggal: ``ambil_hari`` dari ``scripts.backfill_raw_eod``
    (3 percobaan, backoff 0/30/90 s; status transport dikosongkan sebelum tiap
    percobaan, jadi kegagalan transport tidak lolos sebagai "libur bursa").
 3. Tiap sesi ditulis dalam SATU transaksi (utuh atau tidak sama sekali); jumlah
    baris yang benar-benar tercatat dibandingkan dengan yang diterima IDX.
-4. Hasil diklasifikasikan jujur:
+4. Hasil dipetakan lewat ember ``klasifikasi`` dari
+   ``scripts.backfill_raw_eod`` (aturan status tidak diduplikasi di sini):
    - dapat baris, semua tercatat   -> terisi
-   - 200 tanpa baris               -> LIBUR bursa
    - baris tak lengkap tercatat    -> SEBAGIAN (hari TIDAK berhasil)
-   - status lain / transport gagal -> LUBANG di sisi IDX (bukan libur!) — dicatat
+   - 200 tanpa baris               -> LIBUR bursa
+   - 503                           -> LUAR JENDELA RETENSI (bukan lubang, tak
+     akan pernah bisa ditambal, jadi tidak pernah memicu exit 1)
+   - 403/429                       -> DIBLOKIR (Cloudflare; beruntun = berhenti)
+   - status lain / transport gagal -> GAGAL di sisi IDX (bukan libur!) — dicatat
      dan dutarakan di ringkasan supaya terlihat, bukan disembunyikan.
 5. ``prices_pit`` disegarkan bila ada yang terisi.
-6. Exit code jujur untuk scheduler: 0 hanya bila tidak ada hari yang gagal
-   (libur bursa asli bukan kegagalan); 1 bila run berhenti karena penolakan
-   beruntun (403/429) atau ada hari yang dicoba tapi tidak berhasil. Run
-   ``--dry-run`` dan run bersih selalu 0.
+6. Exit code jujur untuk scheduler: 0 hanya bila tidak ada sesi yang gagal
+   (libur bursa asli dan tanggal di luar jendela retensi bukan kegagalan); 1
+   bila run berhenti karena penolakan beruntun (403/429) atau ada sesi yang
+   gagal/tidak tersimpan penuh. 403/429 tunggal yang tidak sampai menghentikan
+   run tetap tercatat di ringkasan (``diblokir:``) tapi tidak menaikkan exit
+   code — harinya muncul lagi di pemindaian run berikutnya. Run ``--dry-run``
+   dan run bersih selalu 0.
 
 Pemakaian:
     # lihat dulu tanpa menyentuh IDX
@@ -42,7 +53,7 @@ import os
 import pathlib
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import psycopg
 
@@ -54,12 +65,23 @@ from idx_scraper.client import IDXClient
 from scripts.backfill_raw_eod import (
     _INSERT_RAW_EOD,
     _REJECT_REASON,
+    WIB,
     _num,
     _ohl,
     _prev_close,
     ambil_hari,
+    klasifikasi,
     refresh_prices_pit,
 )
+
+# Retensi IDX ±2 tahun bergulir. Lebih tua dari ini IDX menjawab 503 dan
+# tanggalnya tak akan pernah bisa ditambal — jangan di-fetch sama sekali.
+JENDELA_RETENSI_HARI = 720
+
+
+def dalam_jendela(d: date, hari_ini: date) -> bool:
+    """True bila ``d`` masih di dalam jendela retensi IDX (±720 hari, inklusif)."""
+    return d >= hari_ini - timedelta(days=JENDELA_RETENSI_HARI)
 
 
 def load_env() -> None:
@@ -83,7 +105,7 @@ def hilang(cur, lo: date, hi: date) -> list[date]:
 
 
 def status_hari(rows: list | None, status: object, tertangani: int) -> str:
-    """Klasifikasi hasil satu hari SETELAH penyisipan.
+    """Ember hasil satu hari SETELAH penyisipan.
 
     "terisi"  : baris diterima dan semuanya tercatat — masuk ``raw_eod`` ATAU
                 dikarantina; keduanya tulisan yang disengaja.
@@ -91,34 +113,38 @@ def status_hari(rows: list | None, status: object, tertangani: int) -> str:
                 berhasil. Run berikutnya harus menarik ulang; jangan dianggap
                 sudah ada (mode "tanggal ada, baris kurang, tanpa alarm" yang
                 plan ini ada untuk membunuh).
-    "libur"   : 200 tanpa baris = libur bursa asli.
-    "lubang"  : transport/status lain tanpa baris = di sisi IDX, bukan libur.
+
+    Sisanya diambil apa adanya dari ``klasifikasi`` di ``scripts.backfill_raw_eod``
+    supaya aturan status hanya hidup di satu tempat: "libur" (200 tanpa baris),
+    "luar-jendela" (503 — tak akan pernah bisa ditambal, jadi BUKAN lubang),
+    "diblokir" (403/429), "gagal" (status lain / transport).
     """
-    if rows:
-        return "terisi" if tertangani == len(rows) else "sebagian"
-    if status == 200:
-        return "libur"
-    return "lubang"
+    ember = klasifikasi(rows, status)
+    if ember != "data":
+        return ember
+    return "terisi" if tertangani == len(rows) else "sebagian"
 
 
-def titik_lanjut(lubang: list[tuple[date, object]], sebagian: list[date]) -> date | None:
+def titik_lanjut(belum_berhasil: list[tuple[date, object]], sebagian: list[date]) -> date | None:
     """Tanggal paling awal yang belum berhasil, titik ulang untuk run berikutnya.
 
+    Isi ``belum_berhasil`` = hari GAGAL + hari DIBLOKIR (libur bursa dan
+    luar-jendela tidak ikut: keduanya memang bukan pekerjaan yang tertunda).
     Aman diulang dari sini: pre-cek melewati tanggal yang sudah punya baris dan
     hari libur di rentang itu cuma diputar ulang tanpa efek.
     """
-    kandidat = [d for d, _ in lubang] + list(sebagian)
+    kandidat = [d for d, _ in belum_berhasil] + list(sebagian)
     return min(kandidat) if kandidat else None
 
 
-def kode_keluar(*, berhenti_menolak: bool, lubang: int, sebagian: int) -> int:
-    """1 bila run berhenti karena penolakan beruntun atau ada hari gagal.
+def kode_keluar(*, berhenti_menolak: bool, gagal: int, sebagian: int) -> int:
+    """1 bila run berhenti karena penolakan beruntun atau ada sesi gagal/disimpan separuh.
 
-    Libur bursa asli TIDAK dihitung gagal — 48 hari kerja tanpa sesi itu memang
-    libur bursa, dan scheduler harus tetap membedakan run bersih dari run yang
-    berhenti separuh jalan.
+    Libur bursa asli dan tanggal di luar jendela retensi (503) TIDAK dihitung
+    gagal: keduanya memang tak bisa ditambal, dan alarm permanen untuknya
+    membuat sinyal scheduler merah abadi (temuan I1 review final).
     """
-    if berhenti_menolak or lubang or sebagian:
+    if berhenti_menolak or gagal or sebagian:
         return 1
     return 0
 
@@ -198,13 +224,26 @@ def main() -> None:
     lo, hi = cur.fetchone()
     lo = args.start_date or lo
     hi = args.end_date or hi
+    hari_ini = datetime.now(WIB).date()
 
     if args.dates:
         lubang_tanggal = [date.fromisoformat(s.strip()) for s in args.dates.split(",") if s.strip()]
+        dilewati_luar_jendela = 0
     else:
-        lubang_tanggal = hilang(cur, lo, hi)
+        # Potongan jendela retensi: tanggal yang tak mungkin ditambal jangan
+        # di-fetch sama sekali (503 + backoff 0/30/90 = ~120 s per tanggal mati).
+        semua = hilang(cur, lo, hi)
+        lubang_tanggal = [d for d in semua if dalam_jendela(d, hari_ini)]
+        dilewati_luar_jendela = len(semua) - len(lubang_tanggal)
     print(f"[gap] rentang {lo} .. {hi} | hari kerja tanpa data: {len(lubang_tanggal)}", flush=True)
     print("      " + ", ".join(str(x) for x in lubang_tanggal), flush=True)
+    if dilewati_luar_jendela:
+        print(
+            f"[gap] luar jendela retensi (>{JENDELA_RETENSI_HARI} hari): "
+            f"{dilewati_luar_jendela} tanggal tidak di-fetch — IDX membalas 503 dan "
+            "tanggalnya tak akan pernah bisa ditambal",
+            flush=True,
+        )
     if args.dry_run or not lubang_tanggal:
         return
     if args.limit:
@@ -214,7 +253,9 @@ def main() -> None:
     client.warmup()
     terisi: list[str] = []
     libur: list[str] = []
-    lubang: list[tuple[date, object]] = []
+    luar_jendela: list[date] = []
+    diblokir: list[tuple[date, object]] = []
+    gagal: list[tuple[date, object]] = []
     sebagian: list[date] = []
     tolak_beruntun = 0
     berhenti_menolak = False
@@ -228,8 +269,8 @@ def main() -> None:
         if rows:
             tolak_beruntun = 0
             tersimpan, dikarantina = simpan_hari(conn, day, rows)
-            arsip = status_hari(rows, status, tersimpan + dikarantina)
-            if arsip == "terisi":
+            ember = status_hari(rows, status, tersimpan + dikarantina)
+            if ember == "terisi":
                 terisi.append(f"{day}({tersimpan})")
                 print(
                     f"  {i}/{len(lubang_tanggal)} {day} -> terisi {tersimpan}/{len(rows)} baris",
@@ -242,14 +283,25 @@ def main() -> None:
                     f"{tersimpan}+{dikarantina} dari {len(rows)} baris — dianggap tidak berhasil",
                     flush=True,
                 )
-        elif status == 200:
-            libur.append(str(day))
-            tolak_beruntun = 0
-            print(f"  {i}/{len(lubang_tanggal)} {day} -> libur bursa", flush=True)
         else:
-            lubang.append((day, status))
-            print(f"  {i}/{len(lubang_tanggal)} {day} -> LUBANG IDX (status {status})", flush=True)
-            if status in (403, 429):
+            ember = status_hari(rows, status, 0)
+            if ember == "libur":
+                libur.append(str(day))
+                tolak_beruntun = 0
+                print(f"  {i}/{len(lubang_tanggal)} {day} -> libur bursa", flush=True)
+            elif ember == "luar-jendela":
+                luar_jendela.append(day)
+                print(
+                    f"  {i}/{len(lubang_tanggal)} {day} -> luar jendela retensi (503), "
+                    "bukan lubang",
+                    flush=True,
+                )
+            elif ember == "diblokir":
+                diblokir.append((day, status))
+                print(
+                    f"  {i}/{len(lubang_tanggal)} {day} -> DIBLOKIR IDX (status {status})",
+                    flush=True,
+                )
                 tolak_beruntun += 1
                 if tolak_beruntun >= 2:
                     print(
@@ -259,28 +311,37 @@ def main() -> None:
                     )
                     berhenti_menolak = True
                     break
+            else:
+                gagal.append((day, status))
+                print(
+                    f"  {i}/{len(lubang_tanggal)} {day} -> GAGAL di sisi IDX (status {status})",
+                    flush=True,
+                )
         time.sleep(args.pace)
 
     client.close()
-    kode = kode_keluar(
-        berhenti_menolak=berhenti_menolak, lubang=len(lubang), sebagian=len(sebagian)
-    )
+    kode = kode_keluar(berhenti_menolak=berhenti_menolak, gagal=len(gagal), sebagian=len(sebagian))
     print(
-        f"[gap] terisi={len(terisi)} | libur={len(libur)} | lubang IDX={len(lubang)} "
-        f"| sebagian={len(sebagian)}",
+        f"[gap] terisi={len(terisi)} | libur={len(libur)} "
+        f"| luar jendela retensi={len(luar_jendela)} "
+        f"| diblokir={len(diblokir)} | gagal={len(gagal)} | sebagian={len(sebagian)}",
         flush=True,
     )
     if terisi:
         print("      terisi:", ", ".join(terisi), flush=True)
-    if lubang:
-        print("      lubang:", ", ".join(f"{d}:{s}" for d, s in lubang), flush=True)
+    if luar_jendela:
+        print("      luar jendela:", ", ".join(str(d) for d in luar_jendela), flush=True)
+    if diblokir:
+        print("      diblokir:", ", ".join(f"{d}:{s}" for d, s in diblokir), flush=True)
+    if gagal:
+        print("      gagal:", ", ".join(f"{d}:{s}" for d, s in gagal), flush=True)
     if sebagian:
         print("      sebagian:", ", ".join(str(d) for d in sebagian), flush=True)
     if terisi:
         refresh_prices_pit(dsn)
 
     if kode != 0:
-        titik = titik_lanjut(lubang, sebagian)
+        titik = titik_lanjut(gagal + diblokir, sebagian)
         if titik is not None:
             print(
                 f"[gap] ada hari yang belum berhasil. Lanjutkan: --start-date {titik.isoformat()}",
