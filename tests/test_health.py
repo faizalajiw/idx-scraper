@@ -191,6 +191,25 @@ def test_jendela_membatasi_jumlah_sesi_yang_dicek():
     assert evaluate_field_coverage(rows, sessions=3).checked == 3
 
 
+def test_jendela_memakai_sesi_terakhir_bukan_pertama():
+    """Jendela wajib mengambil ``sessions`` sesi TERBARU.
+
+    Kalau slice-nya berbalik jadi ``rows[:sessions]``, kerusakan yang hanya ada
+    di sesi terbaru lolos tanpa alarm — persis kegagalan yang penjaga ini ada
+    untuk mencegah. Baris lama di sini dibuat utuh semua supaya satu-satunya
+    pelanggar yang sah adalah sesi terbaru.
+    """
+    rows = [
+        (date(2026, 10, 1), 100, 100),
+        (date(2026, 10, 2), 100, 100),
+        (date(2026, 10, 3), 100, 100),
+        (date(2026, 10, 6), 100, 0),
+    ]
+    c = evaluate_field_coverage(rows, sessions=2)
+    assert c.troublemakers == ["2026-10-06 (0/100, 0.0%)"]
+    assert c.ok is False
+
+
 def test_pesan_menyebut_tanggal_dan_skrip_perbaikan():
     c = FieldCoverage(checked=1, troublemakers=["2026-07-14 (0/965, 0.0%)"], worst_pct=0.0)
     msg = format_field_coverage_message(c)
