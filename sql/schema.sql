@@ -61,9 +61,9 @@ create index if not exists idx_index_summary_daily_date on index_summary_daily(d
 -- Target `on conflict (code, date)` di index_summary_daily untuk tiap skrip
 -- backfill indeks: scripts/backfill_index_eod.py, backfill_index_eod_idx.py, dan
 -- backfill_index_history_yahoo.py. Ketiganya juga membuat index ini sendiri saat
--- jalan (masing-masing baris 71, 145, 138), jadi tidak ada jalur runtime yang
--- bergantung pada baris di bawah — fungsinya paritas file skema ↔ DB hidup,
--- supaya `psql -f sql/schema.sql` menghasilkan bentuk yang sama.
+-- jalan, jadi tidak ada jalur runtime yang bergantung pada pernyataan di bawah —
+-- fungsinya paritas file skema ↔ DB hidup, supaya `psql -f sql/schema.sql`
+-- menghasilkan bentuk yang sama.
 create unique index if not exists ux_index_summary_daily_code_date on index_summary_daily(code, date);
 
 -- Table: stock_summary_daily (EOD data per stock)

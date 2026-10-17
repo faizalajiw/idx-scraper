@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS research.raw_eod (
 -- non-unique `(code, trade_date, ingested_at DESC)`, `IF NOT EXISTS` matches by
 -- NAME only, so this line is a no-op there — that DB stays without the unique
 -- index and `on conflict (code, trade_date)` keeps failing. Fix by hand:
--- `drop index idx_raw_eod_lookup;` then re-run this file (or create the unique
+-- `drop index research.idx_raw_eod_lookup;` then re-run this file (or create the unique
 -- index directly). The live DB and any fresh deploy are unaffected.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_eod_lookup
     ON research.raw_eod (code, trade_date);
