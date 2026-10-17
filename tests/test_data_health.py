@@ -12,6 +12,9 @@ from idx_scraper.health import (
     evaluate_row_counts,
     evaluate_session_gaps,
     find_missing_sessions,
+    format_no_data_message,
+    format_row_count_message,
+    format_session_gaps_message,
 )
 
 
@@ -82,6 +85,21 @@ def test_daftar_kosong_aman() -> None:
     assert hasil.median_rows == 0
 
 
+def test_sesi_yang_masih_ditulis_dilewati() -> None:
+    # Sesi hari ini baru terisi 120 baris (ingest jalan) -> jangan alarm sekarang.
+    rows = _sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)]
+
+    hasil = evaluate_row_counts(rows, sessions=30, in_progress=date(2026, 10, 10))
+
+    assert hasil.ok
+    assert hasil.checked == 9
+    # Tanpa sesi itu, hari yang sama juga tidak muncul di daftar bermasalah —
+    # jadi alarm baru berbunyi setelah sesi itu tak lagi "in progress".
+    assert evaluate_row_counts(
+        rows, sessions=30, in_progress=date(2026, 10, 11)
+    ).troublemakers
+
+
 def test_median_nol_tidak_melempar() -> None:
     rows = [(date(2026, 10, 1), 0), (date(2026, 10, 2), 0)]
 
@@ -144,11 +162,105 @@ def test_kurang_dari_dua_sesi_tidak_menghasilkan_lubang() -> None:
     assert hasil.ok
 
 
+def test_sesi_yang_masih_ditulis_bukan_lubang() -> None:
+    # IHSG sudah punya 7 Okt (bursa buka) tapi raw_eod belum (ingest jalan).
+    eod = [date(2026, 10, 5), date(2026, 10, 9)]
+    bursa = [date(2026, 10, 5), date(2026, 10, 7), date(2026, 10, 9)]
+
+    assert evaluate_session_gaps(eod, bursa).missing == [date(2026, 10, 7)]
+    hasil = evaluate_session_gaps(eod, bursa, in_progress=date(2026, 10, 7))
+
+    assert hasil.ok
+    assert hasil.missing == []
+    assert hasil.sessions == 2  # sesi tetap dihitung; hanya keluhan yang ditahan
+
+
+# --------------------------------------------------------------------------- #
+# formatter pesan alarm (dipakai idx health + job health_eod)
+# --------------------------------------------------------------------------- #
+
+
+def test_pesan_sesi_separuh_sebut_angka_dan_cara_memperbaiki() -> None:
+    c = evaluate_row_counts(_sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)])
+
+    pesan = format_row_count_message(c)
+
+    assert "Sesi EOD cuma separuh" in pesan
+    assert "1 dari 10 sesi terakhir" in pesan
+    assert "2026-10-10 (120/500 baris, 24.0% median)" in pesan
+    assert "--start-date 2026-10-10 --end-date 2026-10-10 --ulang" in pesan
+    assert "backfill_raw_eod" in pesan
+
+
+def test_pesan_sesi_separuh_wajib_ulang() -> None:
+    """Sesi separuh = tanggal yang SUDAH ada: tanpa `--ulang` backfill melewatinya.
+
+    Perintah perbaikan yang tidak memperbaiki apa pun adalah alarm yang berbunyi
+    lagi besok — persis mode "alarm diabaikan" yang mau dicegah.
+    """
+    c = evaluate_row_counts(_sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)])
+
+    pesan = format_row_count_message(c)
+
+    assert "--ulang" in pesan
+    assert "melewati tanggal yang sudah ada" in pesan
+
+
+def test_pesan_sesi_separuh_daftar_dipotong_dengan_sisa() -> None:
+    # 6 sesi separuh: 5 terbaru ditampilkan, sisanya diringkas.
+    rows = _sesi(date(2026, 10, 1), 10, baris=500) + _sesi(date(2026, 10, 11), 6, baris=10)
+
+    pesan = format_row_count_message(evaluate_row_counts(rows))
+
+    assert "• 2026-10-15" in pesan
+    assert "• 2026-10-16" not in pesan  # sesi ke-6 dipotong
+    assert "(+1 lagi)" in pesan
+
+
+def test_pesan_lubang_sebut_rentang_dan_perintah_penambal() -> None:
+    g = evaluate_session_gaps(
+        [date(2026, 10, 5), date(2026, 10, 9)],
+        [date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 9)],
+    )
+
+    pesan = format_session_gaps_message(g)
+
+    assert "Ada hari bursa tanpa sesi" in pesan
+    assert "2 hari tanpa baris" in pesan
+    assert "2026-10-06" in pesan and "2026-10-07" in pesan
+    assert "check_eod_gaps" in pesan
+    assert "Catatan" not in pesan  # basis kalender-bursa: tak perlu catatan
+
+
+def test_pesan_lubang_sebut_catatan_kalau_basis_lemah() -> None:
+    pendek = evaluate_session_gaps(
+        [date(2026, 10, 5), date(2026, 10, 9)], [date(2026, 10, 9)]
+    )
+    hari_kerja = evaluate_session_gaps(
+        [date(2026, 10, 5), date(2026, 10, 9)], bursa_dates=[], holidays=set()
+    )
+
+    assert pendek.basis == "kalender-bursa-pendek"
+    assert "cakupan acuan" in format_session_gaps_message(pendek)
+    assert hari_kerja.basis == "hari-kerja"
+    assert "hari kerja saja" in format_session_gaps_message(hari_kerja)
+
+
 def test_daftar_kosong_aman_session_gaps() -> None:
     hasil = evaluate_session_gaps([])
 
     assert (hasil.first, hasil.last, hasil.sessions) == (None, None, 0)
     assert hasil.ok
+
+
+def test_pesan_tak_ada_yang_diperiksa_sebut_penjaga_dan_penyebabnya() -> None:
+    """`checked == 0` bukan hijau: penjaga itu harus bisa bilang kenapa ia bisu."""
+    pesan = format_no_data_message("Jumlah baris per sesi")
+
+    assert "tidak memeriksa apa pun" in pesan
+    assert "Jumlah baris per sesi" in pesan
+    assert "DATABASE_URL" in pesan
+    assert "raw_eod" in pesan
 
 
 # --------------------------------------------------------------------------- #

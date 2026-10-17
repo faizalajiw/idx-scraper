@@ -191,12 +191,24 @@ def test_jaring_eod_diulang_sampai_malam(jobs):
     terlewat harus bisa dikerjakan begitu mesin bangun. Karena itu jaring kedua
     diulang tiap jam sampai 20:30 dan `misfire_grace_time` 2 jam membuat cek
     terakhir (20:30) masih menyala kalau mesin bangun sebelum ~22:30. Tanpa ini,
-    laptop yang tidur sore kehilangan EOD sehari tanpa alarm apa pun (alarm
-    16:45 juga terlewat, dan `health_eod` tanpa grace tidak menyusul).
+    laptop yang tidur sore kehilangan EOD sehari tanpa alarm apa pun.
     """
     j = next(x for x in jobs if x["id"] == "eod_fallback")
     assert _jam_aktif(j["hour"]) == {16, 17, 18, 19, 20}
     assert j["minute"] == 30
+    assert j["misfire_grace_time"] >= 7200
+    assert j["coalesce"] is True
+
+
+def test_alarm_health_menyusul_setelah_mesin_bangun(jobs):
+    """Alarm 16:45 juga harus menyusul, bukan dibuang diam-diam saat mesin tidur.
+
+    Tanpa `misfire_grace_time`, laptop yang tidur melewati 16:45 melewatkan
+    alarm hari itu sepenuhnya — padahal sesi yang telat masih bisa terlihat
+    sebelum jendela tutup, dan inilah satu-satunya jalur yang berbicara ke
+    Telegram.
+    """
+    j = next(x for x in jobs if x["id"] == "health_eod")
     assert j["misfire_grace_time"] >= 7200
     assert j["coalesce"] is True
 

@@ -20,13 +20,23 @@ membandingkan jumlah baris tiap sesi dengan median sesi terakhir.
 Cek keempat, `check_session_gaps`: lubang hari bursa di tengah rentang data
 (mis. backfill yang berhenti sepekan) tidak terlihat oleh cek kesegaran.
 
-Dipakai oleh:
-- ``idx health`` — cek manual; exit code 1 kalau data telat (bisa dipakai cron)
-- job ``health_eod`` di ``idx serve`` — Sen–Jum 16:45 WIB, kirim Telegram kalau telat
+Sesi yang mungkin masih ditulis (`in_progress`, biasanya hari ini) sengaja
+dilewati cek ketiga: pada 16:45 ingest bisa masih jalan, dan alarm palsu tiap
+sore membuat alarm sungguhan diabaikan (pelajaran temuan I1: 503 = merah abadi).
+Kalau sesi itu tetap kurang, cek sesi berikutnya menangkapnya — kerusakan
+ketahuan dalam ≤1 sesi, sama seperti kontrak cek kedua. Cek keempat tidak butuh
+perlakuan itu (lubang hanya dihitung di dalam rentang sesi yang sudah ada),
+tapi `in_progress` tetap diterimanya sebagai sabuk pengaman.
 
-Catatan: tanpa kalender libur bursa, hari libur nasional ikut dianggap hari
-bursa. Set ``IDX_HOLIDAYS=2026-12-25,2027-01-01`` (ISO, dipisah koma) untuk
-membisukan alarm di hari libur.
+Dipakai oleh:
+- ``idx health`` — cek manual; exit code 1 kalau ada yang timpang (bisa dipakai cron)
+- job ``health_eod`` di ``idx serve`` — Sen–Jum 16:45 WIB, kirim Telegram kalau ada masalah
+- endpoint ``/api/data-health`` — kartu "Kesehatan Data" di dashboard
+
+Catatan: kalau data IHSG (`index_summary_daily`) kosong, kalender hari bursa
+jatuh ke perkiraan hari kerja, sehingga libur nasional ikut dianggap hari bursa.
+Set ``IDX_HOLIDAYS=2026-12-25,2027-01-01`` (ISO, dipisah koma) untuk membisukan
+alarm itu. Dengan data IHSG normal, libur nasional sudah terkecualikan sendiri.
 """
 
 from __future__ import annotations
@@ -279,7 +289,10 @@ class SessionGaps:
 
 
 def evaluate_row_counts(
-    rows: list[tuple[date, int]], sessions: int = 30, threshold_pct: float = 50.0
+    rows: list[tuple[date, int]],
+    sessions: int = 30,
+    threshold_pct: float = 50.0,
+    in_progress: date | None = None,
 ) -> RowCountCoverage:
     """Tandai sesi yang jumlah barisnya di bawah ``threshold_pct`` median (murni).
 
@@ -288,7 +301,16 @@ def evaluate_row_counts(
     menentukan sesi mana yang dinilai. Median diambil dari jendela itu supaya
     sesi lama yang memang lebih kecil (universe tumbuh) tidak ikut menghidupkan
     alarm.
+
+    ``in_progress``: tanggal sesi yang mungkin masih ditulis (hari ini, saat job
+    16:45 jalan sementara ingest belum selesai). Sesi itu DILEWATI — sesi separuh
+    yang masih berjalan bukan kerusakan, dan alarm palsu tiap sore justru membuat
+    alarm sungguhan diabaikan (pelajaran temuan I1: 503 = merah abadi). Kalau
+    sesi itu tetap separuh sampai sesi berikutnya, ia sudah jadi sesi lama dan
+    ikut dinilai — jadi kerusakan tetap ketahuan dalam ≤1 sesi.
     """
+    if in_progress is not None:
+        rows = [r for r in rows if r[0] != in_progress]
     window = sorted(rows)[-sessions:]
     if not window:
         return RowCountCoverage(checked=0, threshold_pct=threshold_pct)
@@ -357,12 +379,22 @@ def evaluate_session_gaps(
     dates: list[date],
     bursa_dates: list[date] | set[date] | None = None,
     holidays: set[date] | None = None,
+    in_progress: date | None = None,
 ) -> SessionGaps:
     """Bungkus ``find_missing_sessions`` + rentang, jumlah sesi & dasar (murni).
 
     ``basis`` membedakan tiga keadaan: acuan IHSG menutup seluruh rentang,
     acuan ada tapi lebih pendek (lubang di luar cakupan tak terlihat), atau
     tidak ada acuan sama sekali (jatuh ke hari-kerja).
+
+    ``in_progress``: sesi yang mungkin masih ditulis (hari ini) tidak diadukan
+    sebagai lubang. Ini sabuk pengaman, bukan penopang: lubang hanya dihitung di
+    dalam rentang ``find_missing_sessions`` (sesi pertama → terakhir ``raw_eod``),
+    dan sebuah hari hanya bisa dianggap lubang kalau ada sesi ber-tanggal lebih
+    baru — jadi "hari ini" praktis tak pernah bisa muncul di ``missing``. Sesi
+    hari ini yang benar-benar kosong ditangkap penjaga kesegaran, bukan penjaga
+    ini. Parameternya tetap ada supaya penjaga lubang tidak bergantung pada
+    detail rentang itu kalau logikanya berubah.
     """
     unik = sorted(set(dates))
     bursa = sorted(set(bursa_dates)) if bursa_dates else []
@@ -372,19 +404,31 @@ def evaluate_session_gaps(
         basis = "kalender-bursa-pendek"
     else:
         basis = "kalender-bursa"
+
+    missing = find_missing_sessions(unik, bursa, holidays)
+    if in_progress is not None:
+        missing = [d for d in missing if d != in_progress]
+
     return SessionGaps(
         first=unik[0] if unik else None,
         last=unik[-1] if unik else None,
         sessions=len(unik),
-        missing=find_missing_sessions(unik, bursa, holidays),
+        missing=missing,
         basis=basis,
     )
 
 
 def check_row_counts(
-    dsn: str | None = None, sessions: int = 30, threshold_pct: float = 50.0
+    dsn: str | None = None,
+    sessions: int = 30,
+    threshold_pct: float = 50.0,
+    in_progress: date | None = None,
 ) -> RowCountCoverage:
-    """Cek jumlah baris per sesi terakhir di ``research.raw_eod`` (read-only)."""
+    """Cek jumlah baris per sesi terakhir di ``research.raw_eod`` (read-only).
+
+    ``in_progress`` = sesi yang mungkin masih ditulis (biasanya hari ini);
+    sesi itu tidak dinilai — lihat ``evaluate_row_counts``.
+    """
     import psycopg
 
     dsn = dsn or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
@@ -395,7 +439,7 @@ def check_row_counts(
         cur.execute("select trade_date, count(*) from research.raw_eod group by 1 order by 1")
         rows = cur.fetchall()
 
-    return evaluate_row_counts(rows, sessions, threshold_pct)
+    return evaluate_row_counts(rows, sessions, threshold_pct, in_progress)
 
 
 def count_sessions_between(
@@ -429,13 +473,17 @@ def count_sessions_between(
     return n
 
 
-def check_session_gaps(dsn: str | None = None) -> SessionGaps:
+def check_session_gaps(dsn: str | None = None, in_progress: date | None = None) -> SessionGaps:
     """Cek lubang sesi di ``research.raw_eod`` (read-only).
 
     Dasar penilaian: kalender hari bursa = union tanggal ``index_summary_daily``
     (Yahoo, cakupan penuh riwayat) dan ``index_quotes`` COMPOSITE (IDX, jendela
     lebih pendek). Kalau acuan IHSG ternyata kosong, evaluator otomatis jatuh ke
     dasar "hari-kerja" — lihat docstring ``SessionGaps``.
+
+    ``in_progress`` = sesi yang mungkin masih ditulis (biasanya hari ini); sesi
+    itu tidak diadukan sebagai lubang. Sifatnya sabuk pengaman — lihat
+    ``evaluate_session_gaps``.
     """
     import psycopg
 
@@ -455,7 +503,7 @@ def check_session_gaps(dsn: str | None = None) -> SessionGaps:
         )
         bursa_days = [r[0] for r in cur.fetchall()]
 
-    return evaluate_session_gaps(eod_days, bursa_days)
+    return evaluate_session_gaps(eod_days, bursa_days, in_progress=in_progress)
 
 
 def format_health_message(h: EodHealth) -> str:
@@ -494,4 +542,86 @@ def format_field_coverage_message(c: FieldCoverage) -> str:
         "Perbaiki: "
         f"<code>python -m scripts.repair_foreign_flow --start-date {tertua} "
         f"--end-date {terbaru}</code>"
+    )
+
+
+def format_row_count_message(c: RowCountCoverage) -> str:
+    """Pesan (HTML/terminal) untuk sesi yang barisnya jauh di bawah median.
+
+    Dipakai dua tempat: stdout ``idx health`` dan Telegram ``health_eod``.
+    Ciri kerusakannya khas: ``_ingest_eod_research`` menyisipkan baris satu-satu
+    tanpa ``on conflict`` di bawah autocommit, jadi proses yang terputus di tengah
+    sesi meninggalkan sesi separuh — tanggalnya ada, isinya kurang, dan tak ada
+    gerbang lama yang melihatnya.
+    """
+    tampil = c.troublemakers[:5]
+    baris = "\n".join(f"• {t}" for t in tampil)
+    sisa = len(c.troublemakers) - len(tampil)
+    if sisa > 0:
+        baris += f"\n… (+{sisa} lagi)"
+
+    tertua = c.troublemakers[0][:10]
+    terbaru = c.troublemakers[-1][:10]
+    return (
+        "<b>⚠️ Sesi EOD cuma separuh</b>\n"
+        f"{len(c.troublemakers)} dari {c.checked} sesi terakhir berisi di bawah "
+        f"{c.threshold_pct:.0f}% median ({c.median_rows} baris/sesi):\n"
+        f"{baris}\n"
+        "Ciri insert tersela. Perbaiki: "
+        f"<code>python -m scripts.backfill_raw_eod --start-date {tertua} "
+        f"--end-date {terbaru} --ulang</code>\n"
+        "<i>Tanpa <code>--ulang</code> backfill melewati tanggal yang sudah ada — "
+        "dan \"sesi separuh\" justru berarti tanggalnya sudah ada.</i>"
+    )
+
+
+def format_session_gaps_message(g: SessionGaps) -> str:
+    """Pesan (HTML/terminal) untuk hari bursa yang tak punya baris di ``raw_eod``.
+
+    Dipakai dua tempat: stdout ``idx health`` dan Telegram ``health_eod``.
+    Dasar penilaian (``basis``) ikut disebut kalau bukan basis terkuat — pesan
+    alarm tidak boleh menyembunyikan bahwa kalendernya cuma sebagian.
+    """
+    tampil = g.missing[:8]
+    baris = "\n".join(f"• {d}" for d in tampil)
+    sisa = len(g.missing) - len(tampil)
+    if sisa > 0:
+        baris += f"\n… (+{sisa} lagi)"
+
+    catatan = {
+        "kalender-bursa-pendek": (
+            "\n<i>Catatan: acuan kalender IHSG lebih pendek dari rentang raw_eod — "
+            "lubang di luar cakupan acuan tidak ikut diperiksa.</i>"
+        ),
+        "hari-kerja": (
+            "\n<i>Catatan: acuan kalender IHSG kosong, jadi hari bursa ditebak dari "
+            "hari kerja saja — libur nasional bisa keliru ikut tertandai.</i>"
+        ),
+    }.get(g.basis, "")
+
+    return (
+        "<b>⚠️ Ada hari bursa tanpa sesi</b>\n"
+        f"{len(g.missing)} hari tanpa baris di raw_eod "
+        f"(rentang {g.first} → {g.last}, {g.sessions} sesi):\n"
+        f"{baris}\n"
+        "Perbaiki: <code>python -m scripts.check_eod_gaps --dry-run</code> "
+        "(periksa) lalu <code>python -m scripts.check_eod_gaps</code> (tambal)."
+        f"{catatan}"
+    )
+
+
+def format_no_data_message(penjaga: str) -> str:
+    """Pesan (HTML/terminal) untuk penjaga yang tak menemukan apa pun untuk diperiksa.
+
+    "Tidak ada yang diperiksa" bukan hijau: kalau ``research.raw_eod`` kosong
+    atau ``DATABASE_URL`` tidak diset, cakupan kolom, jumlah baris, dan lubang
+    sesi semuanya lolos tanpa suara — persis mode bisu yang penjaga ini ada
+    untuk menutupnya. Kartu "Kesehatan Data" menandai keadaan yang sama
+    `Waspada`, dan ``idx health`` keluar 1.
+    """
+    return (
+        "<b>⚠️ Penjaga data tidak memeriksa apa pun</b>\n"
+        f"{penjaga}: 0 sesi terbaca dari <code>research.raw_eod</code>.\n"
+        "Cek <code>DATABASE_URL</code> dan isi tabelnya — angka di layar belum "
+        "bisa dipercaya."
     )

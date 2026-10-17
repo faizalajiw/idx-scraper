@@ -295,6 +295,24 @@ def _job_broker_eod() -> int:
         return 0
 
 
+def _lapor_bisu(penjaga: str, sudah: bool) -> bool:
+    """Laporkan penjaga yang tidak memeriksa apa pun; Telegram cukup sekali per run.
+
+    Empat jalur bisa sama-sama bisu dari satu akar masalah (``DATABASE_URL``
+    hilang, DB kosong). Pesan pertama yang menyebut sebabnya sudah cukup —
+    sisanya masuk log saja, supaya alarm tidak jadi empat pesan kembar.
+    """
+    from .health import format_no_data_message
+
+    stamp = datetime.now(WIB).isoformat()
+    if sudah:
+        print(f"[{stamp}] health {penjaga} — 0 sesi terbaca (sudah dilaporkan)")
+    else:
+        TelegramNotifier().send_message(format_no_data_message(penjaga))
+        print(f"[{stamp}] health {penjaga} — 0 sesi terbaca (dilaporkan)")
+    return True
+
+
 def _job_health_eod() -> None:
     """Cek data EOD hari bursa sudah masuk; kirim Telegram kalau telat.
 
@@ -306,21 +324,37 @@ def _job_health_eod() -> None:
     pemeriksaan yang melempar (mis. ``check_field_coverage`` vs DB yang putus)
     tidak boleh menelan alarm jalur lain — penjaga cakupan kolom pernah
     mematikan alarm "Data EOD belum masuk" yang sudah ada lebih dulu.
+
+    Empat jalur semuanya begini sekarang: kesegaran, cakupan kolom, jumlah baris
+    per sesi, dan lubang sesi. Jalur baris melewati sesi hari ini
+    (``in_progress``) karena pada 16:45 ingest bisa masih jalan dan sesi separuh
+    yang sedang ditulis bukan kerusakan.
+
+    "Tidak ada yang diperiksa" dihitung masalah, bukan diam: kalau
+    ``research.raw_eod`` kosong atau ``DATABASE_URL`` tidak diset, cakupan kolom
+    / baris / lubang semuanya lolos tanpa suara — mode bisu yang alarm ini ada
+    untuk menutupnya (kartu Dashboard menandai keadaan itu `Waspada`). Telegram
+    untuk keadaan itu dikirim sekali (``_lapor_bisu``), bukan sekali per jalur.
     """
+    bisu = False
     try:
         from .health import check_eod_health, format_health_message
 
         h = check_eod_health()
-        if h.ok:
-            print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
-        else:
+        if not h.ok:
+            TelegramNotifier().send_message(format_health_message(h))
             print(
                 f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — "
                 f"{', '.join(h.missing)}"
             )
-            TelegramNotifier().send_message(format_health_message(h))
+        elif h.missing:
+            # Mis. `DATABASE_URL` tidak diset: bukan "telat", tapi bukan OK juga.
+            bisu = _lapor_bisu("Kesegaran EOD", bisu)
+            print(f"[err] health EOD: {', '.join(h.missing)}", file=sys.stderr)
+        else:
+            print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
     except Exception as e:
-        print(f"[err] health EOD: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health EOD: {e}", file=sys.stderr)
 
     # Cek kedua: tanggal bisa ada tapi kolom foreign_* bolong (9 bulan
     # tanpa alarm pada 2025-09-24 → 2026-07-29). Telegram dikirim sebelum
@@ -329,14 +363,49 @@ def _job_health_eod() -> None:
         from .health import check_field_coverage, format_field_coverage_message
 
         c = check_field_coverage()
-        if not c.ok:
+        if c.checked == 0:
+            bisu = _lapor_bisu("Cakupan kolom foreign_*", bisu)
+        elif not c.ok:
             TelegramNotifier().send_message(format_field_coverage_message(c))
             print(
                 f"[{datetime.now(WIB).isoformat()}] health cakupan kolom timpang — "
                 f"{len(c.troublemakers)}/{c.checked} sesi"
             )
     except Exception as e:
-        print(f"[err] health cakupan kolom: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health cakupan kolom: {e}", file=sys.stderr)
+
+    # Cek ketiga: tanggal ada, isinya cuma separuh sesi (insert tersela).
+    try:
+        from .health import check_row_counts, format_row_count_message
+
+        r = check_row_counts(in_progress=datetime.now(WIB).date())
+        if r.checked == 0:
+            bisu = _lapor_bisu("Jumlah baris per sesi", bisu)
+        elif not r.ok:
+            TelegramNotifier().send_message(format_row_count_message(r))
+            print(
+                f"[{datetime.now(WIB).isoformat()}] health sesi separuh — "
+                f"{len(r.troublemakers)}/{r.checked} sesi di bawah median "
+                f"{r.median_rows} baris"
+            )
+    except Exception as e:
+        _cetak_aman(f"[err] health sesi separuh: {e}", file=sys.stderr)
+
+    # Cek keempat: hari bursa tanpa baris sama sekali di tengah rentang data.
+    try:
+        from .health import check_session_gaps, format_session_gaps_message
+
+        g = check_session_gaps(in_progress=datetime.now(WIB).date())
+        if g.sessions == 0:
+            bisu = _lapor_bisu("Lubang sesi", bisu)
+        elif not g.ok:
+            TelegramNotifier().send_message(format_session_gaps_message(g))
+            print(
+                f"[{datetime.now(WIB).isoformat()}] health lubang sesi — "
+                f"{len(g.missing)} hari bursa tanpa baris"
+            )
+    except Exception as e:
+        _cetak_aman(f"[err] health lubang sesi: {e}", file=sys.stderr)
 
 
 def _job_signal_log() -> None:
@@ -1279,35 +1348,119 @@ def cmd_alerts(args) -> None:
         storage.close()
 
 
-def cmd_health(args) -> None:
-    """Cek apakah data EOD hari bursa terakhir sudah masuk.
+def _cetak_aman(pesan: str, file=None) -> None:
+    """Print yang tidak mematikan alarm di konsol yang tak bisa emoji.
 
-    Exit code 1 kalau sudah lewat deadline (``IDX_EOD_DEADLINE_HOUR``, default
-    pukul 16:00 WIB) dan data belum ada — biar bisa dipakai cron:
-    ``idx health || kirim-alert``. Exit code 1 juga kalau cakupan kolom
-    ``foreign_*`` timpang di ``sessions`` sesi terakhir.
+    Konsol Windows (cp1252) melempar ``UnicodeEncodeError`` saat mencetak "⚠️";
+    sisa pesannya tetap terbaca setelah emoji diganti, jadi informasi tidak hilang.
+    Dipakai juga untuk pesan error di jalur alarm — pesan exception yang berisi
+    non-ASCII tidak boleh menjatuhkan jalur penjaga berikutnya.
     """
-    from .health import check_eod_health, check_field_coverage, format_field_coverage_message
+    try:
+        print(pesan, file=file)
+    except UnicodeEncodeError:
+        print(pesan.encode("ascii", "replace").decode("ascii"), file=file)
 
-    h = check_eod_health()
-    c = check_field_coverage()
-    print(
-        f"hari bursa diharapkan: {h.expected} | saham terbaru: {h.stocks_latest} "
-        f"| close IHSG terbaru: {h.index_latest}"
+
+def _periksa(nama: str, fungsi, masalah: list[str], **kwargs):
+    """Jalankan satu pemeriksa; kegagalannya jadi temuan, bukan penghenti.
+
+    ``idx health`` dipakai cron: satu penjaga yang melempar (DB putus,
+    ``connect_timeout``) tidak boleh membatalkan laporan penjaga lain — kontrak
+    yang sama dijaga di ``_job_health_eod``. Kembalikan ``None`` kalau gagal.
+    """
+    try:
+        return fungsi(**kwargs)
+    except Exception as e:
+        masalah.append(f"{nama}: gagal diperiksa ({e})")
+        return None
+
+
+def cmd_health(args) -> None:
+    """Cek data EOD hari bursa terakhir: kesegaran + 3 penjaga cakupan.
+
+    Exit code 1 kalau ada yang tidak beres — biar bisa dipakai cron:
+    ``idx health || kirim-alert``. Empat pemeriksa:
+
+    - **kesegaran**: lewat deadline (``IDX_EOD_DEADLINE_HOUR``, default 16:00 WIB)
+      dan data hari bursa belum masuk
+    - **cakupan kolom** ``foreign_*`` di ``sessions`` sesi terakhir (timpang)
+    - **baris per sesi**: sesi yang isinya di bawah 50% median ("sesi separuh")
+    - **lubang sesi**: hari bursa tanpa baris di antara sesi pertama & terakhir
+
+    Pemeriksa **baris per sesi** melewati sesi hari ini, sama seperti di job
+    ``health_eod``: pukul 16:45 ingest bisa masih jalan, dan sesi separuh yang
+    masih ditulis bukan kerusakan. (Pemeriksa lubang sesi tidak terpengaruh —
+    lubang hanya dihitung di dalam rentang sesi yang sudah ada.)
+
+    Pemeriksa yang **tidak memeriksa apa pun** (``checked == 0``, mis. DB kosong
+    atau ``DATABASE_URL`` tidak diset) dihitung bermasalah, bukan hijau — sama
+    seperti kartu "Kesehatan Data" di dashboard. Tiap pemeriksa punya penangkap
+    sendiri, jadi satu yang melempar tidak menghapus laporan yang lain.
+    """
+    from .health import (
+        check_eod_health,
+        check_field_coverage,
+        check_row_counts,
+        check_session_gaps,
+        format_field_coverage_message,
+        format_row_count_message,
+        format_session_gaps_message,
     )
-    if not c.ok:
-        pesan = format_field_coverage_message(c)
-        try:
-            print(pesan)
-        except UnicodeEncodeError:
-            # Konsol Windows (cp1252) tidak bisa mencetak "⚠️" — jangan sampai
-            # alarm hilang cuma karena emoji; sisa pesannya tetap terbaca.
-            print(pesan.encode("ascii", "replace").decode("ascii"))
-    if h.ok and c.ok:
+
+    hari_ini = datetime.now(WIB).date()
+    masalah: list[str] = []
+
+    h = _periksa("kesegaran", check_eod_health, masalah)
+    c = _periksa("cakupan kolom", check_field_coverage, masalah)
+    r = _periksa("baris per sesi", check_row_counts, masalah, in_progress=hari_ini)
+    g = _periksa("lubang sesi", check_session_gaps, masalah, in_progress=hari_ini)
+
+    if h is not None:
+        print(
+            f"hari bursa diharapkan: {h.expected} | saham terbaru: {h.stocks_latest} "
+            f"| close IHSG terbaru: {h.index_latest}"
+        )
+    if c is not None:
+        print(f"cakupan kolom foreign_*: {c.checked} sesi diperiksa, terburuk {c.worst_pct:.1f}%")
+        if c.checked == 0:
+            masalah.append("cakupan kolom: tidak ada sesi yang diperiksa")
+        elif not c.ok:
+            _cetak_aman(format_field_coverage_message(c))
+            masalah.append(f"cakupan kolom: {len(c.troublemakers)}/{c.checked} sesi")
+    if r is not None:
+        print(
+            f"baris per sesi: median {r.median_rows} baris, {len(r.troublemakers)} sesi "
+            f"di bawah {r.threshold_pct:.0f}% median ({r.checked} sesi diperiksa)"
+        )
+        if r.checked == 0:
+            masalah.append("baris per sesi: tidak ada sesi yang diperiksa")
+        elif not r.ok:
+            _cetak_aman(format_row_count_message(r))
+            masalah.append(f"sesi separuh: {len(r.troublemakers)}/{r.checked} sesi")
+    if g is not None:
+        print(
+            f"lubang sesi: {len(g.missing)} hari bursa tanpa baris "
+            f"({g.sessions} sesi, basis {g.basis})"
+        )
+        if g.sessions == 0:
+            masalah.append("lubang sesi: tidak ada sesi yang diperiksa")
+        elif not g.ok:
+            _cetak_aman(format_session_gaps_message(g))
+            masalah.append(f"lubang sesi: {len(g.missing)} hari")
+
+    if h is not None and h.missing:
+        # `EodHealth.missing` juga dipakai untuk masalah konfigurasi
+        # ("DATABASE_URL tidak di-set"); itu bukan "telat", tapi tetap alasan
+        # untuk tidak mengucapkan OK dan keluar 0.
+        label = "TELAT — belum masuk: " if not h.ok else "CEK KONFIGURASI — "
+        print(label + ", ".join(h.missing))
+
+    if h is not None and h.ok and not h.missing and not masalah:
         print("OK — data EOD terbaru lengkap")
         return
-    if not h.ok:
-        print("TELAT — belum masuk: " + ", ".join(h.missing))
+    if masalah:
+        print("TIMPANG — " + "; ".join(masalah))
     sys.exit(1)
 
 
@@ -1629,9 +1782,13 @@ def cmd_serve(args) -> None:
     # memicu Telegram "EOD TELAT" — alarm palsu yang lama-lama diabaikan.
     # PENTING: alarm hanya berbunyi setelah `IDX_EOD_DEADLINE_HOUR` (default 16).
     # Jangan memindahkan job ini ke jam sebelum itu — cek akan lolos tanpa suara.
+    # `misfire_grace_time` 2 jam + `coalesce` seperti `eod_fallback`: laptop yang
+    # tidur melewati 16:45 membuat alarm hari itu terlewat, dan tanpa grace job-nya
+    # dibuang begitu saja — padahal ceknya masih relevan begitu mesin bangun
+    # (mis. 18:00, sebelum jendela tutup).
     scheduler.add_job(
         _job_health_eod, "cron", day_of_week="mon-fri", hour=16, minute=45,
-        id="health_eod",
+        id="health_eod", misfire_grace_time=7200, coalesce=True,
     )
     # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
     scheduler.add_job(
@@ -1778,7 +1935,8 @@ def main() -> None:
     p_own.add_argument("--date", help="tanggal snapshot ISO YYYY-MM-DD (default: hari ini)")
     sub.add_parser(
         "health",
-        help="cek data EOD hari bursa terakhir sudah masuk (exit 1 kalau telat)",
+        help="cek data EOD hari bursa terakhir: kesegaran, cakupan kolom, baris per "
+        "sesi, lubang sesi (exit 1 kalau ada temuan)",
     )
     sub.add_parser("serve", help="start continuous polling loop")
     p_refresh = sub.add_parser(

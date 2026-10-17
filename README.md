@@ -245,7 +245,7 @@ The scheduler (APScheduler, timezone WIB) starts with `serve`.
 | `refresh_s1_fri` | Fri 11:30 | EOD Sesi I + recompute. |
 | `refresh_s2` | Mon‑Fri **16:10** | EOD Sesi II + recompute (`_job_index_eod_close` 16:10, then `research.market_segment_daily`). Same pipeline as `idx refresh`. |
 | `eod_fallback` | Mon‑Fri **16:30, lalu tiap jam s/d 20:30** | Jaring kedua EOD (`_eod_catchup`): kalau EOD hari ini sudah lengkap, keluar dalam ~1 detik (satu query DB, tanpa request IDX); kalau belum, jalankan pipeline penuh. Diulang tiap jam karena dua hal yang tidak ditutup retry: penolakan IDX yang bertahan >4 menit, dan **laptop yang tidur** (proses `serve` ikut beku, bukan mati) — dengan `misfire_grace_time` 2 jam, cek terakhir masih menyala kalau mesin bangun sebelum ~22:30. Menggantikan task Windows `IDX-EOD` yang dihapus 15 Okt 2026. |
-| `health_eod` | Mon‑Fri **16:45** | Verify today's EOD is in; log + Telegram if late. Sengaja SETELAH `eod_fallback` supaya alarm menilai hasil jaring kedua, bukan percobaan pertama. Alarm only fires at/after `IDX_EOD_DEADLINE_HOUR`. |
+| `health_eod` | Mon‑Fri **16:45** | Empat penjaga data, tiap jalur punya `try/except` sendiri: (1) EOD hari ini belum masuk (`IDX_EOD_DEADLINE_HOUR`), (2) cakupan kolom `foreign_*` timpang, (3) sesi yang barisnya di bawah 50% median ("sesi separuh"), (4) hari bursa tanpa baris di tengah rentang. Log + Telegram kalau ada yang gagal. Sengaja SETELAH `eod_fallback` supaya alarm menilai hasil jaring kedua, bukan percobaan pertama. Penjaga 3 melewati sesi hari ini (`in_progress`): pukul 16:45 ingest bisa masih jalan, dan sesi separuh yang sedang ditulis bukan kerusakan — kalau ternyata tetap kurang, cek sesi berikutnya yang mengadukan. `misfire_grace_time` 2 jam seperti `eod_fallback`: laptop yang tidur melewati 16:45 tetap mendapat alarmnya begitu bangun. |
 | `daily_ic` | Mon‑Fri **16:50** | IC analysis → `research.factor_ic_history` (bobot composite). Murni DB, tidak menyentuh IDX. |
 | `ownership_weekly` | Monday **17:00** (weekly) | Snapshot pemegang saham watchlist → `research.ownership`. Dijarakkan lebar dari `refresh_s2` (50 menit) supaya tidak berebut profil Chrome bila transport jatuh ke browser. |
 | `refresh_weekend_am` | Sat‑Sun 08:45 | Recompute + clear cache (market closed). |
@@ -253,12 +253,14 @@ The scheduler (APScheduler, timezone WIB) starts with `serve`.
 | `alerts` | every `IDX_ALERT_INTERVAL` s (default 300) | Telegram alerts (signals + watch rules); only registered when the bot token is set. |
 
 Jadwal ini dikunci oleh `tests/test_serve_schedule.py` — mengubah jam tanpa
-memperbarui tes akan gagal. Tes itu menjaga empat invarian: `health_eod` tidak
+memperbarui tes akan gagal. Tes itu menjaga lima invarian: `health_eod` tidak
 pernah sebelum `IDX_EOD_DEADLINE_HOUR`, jaring kedua (`eod_fallback`) selalu
->12 menit setelah rantai 16:10, alarm selalu setelah jaring kedua, dan tidak ada
-dua job cron yang jatuh di menit yang sama pada hari yang sama. Jaring kedua itu
-sendiri diulang tiap jam sampai 20:30 dengan `misfire_grace_time` 2 jam: slot
-yang terlewat karena mesin tidur tetap dikerjakan begitu mesin bangun.
+>12 menit setelah rantai 16:10, alarm selalu setelah jaring kedua, jaring kedua
+& alarm sama-sama punya `misfire_grace_time` 2 jam (menyusul setelah mesin
+bangun), dan tidak ada dua job cron yang jatuh di menit yang sama pada hari yang
+sama. Jaring kedua itu sendiri diulang tiap jam sampai 20:30 dengan
+`misfire_grace_time` 2 jam: slot yang terlewat karena mesin tidur tetap
+dikerjakan begitu mesin bangun.
 
 Urutan di dalam `refresh_s2`: EOD saham → close indeks → regime → jejak sinyal →
 rekomendasi → broker summary → clear cache. Dua langkah yang menyentuh endpoint
@@ -281,10 +283,11 @@ sekarang **dua fase**: hari ini dulu (`_eod_catchup_hari_ini`), lalu hari bursa
 lampau yang bolong (`_backfill_hari_lampau`, default 21 hari bursa — atur lewat
 `IDX_BACKFILL_DAYS`, `0` mematikan). Fase kedua ada karena cek "hari ini" tidak
 bisa menyembuhkan sehari yang hilang: kalau mesin tidur/off melewati seluruh
-jendela sore (16:10–22:30), tanggal itu tidak pernah kembali — dan `health_eod`
-tidak menangkapnya, karena ia membandingkan tanggal **terbaru**, bukan lubang di
-tengah. Karena `serve` yang tidak pernah di‑restart pun tetap menjalankan tick
-sore, lubang itu tertutup tanpa menunggu start ulang proses.
+jendela sore (16:10–22:30), tanggal itu tidak pernah kembali. Dulu `health_eod`
+juga tidak menangkapnya — ia membandingkan tanggal **terbaru**, bukan lubang di
+tengah; sejak penjaga `check_session_gaps` disambungkan, lubang seperti itu ikut
+diadukan sore berikutnya. Karena `serve` yang tidak pernah di‑restart pun tetap
+menjalankan tick sore, lubang itu tertutup tanpa menunggu start ulang proses.
 
 Biaya saat tidak ada lubang: satu query DB per tanggal (≈ nol, nol request IDX).
 Kalau ada yang ditarik: `_simpan_eod_hari` menulis tiga tujuan yang sama seperti
@@ -354,7 +357,32 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 ---
 
 ## Health‑Check & Monitoring
-* `cli health` exits 0 when today’s data is present; otherwise 1.
+* `cli health` memeriksa **empat** hal dan berhenti dengan exit 1 kalau salah satu
+  bermasalah (`idx health || kirim-alert` aman dipakai cron):
+  1. **kesegaran** — hari bursa yang diharapkan vs tanggal EOD terbaru
+  2. **cakupan kolom** — `foreign_*` bolong di `sessions` sesi terakhir
+  3. **sesi separuh** — baris per sesi di bawah 50% median jendela (ciri insert tersela)
+  4. **lubang sesi** — hari bursa tanpa baris di antara sesi pertama & terakhir
+
+  Pemeriksa 3 melewati sesi hari ini: pukul 16:45 ingest bisa masih jalan, dan
+  sesi separuh yang sedang ditulis bukan kerusakan. Kalau sesi itu tetap kurang,
+  cek sesi berikutnya yang mengadukan — kerusakan ketahuan dalam ≤1 sesi.
+  (Pemeriksa 4 tidak butuh perlakuan itu: lubang hanya dihitung di dalam rentang
+  sesi yang sudah ada, jadi sesi hari ini tak pernah bisa muncul di sana.)
+* **"Tidak ada yang diperiksa" ≠ hijau.** Kalau `research.raw_eod` kosong atau
+  `DATABASE_URL` tidak diset, pemeriksa 2–4 lolos tanpa suara; `idx health`
+  menghitungnya bermasalah (exit 1, `CEK KONFIGURASI`/`TIMPANG`) dan job Telegram
+  mengirim satu pesan "Penjaga data tidak memeriksa apa pun" (satu, bukan tiga —
+  akar masalahnya sama).
+* **Perbaikan "sesi separuh"**: `python -m scripts.backfill_raw_eod --start-date
+  <tgl> --end-date <tgl> --ulang`. `--ulang` wajib — tanpa itu backfill melewati
+  tanggal yang sudah ada, dan justru itulah definisi sesi separuh.
+* Kartu "Kesehatan Data" di dashboard (`GET /api/data-health`) membaca pemeriksa
+  yang sama, jadi cerita di layar dan alarm Telegram tidak pernah berbeda.
+  Bedanya cuma penyajian: kartu menampilkan empat tingkat keparahan, CLI memakai
+  exit code.
+* Tiap pemeriksa di jalur alarm punya penangkap sendiri: satu yang melempar
+  (DB putus) hanya kehilangan laporannya sendiri, alarm jalur lain tetap jalan.
 * Telegram notifications (via `src/idx_scraper/notify.py`) are sent for:
   * Scheduler start / stop
   * Job failures

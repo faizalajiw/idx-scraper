@@ -1144,6 +1144,9 @@ def get_data_health(sessions: int = 30, row_threshold_pct: float = 50.0) -> dict
     2. cakupan kolom ``foreign_*`` per sesi (jendela ``sessions`` sesi)
     3. jumlah baris per sesi vs median — sesi "separuh" karena interupsi insert
     4. lubang hari bursa di antara sesi pertama & terakhir ``raw_eod``
+
+    Pemeriksa 3 & 4 melewati sesi hari ini (``in_progress``): saat ingest sore
+    berjalan, sesi yang belum lengkap itu bukan kerusakan.
     """
     now = datetime.now(WIB)
     holidays = parse_holidays()
@@ -1191,9 +1194,15 @@ def get_data_health(sessions: int = 30, row_threshold_pct: float = 50.0) -> dict
         [(r["trade_date"], r["total"], r["terisi"]) for r in coverage_rows], sessions
     )
     row_cov = evaluate_row_counts(
-        [(r["trade_date"], r["total"]) for r in coverage_rows], sessions, row_threshold_pct
+        [(r["trade_date"], r["total"]) for r in coverage_rows],
+        sessions,
+        row_threshold_pct,
+        in_progress=now.date(),
     )
-    gaps = evaluate_session_gaps(tanggal, bursa_days, holidays)
+    # Sesi hari ini (masih mungkin ditulis saat ingest berjalan) juga dilewati di
+    # sini, sama seperti di `idx health` & job `health_eod`: kartu ini menjawab
+    # "ada yang rusak?", bukan "ingest sedang jalan?".
+    gaps = evaluate_session_gaps(tanggal, bursa_days, holidays, in_progress=now.date())
 
     freshness = {
         "expected": fres.expected.isoformat(),
