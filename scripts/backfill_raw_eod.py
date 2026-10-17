@@ -2,7 +2,15 @@
 Phase 1 backfill: seed research.raw_eod from IDX GetStockSummary (loop by date).
 
 - Full-bursa EOD, one IDX request per trading day (not per ticker).
-- Skips weekends and holidays (IDX returns empty on non-trading days).
+- Weekends are dropped up front; holidays are decided from the transport
+  status, never from an empty body alone: HTTP 200 with no rows = market
+  holiday, 503 = outside IDX's rolling ~2-year retention window, 403/429 =
+  Cloudflare block (never counted as a holiday), None/exception = genuine
+  failure. The status is cleared before every retry attempt so a stale 200
+  left over from an earlier day cannot pass a failed request off as "libur".
+- Flags worth knowing: ``--pace N`` sets the sleep between requests (default
+  4 s; 1-2 s bursts are what trigger 403), ``--ulang`` re-pulls dates already
+  in raw_eod and updates every column instead of ``on conflict do nothing``.
 - Structural quality gate (research.eod_reject_reason) routes bad rows to
   research.quarantine_eod; clean rows go to research.raw_eod (append-only).
 - The >35% jump check is deferred to Phase 3 (needs corporate_actions), so a
