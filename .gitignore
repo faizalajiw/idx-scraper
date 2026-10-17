@@ -38,3 +38,4 @@ scripts/_*.py
 # Penanda restart `serve` (lihat scripts/restart-serve.ps1): kalau ikut ter-commit,
 # deploy berikutnya akan memicu restart tak sengaja.
 /_restart-serve.flag
+.superpowers/
