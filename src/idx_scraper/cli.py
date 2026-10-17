@@ -303,17 +303,32 @@ def _job_health_eod() -> None:
     putus, Cloudflare). DB/Telegram error tidak boleh menghentikan scheduler.
     """
     try:
-        from .health import check_eod_health, format_health_message
+        from .health import (
+            check_eod_health,
+            check_field_coverage,
+            format_field_coverage_message,
+            format_health_message,
+        )
 
         h = check_eod_health()
+        c = check_field_coverage()
         if h.ok:
             print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
-            return
-        print(
-            f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — "
-            f"{', '.join(h.missing)}"
-        )
-        TelegramNotifier().send_message(format_health_message(h))
+        else:
+            print(
+                f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — "
+                f"{', '.join(h.missing)}"
+            )
+            TelegramNotifier().send_message(format_health_message(h))
+        # Cek kedua: tanggal bisa ada tapi kolom foreign_* bolong (9 bulan
+        # tanpa alarm pada 2025-09-24 → 2026-07-29). Telegram dikirim sebelum
+        # log dicetak supaya alarm tidak hilang gara-gara encoding konsol.
+        if not c.ok:
+            TelegramNotifier().send_message(format_field_coverage_message(c))
+            print(
+                f"[{datetime.now(WIB).isoformat()}] health cakupan kolom timpang — "
+                f"{len(c.troublemakers)}/{c.checked} sesi"
+            )
     except Exception as e:
         print(f"[err] health EOD: {e}", file=sys.stderr)
 
@@ -1254,19 +1269,30 @@ def cmd_health(args) -> None:
 
     Exit code 1 kalau sudah lewat deadline (``IDX_EOD_DEADLINE_HOUR``, default
     pukul 16:00 WIB) dan data belum ada — biar bisa dipakai cron:
-    ``idx health || kirim-alert``.
+    ``idx health || kirim-alert``. Exit code 1 juga kalau cakupan kolom
+    ``foreign_*`` timpang di ``sessions`` sesi terakhir.
     """
-    from .health import check_eod_health
+    from .health import check_eod_health, check_field_coverage, format_field_coverage_message
 
     h = check_eod_health()
+    c = check_field_coverage()
     print(
         f"hari bursa diharapkan: {h.expected} | saham terbaru: {h.stocks_latest} "
         f"| close IHSG terbaru: {h.index_latest}"
     )
-    if h.ok:
+    if not c.ok:
+        pesan = format_field_coverage_message(c)
+        try:
+            print(pesan)
+        except UnicodeEncodeError:
+            # Konsol Windows (cp1252) tidak bisa mencetak "⚠️" — jangan sampai
+            # alarm hilang cuma karena emoji; sisa pesannya tetap terbaca.
+            print(pesan.encode("ascii", "replace").decode("ascii"))
+    if h.ok and c.ok:
         print("OK — data EOD terbaru lengkap")
         return
-    print("TELAT — belum masuk: " + ", ".join(h.missing))
+    if not h.ok:
+        print("TELAT — belum masuk: " + ", ".join(h.missing))
     sys.exit(1)
 
 

@@ -6,8 +6,11 @@ from datetime import date, datetime, timedelta, timezone
 
 from idx_scraper.health import (
     EodHealth,
+    FieldCoverage,
+    evaluate_field_coverage,
     evaluate_health,
     expected_trading_date,
+    format_field_coverage_message,
     format_health_message,
     parse_holidays,
 )
@@ -157,3 +160,38 @@ def test_message_mentions_expected_date_and_fix():
     assert "2026-10-05" in msg
     assert "idx eod" in msg
     assert "idx serve" in msg
+
+
+# --------------------------------------------------------------------------- #
+# evaluate_field_coverage  (cakupan kolom foreign_* per sesi)
+# --------------------------------------------------------------------------- #
+
+
+def test_cakupan_penuh_ok():
+    rows = [(date(2026, 10, 5), 958, 958), (date(2026, 10, 6), 956, 956)]
+    c = evaluate_field_coverage(rows)
+    assert c.ok and c.checked == 2 and c.troublemakers == [] and c.worst_pct == 100.0
+
+
+def test_satu_sesi_timpang_dilaporkan_dengan_tanggalnya():
+    rows = [(date(2026, 10, 5), 958, 958), (date(2026, 10, 6), 956, 41)]
+    c = evaluate_field_coverage(rows)
+    assert not c.ok
+    assert c.troublemakers == ["2026-10-06 (41/956, 4.3%)"]
+    assert c.worst_pct == 4.3
+
+
+def test_tanpa_data_dianggap_ok_tapi_dilaporkan_kosong():
+    c = evaluate_field_coverage([])
+    assert c.ok and c.checked == 0
+
+
+def test_jendela_membatasi_jumlah_sesi_yang_dicek():
+    rows = [(date(2026, 10, d), 100, 100) for d in range(1, 6)]
+    assert evaluate_field_coverage(rows, sessions=3).checked == 3
+
+
+def test_pesan_menyebut_tanggal_dan_skrip_perbaikan():
+    c = FieldCoverage(checked=1, troublemakers=["2026-07-14 (0/965, 0.0%)"], worst_pct=0.0)
+    msg = format_field_coverage_message(c)
+    assert "2026-07-14" in msg and "repair_foreign_flow" in msg
