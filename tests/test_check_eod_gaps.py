@@ -51,7 +51,7 @@ def test_transport_gagal_atau_status_asing_berarti_gagal():
 
 
 def test_run_bersih_keluar_nol():
-    assert kode_keluar(berhenti_menolak=False, gagal=0, sebagian=0) == 0
+    assert kode_keluar(berhenti_menolak=False, gagal=0, diblokir=0, sebagian=0) == 0
 
 
 def test_libur_dan_luar_jendela_tidak_pernah_keluar_satu():
@@ -59,19 +59,30 @@ def test_libur_dan_luar_jendela_tidak_pernah_keluar_satu():
     assert status_hari([], 200, tertangani=0) == "libur"
     assert status_hari([], 503, tertangani=0) == "luar-jendela"
     # Keduanya tidak masuk hitungan kegagalan -> run tetap dianggap bersih.
-    assert kode_keluar(berhenti_menolak=False, gagal=0, sebagian=0) == 0
+    assert kode_keluar(berhenti_menolak=False, gagal=0, diblokir=0, sebagian=0) == 0
 
 
 def test_berhenti_karena_403_429_beruntun_keluar_gagal():
-    assert kode_keluar(berhenti_menolak=True, gagal=0, sebagian=0) == 1
+    # Abort beruntun selalu berarti ≥2 hari diblokir.
+    assert kode_keluar(berhenti_menolak=True, gagal=0, diblokir=2, sebagian=0) == 1
 
 
 def test_satu_sesi_gagal_sudah_cukup_gagal():
-    assert kode_keluar(berhenti_menolak=False, gagal=1, sebagian=0) == 1
+    assert kode_keluar(berhenti_menolak=False, gagal=1, diblokir=0, sebagian=0) == 1
 
 
 def test_sesi_tersimpan_sebagian_keluar_gagal():
-    assert kode_keluar(berhenti_menolak=False, gagal=0, sebagian=2) == 1
+    assert kode_keluar(berhenti_menolak=False, gagal=0, diblokir=0, sebagian=2) == 1
+
+
+def test_satu_hari_diblokir_tanpa_abort_keluar_gagal():
+    """Ronde 2: 403/429 tunggal = sesi tak tersimpan -> exit 1, bukan 0.
+
+    Kelas ketidakjujuran yang sama dengan I1: run yang separuh terblokir tidak
+    boleh tampak sukses di mata scheduler.
+    """
+    assert status_hari([], 403, tertangani=0) == "diblokir"
+    assert kode_keluar(berhenti_menolak=False, gagal=0, diblokir=1, sebagian=0) == 1
 
 
 # --- dalam_jendela: potongan jendela retensi IDX (±720 hari) ---

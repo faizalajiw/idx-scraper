@@ -29,13 +29,12 @@ Yang dilakukan skrip ini:
    - status lain / transport gagal -> GAGAL di sisi IDX (bukan libur!) — dicatat
      dan dutarakan di ringkasan supaya terlihat, bukan disembunyikan.
 5. ``prices_pit`` disegarkan bila ada yang terisi.
-6. Exit code jujur untuk scheduler: 0 hanya bila tidak ada sesi yang gagal
-   (libur bursa asli dan tanggal di luar jendela retensi bukan kegagalan); 1
-   bila run berhenti karena penolakan beruntun (403/429) atau ada sesi yang
-   gagal/tidak tersimpan penuh. 403/429 tunggal yang tidak sampai menghentikan
-   run tetap tercatat di ringkasan (``diblokir:``) tapi tidak menaikkan exit
-   code — harinya muncul lagi di pemindaian run berikutnya. Run ``--dry-run``
-   dan run bersih selalu 0.
+6. Exit code jujur untuk scheduler: 0 hanya bila tidak ada sesi yang tak
+   tersimpan (libur bursa asli dan tanggal di luar jendela retensi bukan
+   kegagalan); 1 bila run berhenti karena penolakan beruntun (403/429) atau ada
+   sesi GAGAL / DIBLOKIR / tersimpan separuh — termasuk 403/429 tunggal yang
+   tidak sampai menghentikan run, karena sesi itu memang tidak tersimpan. Run
+   ``--dry-run`` dan run bersih selalu 0.
 
 Pemakaian:
     # lihat dulu tanpa menyentuh IDX
@@ -137,14 +136,16 @@ def titik_lanjut(belum_berhasil: list[tuple[date, object]], sebagian: list[date]
     return min(kandidat) if kandidat else None
 
 
-def kode_keluar(*, berhenti_menolak: bool, gagal: int, sebagian: int) -> int:
-    """1 bila run berhenti karena penolakan beruntun atau ada sesi gagal/disimpan separuh.
+def kode_keluar(*, berhenti_menolak: bool, gagal: int, diblokir: int, sebagian: int) -> int:
+    """1 bila run berhenti karena penolakan beruntun atau ada sesi yang tak tersimpan.
 
-    Libur bursa asli dan tanggal di luar jendela retensi (503) TIDAK dihitung
-    gagal: keduanya memang tak bisa ditambal, dan alarm permanen untuknya
-    membuat sinyal scheduler merah abadi (temuan I1 review final).
+    Tiga sebab sesi tak tersimpan: ``gagal`` (status lain / transport), ``diblokir``
+    (403/429 — termasuk yang tidak sampai menghentikan run) dan ``sebagian``
+    (tersimpan separuh). Libur bursa asli dan tanggal di luar jendela retensi
+    (503) TIDAK dihitung gagal: keduanya memang tak bisa ditambal, dan alarm
+    permanen untuknya membuat sinyal scheduler merah abadi (temuan I1 review final).
     """
-    if berhenti_menolak or gagal or sebagian:
+    if berhenti_menolak or gagal or diblokir or sebagian:
         return 1
     return 0
 
@@ -320,7 +321,12 @@ def main() -> None:
         time.sleep(args.pace)
 
     client.close()
-    kode = kode_keluar(berhenti_menolak=berhenti_menolak, gagal=len(gagal), sebagian=len(sebagian))
+    kode = kode_keluar(
+        berhenti_menolak=berhenti_menolak,
+        gagal=len(gagal),
+        diblokir=len(diblokir),
+        sebagian=len(sebagian),
+    )
     print(
         f"[gap] terisi={len(terisi)} | libur={len(libur)} "
         f"| luar jendela retensi={len(luar_jendela)} "
