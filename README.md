@@ -336,6 +336,7 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 * `scripts/backfill_index_eod_idx.py`
 * `scripts/backfill_corp_actions.py`
 * `scripts/backfill_raw_eod.py` — backfill EOD IDX resmi; berjeda 4 s (`--pace`) + deteksi blokir 403/429 (berhenti dengan tanggal resume, bukan salah hitung libur). Gunakan `--ulang` untuk menarik ulang tanggal yang sudah ada (upsert semua kolom).
+* `scripts/repair_foreign_flow.py` — tambal kolom foreign NULL pada sesi yang **sudah ada**: tarik ulang per sesi (`--start-date/--end-date`, jeda `--pace` 4 s, `--limit` untuk uji cepat), tulis **hanya** `foreign_buy/sell/net` lewat penjaga `foreign_net is null` + `ingested_at=now()` (idempoten, OHLCV tak tersentuh, terbitkan versi `prices_pit` baru), sesi tanpa kolom NULL dilewati tanpa request IDX, dan blokir 403/429 berhenti dengan tanggal resume + exit 1.
 * `scripts/backfill_eod_yahoo.py`
 * `scripts/intraday_capture.py`
 * `scripts/refresh_sector_map.py`
