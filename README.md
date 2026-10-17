@@ -341,8 +341,10 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 ### Back‑fill Scripts (run manually or via scheduler)
 * `scripts/backfill_broker_eod.py`
 * `scripts/backfill_index_eod_idx.py`
+* `scripts/backfill_index_history_yahoo.py` — isi riwayat harian IHSG (COMPOSITE) dari Yahoo untuk rentang tanggal yang bolong ke `index_summary_daily`; **tidak menyentuh** `index_quotes` dan tidak menimpa baris yang sudah ada (nilai resmi IDX tetap menang).
 * `scripts/backfill_corp_actions.py`
 * `scripts/backfill_raw_eod.py` — backfill EOD IDX resmi; berjeda 4 s (`--pace`) + deteksi blokir 403/429 (berhenti dengan tanggal resume, bukan salah hitung libur). Gunakan `--ulang` untuk menarik ulang tanggal yang sudah ada (upsert semua kolom).
+* `scripts/check_eod_gaps.py` — cari hari kerja yang **sama sekali tanpa sesi** di `research.raw_eod` lalu tarik ulang per hari (satu transaksi per sesi; `--dry-run` untuk melihat lubang tanpa menyentuh IDX). Ini pencari **hari kosong, bukan pencari kolom kosong** — untuk kolom yang bolong pakai `repair_foreign_flow.py`. Hari libur bursa dan tanggal di luar jendela retensi IDX (±720 hari) bukan kegagalan (exit tetap 0).
 * `scripts/repair_foreign_flow.py` — tambal kolom foreign NULL pada sesi yang **sudah ada**: tarik ulang per sesi (`--start-date/--end-date`, jeda `--pace` 4 s, `--limit` untuk uji cepat), tulis **hanya** `foreign_buy/sell/net` lewat penjaga `foreign_net is null` + `ingested_at=now()` (idempoten, OHLCV tak tersentuh, terbitkan versi `prices_pit` baru), sesi tanpa kolom NULL dilewati tanpa request IDX, dan blokir 403/429 berhenti dengan tanggal resume + exit 1.
 * `scripts/backfill_eod_yahoo.py`
 * `scripts/intraday_capture.py`

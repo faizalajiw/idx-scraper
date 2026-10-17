@@ -366,3 +366,27 @@ git commit -m "scripts: penambal lubang sesi (check_eod_gaps) + pengisi riwayat 
 - [ ] `.venv\Scripts\python.exe -m scripts.check_eod_gaps --dry-run` → 48 hari = libur
 - [ ] `idx health` → exit 0, tanpa peringatan cakupan kolom
 - [ ] `git status --short` → bersih (tidak ada file baru yang menggantung)
+
+---
+
+## Gap yang diketahui (belum tertangkap)
+
+**Tidak ada pemeriksa mana pun yang melihat jumlah baris per sesi.** Semua gerbang
+memperlakukan "≥1 baris" sebagai sesi yang hadir:
+
+- `scripts/backfill_raw_eod.py:62` (`tanggal_perlu`) — tanggal yang sudah punya baris apa pun dilewati.
+- `scripts/check_eod_gaps.py:92` (`hilang`) — hari dianggap terisi begitu ada satu baris.
+- `src/idx_scraper/health.py:168` (`evaluate_field_coverage`) — hanya menghitung cakupan kolom `foreign_net`, bukan jumlah barisnya.
+- `src/idx_scraper/cli.py:896` (`_eod_fresh_for`) — `select 1 … limit 1`: satu baris sudah "segar".
+
+Mekanismenya hidup: `_ingest_eod_research` (`src/idx_scraper/cli.py:682`, insert di `:724`)
+menyisipkan baris **satu-satu tanpa `on conflict`** di bawah autocommit, jadi interupsi di
+tengah sesi meninggalkan sesi separuh — dan tak ada alarm untuk bentuk kerusakan itu.
+Jalur baru `check_eod_gaps` menutup kasus interupsi di dalam dirinya sendiri (transaksi
+per sesi + ember "sebagian" masuk exit 1), tapi jalur `idx serve` tetap terbuka.
+
+**Rencana perbaikan (belum dikerjakan di plan ini):** band-check jumlah baris per sesi
+terhadap median sesi — mis. bandingkan `count(*)` per `trade_date` di `research.raw_eod`
+dengan median N sesi terakhir, dan angkat sesi yang jauh di bawah ambang (mis. < 50%
+median) sebagai alarm cakupan baris, sejalan dengan `check_field_coverage` untuk kolom.
+Dicatat sebagai gap yang diketahui, bukan diam-diam dianggap beres.
