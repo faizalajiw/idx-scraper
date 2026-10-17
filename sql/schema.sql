@@ -18,6 +18,10 @@ create table if not exists index_quotes (
 );
 create index if not exists idx_index_quotes_code_capture on index_quotes(code, captured_at desc);
 create index if not exists idx_index_quotes_capture on index_quotes(captured_at desc);
+-- Natural key untuk upsert: `on conflict (source, code, captured_at)` di
+-- scripts/backfill_index_eod_idx.py. Hanya ditulis runtime oleh storage.py kalau
+-- baris ini hilang, jadi deploy yang cuma menjalankan sql/ akan gagal saat upsert.
+create unique index if not exists ux_index_quotes_natural on index_quotes(source, code, captured_at);
 
 -- Table: stock_quotes (per-emitenn snapshot)
 create table if not exists stock_quotes (
@@ -54,6 +58,11 @@ create table if not exists index_summary_daily (
   captured_at timestamp with time zone not null default now()
 );
 create index if not exists idx_index_summary_daily_date on index_summary_daily(date desc);
+-- Satu baris per (code, date): unique index inilah yang dibutuhkan
+-- `on conflict (code, date)` di scripts/backfill_index_eod.py,
+-- backfill_index_eod_idx.py, dan backfill_index_history_yahoo.py. Tidak dibuat
+-- oleh kode mana pun — tanpa baris ini upsert indeks gagal di DB baru.
+create unique index if not exists ux_index_summary_daily_code_date on index_summary_daily(code, date);
 
 -- Table: stock_summary_daily (EOD data per stock)
 create table if not exists stock_summary_daily (
@@ -78,6 +87,39 @@ create table if not exists stock_summary_daily (
 );
 create index if not exists idx_stock_summary_daily_date on stock_summary_daily(date desc);
 create index if not exists idx_stock_summary_daily_code_date on stock_summary_daily(code, date desc);
+-- Satu baris per (code, date): dibutuhkan `on conflict (code, date)` di
+-- src/idx_scraper/storage.py dan scripts/migrate_sqlite_to_postgres.py.
+-- storage.py juga membuatnya runtime (setelah membuang duplikat lama).
+create unique index if not exists ux_stock_summary_daily_code_date on stock_summary_daily(code, date);
+
+-- Table: stock_daily (riwayat harian per emiten; sumber Yahoo & IDX)
+-- Mirror dari DDL di src/idx_scraper/storage.py; `unique (ticker, date)` adalah
+-- target `on conflict (ticker, date)` di storage.py dan
+-- scripts/migrate_sqlite_to_postgres.py.
+create table if not exists stock_daily (
+  id uuid primary key default uuid_generate_v4(),
+  ticker text not null,
+  date date not null,
+  open numeric(18,4) not null,
+  high numeric(18,4) not null,
+  low numeric(18,4) not null,
+  close numeric(18,4) not null,
+  volume bigint not null,
+  adjusted_close numeric(18,4),
+  unique(ticker, date)
+);
+create index if not exists idx_stock_daily_ticker_date on stock_daily(ticker, date desc);
+
+-- Table: news_items (berita Snips) — mirror dari DDL di src/idx_scraper/news.py.
+-- `url` sebagai primary key adalah target `on conflict (url) do nothing`.
+create table if not exists news_items (
+  url text primary key,
+  title text not null,
+  source text not null,
+  published_at timestamptz not null,
+  fetched_at timestamptz not null default now()
+);
+create index if not exists idx_news_items_published on news_items (published_at desc);
 
 -- Functions (optional helpers)
 create or replace function last_price(p_code text, p_source text default 'Yahoo')

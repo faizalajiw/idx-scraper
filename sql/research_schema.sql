@@ -33,8 +33,12 @@ CREATE TABLE IF NOT EXISTS research.raw_eod (
     source       TEXT        NOT NULL DEFAULT 'IDX',
     ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now()   -- knowledge_date
 );
-CREATE INDEX IF NOT EXISTS idx_raw_eod_lookup
-    ON research.raw_eod (code, trade_date, ingested_at DESC);
+-- One row per (code, trade_date): UNIQUE, and that is the index `on conflict
+-- (code, trade_date)` needs (backfill_raw_eod.py, check_eod_gaps.py,
+-- repair_foreign_flow.py). Non-unique here = deploy that builds the DB from
+-- this file passes schema creation but every upsert fails at runtime.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_eod_lookup
+    ON research.raw_eod (code, trade_date);
 -- Latest-date lookups (`select max(trade_date)`) must not fall back to a
 -- parallel seq scan: without this index the planner reads the whole table with
 -- two parallel workers — slow, and fragile, because a worker that fails to
@@ -267,3 +271,20 @@ CREATE TABLE IF NOT EXISTS research.recommendation_log (
 );
 CREATE INDEX IF NOT EXISTS idx_recommendation_log_date
     ON research.recommendation_log (trade_date DESC, grade);
+
+-- ----------------------------------------------------------------------------
+-- 11) REGIME_DAILY — klasifikasi rezim pasar harian (ADX/DI, volatilitas).
+--     Upsert idempoten per trade_date; mirror dari DDL di
+--     src/idx_scraper/research/regime.py.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS research.regime_daily (
+    trade_date   DATE          PRIMARY KEY,
+    regime       TEXT,
+    adx          NUMERIC(8,2),
+    plus_di      NUMERIC(8,2),
+    minus_di     NUMERIC(8,2),
+    realized_vol NUMERIC(8,2),
+    vol_state    TEXT,
+    source       TEXT,
+    generated_at TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
