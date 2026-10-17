@@ -328,3 +328,17 @@ def test_job_index_eod_close_menghormati_jam(monkeypatch):
     monkeypatch.setattr(cli, "_boleh_tulis_close_index", lambda: True)
     cli._job_index_eod_close()
     assert len(panggilan) == 1
+
+
+# ------------------------------------------------- jendela catch-up default 21
+
+
+def test_default_backfill_hari_menutup_libur_panjang():
+    """5 hari bursa tidak cukup melewati libur panjang; 21 hari bursa aman."""
+    from idx_scraper import cli
+
+    assert cli._BACKFILL_HARI_DEFAULT >= 20
+    mulai = date(2026, 4, 20)  # sesudah rentetan libur Lebaran 2026-03-18..24
+    mundur = cli._hari_bursa_mundur(mulai, cli._BACKFILL_HARI_DEFAULT)
+    assert len(mundur) == cli._BACKFILL_HARI_DEFAULT
+    assert (mulai - mundur[-1]).days >= 28  # menjangkau ≥4 minggu kalender

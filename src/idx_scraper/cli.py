@@ -932,11 +932,16 @@ def _hari_bursa(day: date) -> bool:
 
 
 # Berapa hari bursa ke belakang yang dicek ulang `_backfill_hari_lampau`.
-# 5 hari bursa ~ 1 minggu kalender: cukup untuk mesin yang tidur/off beberapa
-# hari, tapi tidak menjelajah setahun tiap kali laptop baru dinyalakan setelah
-# lama mati. Lubang lebih tua dari ini tidak ditarik otomatis — pakai
-# `idx eod <YYYYMMDD>` (saham) lalu `idx refresh` (menu turunannya).
-_BACKFILL_HARI = int(os.getenv("IDX_BACKFILL_DAYS", "5"))
+# 21 hari bursa ~ 4 minggu kalender: cukup melewati libur panjang (Lebaran
+# 2026-03-18..24) tanpa menjelajah setahun tiap kali laptop baru dinyalakan.
+# 5 hari bursa (= 1 minggu kalender) tidak cukup: `idx serve` yang mati 2–3
+# minggu kehilangan sesinya tanpa satu pun alarm, karena cek berikutnya sudah
+# melewati tanggal itu — dan karena retensi IDX hanya ±2 tahun, giliran
+# berikutnya bisa permanen. Lubang lebih tua dari jendela ini ditarik manual:
+# `python -m scripts.check_eod_gaps` (lubang tanggal) atau
+# `python -m scripts.backfill_raw_eod --ulang` (tarik ulang semua kolom).
+_BACKFILL_HARI_DEFAULT = 21
+_BACKFILL_HARI = int(os.getenv("IDX_BACKFILL_DAYS") or _BACKFILL_HARI_DEFAULT)
 
 
 def _hari_bursa_mundur(mulai: date, jumlah: int) -> list[date]:
@@ -983,6 +988,10 @@ def _backfill_hari_lampau(
     Biaya saat tidak ada lubang: satu query DB per tanggal (≈ nol). Tanggal yang
     IDX balas 0 baris tidak diingat-ingat — cek berikutnya boleh mencoba lagi,
     karena 0 baris bisa berarti libur tak terdaftar atau IDX sedang menolak.
+
+    Jendelanya default 21 hari bursa (``IDX_BACKFILL_DAYS``). Lubang lebih tua
+    dari itu tidak ditarik di sini — pakai skrip manual
+    ``python -m scripts.check_eod_gaps`` (lihat runbook outage di README).
     """
     if _BACKFILL_HARI <= 0:
         return 0

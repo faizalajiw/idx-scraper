@@ -278,7 +278,7 @@ job kedua (pekerjaannya sudah tercakup yang sedang jalan). Perilaku ini dikunci
 ### Lubang hari bursa lampau
 `eod_fallback` dan startup `serve` sama‑sama memanggil `_eod_catchup`, dan itu
 sekarang **dua fase**: hari ini dulu (`_eod_catchup_hari_ini`), lalu hari bursa
-lampau yang bolong (`_backfill_hari_lampau`, default 5 hari bursa — atur lewat
+lampau yang bolong (`_backfill_hari_lampau`, default 21 hari bursa — atur lewat
 `IDX_BACKFILL_DAYS`, `0` mematikan). Fase kedua ada karena cek "hari ini" tidak
 bisa menyembuhkan sehari yang hilang: kalau mesin tidur/off melewati seluruh
 jendela sore (16:10–22:30), tanggal itu tidak pernah kembali — dan `health_eod`
@@ -305,6 +305,13 @@ oleh `_eod_fresh_for` & `check_eod_health`, sekaligus baris terbaru yang dibaca
 dashboard (`order by captured_at desc`). Nilai pra‑buka/tengah hari pun tampil
 sebagai "IHSG hari ini" dan mengalahkan snapshot polling sepanjang sisa sesi.
 Sebelum close, biarkan snapshot polling yang isinya benar‑benar segar.
+
+**Runbook — setelah `idx serve` mati lebih lama dari `IDX_BACKFILL_DAYS`**
+(default 21 hari bursa): (1) `python -m scripts.check_eod_gaps --dry-run`
+untuk melihat lubang, (2) `python -m scripts.check_eod_gaps` untuk menariknya
+(jeda 4 s, backoff sabar), (3) `python -m scripts.repair_foreign_flow
+--start-date … --end-date …` kalau cakupan kolom ikut timpang, (4) verifikasi
+lewat `idx health`.
 
 ### API Berita
 | Endpoint | Fungsi |
