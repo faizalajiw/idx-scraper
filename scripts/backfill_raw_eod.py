@@ -23,6 +23,7 @@ import os
 import pathlib
 import sys
 import time
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg
@@ -30,7 +31,29 @@ import psycopg
 from idx_scraper.client import IDXClient
 
 WIB = timezone(timedelta(hours=7))  # IDX business timezone
-SLEEP_SECONDS = 1.2  # anti-throttle between IDX requests
+SLEEP_SECONDS = 4.0  # jeda ≥4 s: burst 1,2 s terbukti memicu 403 Cloudflare
+
+
+def klasifikasi(rows: list | None, status: object) -> str:
+    """Petakan hasil satu hari ke "data" | "libur" | "luar-jendela" | "diblokir" | "gagal".
+
+    503 = di luar jendela retensi IDX (±2 tahun bergulir), bukan gangguan;
+    403/429 = Cloudflare memblokir — jangan pernah dihitung libur bursa.
+    """
+    if rows:
+        return "data"
+    if status == 200:
+        return "libur"
+    if status == 503:
+        return "luar-jendela"
+    if status in (403, 429):
+        return "diblokir"
+    return "gagal"
+
+
+def tanggal_perlu(days: Iterable[date], ada: set[date], ulang: bool) -> list[date]:
+    """Tanggal yang perlu ditarik: semua bila --ulang, selain itu yang belum ada di raw_eod."""
+    return list(days) if ulang else [d for d in days if d not in ada]
 
 
 def trading_days(start: date, end: date):
@@ -81,7 +104,39 @@ def load_env() -> None:
             pass
 
 
-def backfill(years: float | None = None, start_date: date | None = None, end_date: date | None = None) -> None:
+BLOCK_BACKOFF = (0, 30, 90)  # percobaan ulang saat IDX menolak; setelah itu BERHENTI dengan tanggal resume
+
+_INSERT_RAW_EOD = """
+insert into research.raw_eod
+   (code, trade_date, open, high, low, close, prev_close,
+    volume, value, frequency, source,
+    name, foreign_buy, foreign_sell, foreign_net)
+values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+"""
+
+# Kolom yang diperbarui saat menarik ulang tanggal yang sudah ada (--ulang).
+_UPSERT_SET = """
+do update set
+    open=excluded.open, high=excluded.high, low=excluded.low,
+    close=excluded.close, prev_close=excluded.prev_close,
+    volume=excluded.volume, value=excluded.value, frequency=excluded.frequency,
+    source=excluded.source, name=excluded.name,
+    foreign_buy=excluded.foreign_buy, foreign_sell=excluded.foreign_sell,
+    foreign_net=excluded.foreign_net, ingested_at=now()
+"""
+
+_REJECT_REASON = (
+    "select research.eod_reject_reason(%s::numeric,%s::numeric,%s::numeric,%s::numeric,%s::bigint)"
+)
+
+
+def backfill(
+    years: float | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    pace: float = SLEEP_SECONDS,
+    ulang: bool = False,
+) -> None:
     load_env()
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
@@ -110,64 +165,92 @@ def backfill(years: float | None = None, start_date: date | None = None, end_dat
 
     inserted = 0
     quarantined = 0
-    empty_days = 0
+    holidays = 0
+    outside = 0
+    gagal = 0
+    skipped = 0
     day_count = 0
 
+    on_conflict = " on conflict (code, trade_date) " + (_UPSERT_SET if ulang else "do nothing")
+
     with psycopg.connect(dsn, autocommit=True) as conn:
-        for d in days:
+        ada = {row[0] for row in conn.execute("select distinct trade_date from research.raw_eod")}
+        to_fetch = tanggal_perlu(days, ada, ulang)
+
+        for d in to_fetch:
             date_str = d.strftime("%Y%m%d")
             day_count += 1
-            try:
-                rows = client.fetch_stock_summary(date_str)
-            except Exception as e:
-                print(f"[warn] {date_str} fetch failed: {e}", file=sys.stderr)
-                time.sleep(SLEEP_SECONDS)
-                continue
 
-            if not rows:
-                empty_days += 1
-                time.sleep(SLEEP_SECONDS)
-                continue
+            # Percobaan beruntun dengan backoff berjenjang; perkirakan status transport
+            # alih-alih mengira respons kosong sebagai hari libur.
+            rows: list | None = None
+            status: object = None
+            for backoff in BLOCK_BACKOFF:
+                if backoff:
+                    print(f"  [{date_str}] status {status} -> tunggu {backoff}s", flush=True)
+                    time.sleep(backoff)
+                try:
+                    rows = client.fetch_stock_summary(date_str)
+                    status = getattr(client.session, "last_status", None)
+                except Exception as exc:
+                    rows, status = None, f"EXC:{type(exc).__name__}"
+                    print(f"  [{date_str}] exception: {exc!r}", flush=True)
+                # 200 = ada data / libur bursa, 503 = di luar jendela retensi IDX.
+                if rows or status in (200, 503):
+                    break
 
-            with conn.cursor() as cur:
-                for r in rows:
-                    reason = cur.execute(
-                        "select research.eod_reject_reason("
-                        "%s::numeric,%s::numeric,%s::numeric,%s::numeric,%s::bigint)",
-                        (r.open, r.high, r.low, r.close, r.volume),
-                    ).fetchone()[0]
+            ember = klasifikasi(rows, status)
+            if ember == "diblokir":
+                print(
+                    f"[backfill] DIHENTIKAN di {d.isoformat()} (status {status}) "
+                    f"— IDX menolak beruntun. Lanjutkan: --start-date {d.isoformat()}",
+                    flush=True,
+                )
+                break
+            if ember == "libur":
+                holidays += 1
+            elif ember == "luar-jendela":
+                outside += 1
+            elif ember == "gagal":
+                gagal += 1
 
-                    if reason is not None:
+            if rows:
+                with conn.cursor() as cur:
+                    for r in rows:
+                        reason = cur.execute(
+                            _REJECT_REASON,
+                            (r.open, r.high, r.low, r.close, r.volume),
+                        ).fetchone()[0]
+
+                        if reason is not None:
+                            cur.execute(
+                                """insert into research.quarantine_eod (code, trade_date, payload, reason)
+                                   values (%s, %s, %s, %s)""",
+                                (r.code, d, json.dumps(r.model_dump(mode="json")), reason),
+                            )
+                            quarantined += 1
+                            continue
+
                         cur.execute(
-                            """insert into research.quarantine_eod (code, trade_date, payload, reason)
-                               values (%s, %s, %s, %s)""",
-                            (r.code, d, json.dumps(r.model_dump(mode="json")), reason),
+                            _INSERT_RAW_EOD + on_conflict,
+                            (r.code, d, _ohl(r.open), _ohl(r.high), _ohl(r.low),
+                             _num(r.close), _num(_prev_close(r)), _num(r.volume),
+                             _num(r.value), _num(r.frequency), r.source,
+                             r.name, _num(r.foreign_buy), _num(r.foreign_sell),
+                             _num(r.foreign_net)),
                         )
-                        quarantined += 1
-                        continue
-
-                    cur.execute(
-                        """insert into research.raw_eod
-                           (code, trade_date, open, high, low, close, prev_close,
-                            volume, value, frequency, source,
-                            name, foreign_buy, foreign_sell, foreign_net)
-                           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                        (r.code, d, _ohl(r.open), _ohl(r.high), _ohl(r.low),
-                         _num(r.close), _num(_prev_close(r)), _num(r.volume),
-                         _num(r.value), _num(r.frequency), r.source,
-                         r.name, _num(r.foreign_buy), _num(r.foreign_sell),
-                         _num(r.foreign_net)),
-                    )
-                    inserted += 1
+                        inserted += 1
 
             if day_count % 20 == 0:
-                print(f"  .. {day_count}/{len(days)} days | "
-                      f"raw={inserted} quarantine={quarantined} empty={empty_days}")
-            time.sleep(SLEEP_SECONDS)
+                print(f"  .. {day_count}/{len(to_fetch)} | "
+                      f"raw+{inserted} karantina+{quarantined} libur={holidays} "
+                      f"luar-jendela={outside} gagal={gagal}")
+            time.sleep(pace)
 
     client.close()
-    print(f"[backfill] done. raw_eod +{inserted}, quarantine +{quarantined}, "
-          f"empty/holiday days {empty_days}")
+    skipped = len(days) - day_count
+    print(f"[backfill] selesai. raw_eod +{inserted}, karantina +{quarantined}, libur {holidays}, "
+          f"luar jendela {outside}, gagal {gagal}, dilewati {skipped}")
 
     refresh_prices_pit(dsn)
 
@@ -196,14 +279,17 @@ def main() -> None:
     ap.add_argument("--years", type=float, default=None, help="years of history to backfill (default mode)")
     ap.add_argument("--start-date", type=lambda s: date.fromisoformat(s), help="start date for catch-up mode (YYYY-MM-DD)")
     ap.add_argument("--end-date", type=lambda s: date.fromisoformat(s), help="end date for catch-up mode (YYYY-MM-DD)")
+    ap.add_argument("--pace", type=float, default=SLEEP_SECONDS, help="jeda antar request IDX (detik, default 4.0)")
+    ap.add_argument("--ulang", action="store_true",
+                    help="tarik ulang tanggal yang sudah ada di raw_eod (upsert: perbarui semua kolom)")
     args = ap.parse_args()
-    
+
     if args.start_date is not None and args.end_date is not None:
         # Mode catch-up: jalankan untuk rentang tanggal tertentu
-        backfill(start_date=args.start_date, end_date=args.end_date)
+        backfill(start_date=args.start_date, end_date=args.end_date, pace=args.pace, ulang=args.ulang)
     elif args.years is not None:
         # Mode default: backfill berdasarkan jumlah tahun dari hari ini
-        backfill(years=args.years)
+        backfill(years=args.years, pace=args.pace, ulang=args.ulang)
     else:
         print("ERROR: provide either --years or --start-date/--end-date", file=sys.stderr)
         sys.exit(1)

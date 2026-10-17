@@ -335,7 +335,7 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 * `scripts/backfill_broker_eod.py`
 * `scripts/backfill_index_eod_idx.py`
 * `scripts/backfill_corp_actions.py`
-* `scripts/backfill_raw_eod.py`
+* `scripts/backfill_raw_eod.py` — backfill EOD IDX resmi; berjeda 4 s (`--pace`) + deteksi blokir 403/429 (berhenti dengan tanggal resume, bukan salah hitung libur). Gunakan `--ulang` untuk menarik ulang tanggal yang sudah ada (upsert semua kolom).
 * `scripts/backfill_eod_yahoo.py`
 * `scripts/intraday_capture.py`
 * `scripts/refresh_sector_map.py`
