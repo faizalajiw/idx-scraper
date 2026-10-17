@@ -375,7 +375,7 @@ git commit -m "scripts: penambal lubang sesi (check_eod_gaps) + pengisi riwayat 
 memperlakukan "≥1 baris" sebagai sesi yang hadir:
 
 - `scripts/backfill_raw_eod.py:62` (`tanggal_perlu`) — tanggal yang sudah punya baris apa pun dilewati.
-- `scripts/check_eod_gaps.py:92` (`hilang`) — hari dianggap terisi begitu ada satu baris.
+- `scripts/check_eod_gaps.py:94` (`hilang`) — hari dianggap terisi begitu ada satu baris.
 - `src/idx_scraper/health.py:168` (`evaluate_field_coverage`) — hanya menghitung cakupan kolom `foreign_net`, bukan jumlah barisnya.
 - `src/idx_scraper/cli.py:896` (`_eod_fresh_for`) — `select 1 … limit 1`: satu baris sudah "segar".
 
