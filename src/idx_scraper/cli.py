@@ -301,17 +301,16 @@ def _job_health_eod() -> None:
     Komplemen ``startup catchup``: catchup hanya jalan saat boot, sedangkan job
     ini menjaga kasus scheduler hidup tapi job EOD-nya gagal diam-diam (DB
     putus, Cloudflare). DB/Telegram error tidak boleh menghentikan scheduler.
+
+    Dua jalur alarm di bawah sengaja punya ``try/except`` SENDIRI: satu
+    pemeriksaan yang melempar (mis. ``check_field_coverage`` vs DB yang putus)
+    tidak boleh menelan alarm jalur lain — penjaga cakupan kolom pernah
+    mematikan alarm "Data EOD belum masuk" yang sudah ada lebih dulu.
     """
     try:
-        from .health import (
-            check_eod_health,
-            check_field_coverage,
-            format_field_coverage_message,
-            format_health_message,
-        )
+        from .health import check_eod_health, format_health_message
 
         h = check_eod_health()
-        c = check_field_coverage()
         if h.ok:
             print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
         else:
@@ -320,9 +319,16 @@ def _job_health_eod() -> None:
                 f"{', '.join(h.missing)}"
             )
             TelegramNotifier().send_message(format_health_message(h))
-        # Cek kedua: tanggal bisa ada tapi kolom foreign_* bolong (9 bulan
-        # tanpa alarm pada 2025-09-24 → 2026-07-29). Telegram dikirim sebelum
-        # log dicetak supaya alarm tidak hilang gara-gara encoding konsol.
+    except Exception as e:
+        print(f"[err] health EOD: {e}", file=sys.stderr)
+
+    # Cek kedua: tanggal bisa ada tapi kolom foreign_* bolong (9 bulan
+    # tanpa alarm pada 2025-09-24 → 2026-07-29). Telegram dikirim sebelum
+    # log dicetak supaya alarm tidak hilang gara-gara encoding konsol.
+    try:
+        from .health import check_field_coverage, format_field_coverage_message
+
+        c = check_field_coverage()
         if not c.ok:
             TelegramNotifier().send_message(format_field_coverage_message(c))
             print(
@@ -330,7 +336,7 @@ def _job_health_eod() -> None:
                 f"{len(c.troublemakers)}/{c.checked} sesi"
             )
     except Exception as e:
-        print(f"[err] health EOD: {e}", file=sys.stderr)
+        print(f"[err] health cakupan kolom: {e}", file=sys.stderr)
 
 
 def _job_signal_log() -> None:
