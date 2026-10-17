@@ -31,6 +31,7 @@ from .schemas import (
     BacktestResult,
     BrokerActivity,
     BrokerFlow,
+    DataHealth,
     ForeignFlow,
     HoldCheckResponse,
     MarketLeaders,
@@ -171,6 +172,24 @@ def _parse_optional_date(value: str | None, field: str) -> date | None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/data-health", response_model=DataHealth)
+def data_health(
+    sessions: int = Query(
+        default=30, ge=1, le=250, description="Jumlah sesi terakhir yang dinilai tiap pemeriksa"
+    ),
+    row_threshold_pct: float = Query(
+        default=50.0, ge=1.0, le=100.0, description="Ambang baris vs median (%) di bawahnya sesi ditandai"
+    ),
+) -> dict:
+    """Kesegaran + cakupan data EOD: "boleh percaya angka di dashboard?".
+
+    Empat pemeriksa read-only (kesegaran, kolom `foreign_*`, jumlah baris per
+    sesi, lubang sesi). Logikanya hidup di `idx_scraper.health` dan dipakai
+    bersama oleh `idx health` / job `health_eod`.
+    """
+    return services.get_data_health(sessions, row_threshold_pct)
 
 
 @app.get("/api/market/overview", response_model=MarketOverview)

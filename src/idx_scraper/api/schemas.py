@@ -1352,3 +1352,74 @@ class NewsItem(BaseModel):
 
 class NewsList(BaseModel):
     items: list[NewsItem]
+
+
+class DataFreshness(BaseModel):
+    """Kesegaran EOD: tanggal terbaru vs hari bursa yang diharapkan.
+
+    ``stocks_behind`` / ``index_behind`` = berapa sesi bursa yang tertinggal per
+    sumber (0 = hanya sesi hari ini yang belum masuk; itu normal sebelum ~16:15
+    WIB). ``overdue`` = sudah lewat jam batas di hari kerja.
+    """
+
+    expected: str | None = None
+    eod_latest: str | None = None
+    index_latest: str | None = None
+    overdue: bool = False
+    missing: list[str] = []
+    stocks_behind: int = 0
+    index_behind: int = 0
+
+
+class CoverageCheck(BaseModel):
+    """Satu pemeriksa cakupan: berapa sesi dinilai + sesi yang bermasalah.
+
+    ``checked == 0`` berarti tidak ada yang bisa diperiksa (mis. `raw_eod`
+    kosong) — bukan berarti aman.
+    """
+
+    checked: int = 0
+    worst_pct: float | None = None
+    troublemakers: list[str] = []
+
+
+class RowCountCheck(CoverageCheck):
+    """Jumlah baris per sesi vs median jendela terakhir (sesi separuh)."""
+
+    median_rows: int = 0
+    threshold_pct: float = 50.0
+
+
+class SessionGapsCheck(BaseModel):
+    """Hari bursa tanpa baris raw_eod antara sesi pertama & terakhir.
+
+    ``basis``: "kalender-bursa" (dipinjam dari data IHSG), "kalender-bursa-pendek"
+    (acuan IHSG tidak menutup seluruh rentang — lubang di luar cakupannya tidak
+    terlihat), atau "hari-kerja" (fallback kasar; libur nasional tak terdaftar
+    bisa keliru ditandai).
+    """
+
+    first: str | None = None
+    last: str | None = None
+    sessions: int = 0
+    missing: list[str] = []
+    basis: str = "kalender-bursa"
+
+
+class DataHealth(BaseModel):
+    """Ringkasan "boleh percaya angka di dashboard?": kesegaran + 3 pemeriksa cakupan.
+
+    ``ok`` = bersih DAN lengkap: tidak ada yang tertunda (`freshness.missing`
+    kosong), tiap pemeriksa benar-benar memeriksa sesuatu (`checked > 0`) dan
+    tidak menemukan sesi bermasalah. Ini BUKAN `EodHealth.ok` (yang cuma "tidak
+    overdue"): hari kerja sebelum ±16:15 WIB menghasilkan ``ok: false`` yang wajar
+    — sesi hari ini belum wajib ada. Konsumen yang mencari "perlu tindakan?"
+    membaca ``freshness.overdue``.
+    """
+
+    checked_at: datetime
+    ok: bool
+    freshness: DataFreshness
+    field_coverage: CoverageCheck
+    row_counts: RowCountCheck
+    session_gaps: SessionGapsCheck
