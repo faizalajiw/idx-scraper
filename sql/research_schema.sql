@@ -34,9 +34,16 @@ CREATE TABLE IF NOT EXISTS research.raw_eod (
     ingested_at  TIMESTAMPTZ NOT NULL DEFAULT now()   -- knowledge_date
 );
 -- One row per (code, trade_date): UNIQUE, and that is the index `on conflict
--- (code, trade_date)` needs (backfill_raw_eod.py, check_eod_gaps.py,
--- repair_foreign_flow.py). Non-unique here = deploy that builds the DB from
--- this file passes schema creation but every upsert fails at runtime.
+-- (code, trade_date)` needs (backfill_raw_eod.py, check_eod_gaps.py).
+-- Non-unique here = deploy that builds the DB from this file passes schema
+-- creation but every upsert fails at runtime.
+--
+-- CAVEAT: on an older DB whose index with this exact name is still the
+-- non-unique `(code, trade_date, ingested_at DESC)`, `IF NOT EXISTS` matches by
+-- NAME only, so this line is a no-op there — that DB stays without the unique
+-- index and `on conflict (code, trade_date)` keeps failing. Fix by hand:
+-- `drop index idx_raw_eod_lookup;` then re-run this file (or create the unique
+-- index directly). The live DB and any fresh deploy are unaffected.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_eod_lookup
     ON research.raw_eod (code, trade_date);
 -- Latest-date lookups (`select max(trade_date)`) must not fall back to a

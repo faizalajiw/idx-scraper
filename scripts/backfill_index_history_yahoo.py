@@ -12,8 +12,8 @@ Bedanya dengan dua skrip index yang sudah ada:
   (``on conflict do nothing``), jadi nilai resmi IDX tetap menang.
 
 Unique index ``(code, date)`` yang dibutuhkan ``on conflict`` dibuat skrip ini
-sendiri — ``sql/schema.sql`` belum mendefinisikannya (pola sama dengan
-``backfill_index_eod.py``), jadi deploy baru tidak mati di insert pertama.
+sendiri (deploy baru tidak mati di insert pertama). ``sql/schema.sql`` kini juga
+mendefinisikannya, jadi DB yang dibangun dari file itu sudah punya index-nya.
 
 Bar yang ``Open``/``High``/``Low``/``Close``-nya kosong, NaN, atau tak positif
 dibuang dan dihitung; kolom numeric Postgres tidak boleh menerima NaN.
@@ -132,9 +132,10 @@ def backfill(start: date, end: date) -> int:
 
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         # 0) Pastikan unique index (code, date) ada sebelum insert dengan
-        #    "on conflict" — sql/schema.sql belum mendefinisikannya, jadi deploy
-        #    baru akan mati di insert pertama tanpa baris ini. Pola sama dengan
-        #    backfill_index_eod.py:72 / backfill_index_eod_idx.py:146.
+        #    "on conflict". sql/schema.sql sekarang mendefinisikannya juga, tapi
+        #    DB yang belum menjalankan file itu (atau versi lamanya) tetap perlu
+        #    baris ini. Pola sama dengan backfill_index_eod.py:72 /
+        #    backfill_index_eod_idx.py:146.
         cur.execute(
             """create unique index if not exists ux_index_summary_daily_code_date
                on index_summary_daily(code, date)"""

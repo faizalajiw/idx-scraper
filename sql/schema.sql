@@ -58,10 +58,12 @@ create table if not exists index_summary_daily (
   captured_at timestamp with time zone not null default now()
 );
 create index if not exists idx_index_summary_daily_date on index_summary_daily(date desc);
--- Satu baris per (code, date): unique index inilah yang dibutuhkan
--- `on conflict (code, date)` di scripts/backfill_index_eod.py,
--- backfill_index_eod_idx.py, dan backfill_index_history_yahoo.py. Tidak dibuat
--- oleh kode mana pun — tanpa baris ini upsert indeks gagal di DB baru.
+-- Target `on conflict (code, date)` di index_summary_daily untuk tiap skrip
+-- backfill indeks: scripts/backfill_index_eod.py, backfill_index_eod_idx.py, dan
+-- backfill_index_history_yahoo.py. Ketiganya juga membuat index ini sendiri saat
+-- jalan (masing-masing baris 71, 145, 138), jadi tidak ada jalur runtime yang
+-- bergantung pada baris di bawah — fungsinya paritas file skema ↔ DB hidup,
+-- supaya `psql -f sql/schema.sql` menghasilkan bentuk yang sama.
 create unique index if not exists ux_index_summary_daily_code_date on index_summary_daily(code, date);
 
 -- Table: stock_summary_daily (EOD data per stock)
