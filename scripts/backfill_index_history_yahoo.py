@@ -11,6 +11,16 @@ Bedanya dengan dua skrip index yang sudah ada:
   TIDAK menyentuh ``index_quotes``. Baris yang sudah ada tidak ditimpa
   (``on conflict do nothing``), jadi nilai resmi IDX tetap menang.
 
+Unique index ``(code, date)`` yang dibutuhkan ``on conflict`` dibuat skrip ini
+sendiri — ``sql/schema.sql`` belum mendefinisikannya (pola sama dengan
+``backfill_index_eod.py``), jadi deploy baru tidak mati di insert pertama.
+
+Bar yang ``Open``/``High``/``Low``/``Close``-nya kosong, NaN, atau tak positif
+dibuang dan dihitung; kolom numeric Postgres tidak boleh menerima NaN.
+
+Jendela yang tidak menghasilkan satu bar pun dianggap GAGAL (permintaan putus
+atau rentang tanpa sesi): dilaporkan eksplisit dan keluar non-nol, tidak diam.
+
 Provenance: baris yang diisi di sini berasal dari Yahoo ^JKSE — selisih
 beberapa poin dari close resmi IDX (tabel tidak punya kolom source), dan
 volume/value sengaja dibiarkan NULL (angka volume Yahoo bukan volume bursa).
@@ -28,8 +38,10 @@ Jalankan (dari idx-scraper/; .env memuat DATABASE_URL):
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import pathlib
+import sys
 from datetime import date, datetime, time, timedelta, timezone
 
 import psycopg
@@ -48,37 +60,85 @@ def _load_env() -> None:
         dotenv.load_dotenv(str(env_path), override=False)
 
 
-def _yahoo_daily(start: date, end: date) -> dict[date, dict[str, float]]:
-    """Bar harian ^JKSE -> {tanggal: {open, high, low, close}}."""
+def _angka_positif(v) -> float | None:
+    """``float(v)`` bila angka positif & finit; selain itu ``None``.
+
+    Menangkap NaN/inf (``math.isfinite``), teks, dan nilai kosong supaya tidak
+    ada yang lolos ke kolom ``numeric`` Postgres.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) and f > 0 else None
+
+
+def _tanggal(v) -> date:
+    """Index Yahoo biasanya Timestamp; kalau bukan, tetap harus jadi ``date``."""
+    return v.date() if hasattr(v, "date") else v
+
+
+def _baris_valid(iterasi) -> tuple[dict[date, dict[str, float]], int]:
+    """Saring bar mentah ``(tanggal, mapping)`` -> (bars valid, jumlah dilewati).
+
+    Baris dengan ``Open``/``High``/``Low``/``Close`` kosong, NaN, bukan angka,
+    atau tak positif dibuang: bar separuh (mis. ``High`` NaN) merusak seri
+    harian dan NaN tidak boleh masuk kolom numeric. Murni — diuji in-memory.
+    """
+    bars: dict[date, dict[str, float]] = {}
+    dilewati = 0
+    for ts, row in iterasi:
+        o = _angka_positif(row.get("Open"))
+        h = _angka_positif(row.get("High"))
+        lo = _angka_positif(row.get("Low"))
+        c = _angka_positif(row.get("Close"))
+        if o is None or h is None or lo is None or c is None:
+            dilewati += 1
+            continue
+        bars[_tanggal(ts)] = {"open": o, "high": h, "low": lo, "close": c}
+    return bars, dilewati
+
+
+def _yahoo_daily(start: date, end: date) -> tuple[dict[date, dict[str, float]], int]:
+    """Bar harian ^JKSE -> ({tanggal: {open, high, low, close}}, jumlah dilewati)."""
     df = yf.Ticker(YF_TICKER).history(
         start=(start - timedelta(days=14)).isoformat(),
         end=(end + timedelta(days=7)).isoformat(),
         auto_adjust=False,
     )
-    df = df.dropna(how="all")
-    bars: dict[date, dict[str, float]] = {}
-    for ts, row in df.iterrows():
-        close = row.get("Close")
-        if close is None or close != close or float(close) <= 0:
-            continue
-        bars[ts.date()] = {
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(close),
-        }
-    return bars
+    if df is None or df.empty:
+        return {}, 0
+    return _baris_valid(df.dropna(how="all").iterrows())
 
 
-def backfill(start: date, end: date) -> None:
+def backfill(start: date, end: date) -> int:
+    """Isi satu rentang dari Yahoo. Exit code: 0 bila ada bar tertulis, 1 bila gagal."""
     dsn = os.environ["DATABASE_URL"]
-    bars = _yahoo_daily(start, end)
+    try:
+        bars, dilewati = _yahoo_daily(start, end)
+    except Exception as exc:
+        print(f"[idx] GAGAL: permintaan Yahoo error: {exc!r}", file=sys.stderr)
+        return 1
+
+    print(f"[idx] yahoo {YF_TICKER}: {len(bars)} bar valid, {dilewati} dilewati")
     if not bars:
-        print("[idx] tidak ada bar dari Yahoo — tidak ada yang ditulis.")
-        return
-    print(f"[idx] yahoo {YF_TICKER}: {len(bars)} bar ({min(bars)} .. {max(bars)})")
+        print(
+            f"[idx] GAGAL: Yahoo tidak mengembalikan bar untuk {start} .. {end} — "
+            "permintaan putus atau rentang benar-benar tanpa sesi. Tidak ada yang ditulis.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[idx] bar {min(bars)} .. {max(bars)}")
 
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        # 0) Pastikan unique index (code, date) ada sebelum insert dengan
+        #    "on conflict" — sql/schema.sql belum mendefinisikannya, jadi deploy
+        #    baru akan mati di insert pertama tanpa baris ini. Pola sama dengan
+        #    backfill_index_eod.py:72 / backfill_index_eod_idx.py:146.
+        cur.execute(
+            """create unique index if not exists ux_index_summary_daily_code_date
+               on index_summary_daily(code, date)"""
+        )
         cur.execute("select date from index_summary_daily where code = 'COMPOSITE'")
         sudah = {r[0] for r in cur.fetchall()}
 
@@ -124,15 +184,17 @@ def backfill(start: date, end: date) -> None:
         lo, hi, n = cur.fetchone()
         print(f"[idx] index_summary_daily COMPOSITE: {lo} .. {hi} ({n} sesi)")
 
+    return 0
 
-def main() -> None:
+
+def main() -> int:
     _load_env()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--start-date", required=True, type=date.fromisoformat, help="YYYY-MM-DD")
     ap.add_argument("--end-date", required=True, type=date.fromisoformat, help="YYYY-MM-DD")
     args = ap.parse_args()
-    backfill(args.start_date, args.end_date)
+    return backfill(args.start_date, args.end_date)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
