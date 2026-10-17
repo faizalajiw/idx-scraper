@@ -123,19 +123,34 @@ def upsert(conn: psycopg.Connection, items: list[dict[str, Any]]) -> int:
 
 RETENTION_DAYS = 7
 
+
+def retention_cutoff(now: datetime | None = None) -> datetime:
+    """Batas retensi: item dengan `published_at` lebih tua dari ini tidak disimpan."""
+    return (now or datetime.now(UTC)) - timedelta(days=RETENTION_DAYS)
+
+
 def prune(conn: psycopg.Connection, days: int = RETENTION_DAYS, now: datetime | None = None) -> int:
     """Hapus berita yang `published_at`-nya lebih dari `days` hari yang lalu."""
     cutoff = (now or datetime.now(UTC)) - timedelta(days=days)
     cur = conn.execute("delete from news_items where published_at < %s", (cutoff,))
     return cur.rowcount
 
-def run_once() -> int:
-    """Scrape Snips, simpan, buang berita >7 hari, return jumlah item baru."""
-    items = fetch_snips()
+
+def run_once(now: datetime | None = None) -> int:
+    """Scrape Snips, simpan, buang berita >7 hari, return jumlah item baru.
+
+    Item yang sudah lewat masa retensi disaring sebelum INSERT. Tanpa saringan
+    itu `upsert` menulis barisnya lalu `prune` menghapusnya di transaksi yang
+    sama, sehingga tiap run mengulang siklus INSERT + DELETE untuk baris yang
+    sama tanpa pernah tersimpan, dan hitungan "item baru" jadi menyesatkan.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = retention_cutoff(now)
+    items = [it for it in fetch_snips() if it["published_at"] >= cutoff]
     with psycopg.connect(_dsn(), autocommit=False, connect_timeout=10) as conn:
         ensure_table(conn)
         new = upsert(conn, items)
-        prune(conn)
+        prune(conn, now=now)
         conn.commit()
     return new
 
