@@ -130,6 +130,40 @@ _REJECT_REASON = (
 )
 
 
+def ambil_hari(
+    client,
+    date_str: str,
+    backoff=BLOCK_BACKOFF,
+    tidur=time.sleep,
+) -> tuple[list | None, object]:
+    """Ambil satu tanggal dengan backoff berjenjang; kembalikan (rows, status).
+
+    ``tidur`` disuntik agar tes tidak menunggu 120 s; ``backoff`` boleh diganti tes.
+    Status dikosongkan sebelum tiap percobaan: exception transport yang ditelan
+    ``client._get_json`` mengembalikan ``[]`` tanpa memperbarui ``last_status``,
+    sehingga status basi dari hari sukses sebelumnya tak boleh lolos sebagai
+    "libur" (gagal transport ≠ libur bursa).
+    """
+    rows: list | None = None
+    status: object = None
+    for jeda in backoff:
+        if jeda:
+            print(f"  [{date_str}] status {status} -> tunggu {jeda}s", flush=True)
+            tidur(jeda)
+        client.session.last_status = None
+        try:
+            rows = client.fetch_stock_summary(date_str)
+            status = getattr(client.session, "last_status", None)
+        except Exception as exc:
+            rows, status = None, f"EXC:{type(exc).__name__}"
+            print(f"  [{date_str}] exception: {exc!r}", flush=True)
+        # Berhenti hanya saat data ada atau IDX jelas menjawab 200 (libur). 503
+        # sesaat di dalam jendela retensi (~4-10% request) masih diulang.
+        if rows or status == 200:
+            break
+    return rows, status
+
+
 def backfill(
     years: float | None = None,
     start_date: date | None = None,
@@ -183,21 +217,7 @@ def backfill(
 
             # Percobaan beruntun dengan backoff berjenjang; perkirakan status transport
             # alih-alih mengira respons kosong sebagai hari libur.
-            rows: list | None = None
-            status: object = None
-            for backoff in BLOCK_BACKOFF:
-                if backoff:
-                    print(f"  [{date_str}] status {status} -> tunggu {backoff}s", flush=True)
-                    time.sleep(backoff)
-                try:
-                    rows = client.fetch_stock_summary(date_str)
-                    status = getattr(client.session, "last_status", None)
-                except Exception as exc:
-                    rows, status = None, f"EXC:{type(exc).__name__}"
-                    print(f"  [{date_str}] exception: {exc!r}", flush=True)
-                # 200 = ada data / libur bursa, 503 = di luar jendela retensi IDX.
-                if rows or status in (200, 503):
-                    break
+            rows, status = ambil_hari(client, date_str)
 
             ember = klasifikasi(rows, status)
             if ember == "diblokir":
