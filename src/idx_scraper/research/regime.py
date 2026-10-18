@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 import psycopg
 
-from ..analysis import IDX_TRADING_DAYS, calculate_adx, classify_regime
+from ..analysis import ADX_TREND, IDX_TRADING_DAYS, calculate_adx, classify_regime
 
 _DDL = """
 create table if not exists research.regime_daily (
@@ -164,4 +164,50 @@ def summary(dsn: str) -> dict[str, Any]:
         "transitions": transitions,
         "avg_adx": round(sum(adxs) / len(adxs), 1) if adxs else None,
         "trading_days_per_year": IDX_TRADING_DAYS,
+    }
+
+
+#: Rezim yang SECARA EKSPLISIT menolak masuk (spec 6.5 + keputusan pemilik Q5).
+#: Hanya tren turun yang terkonfirmasi ADX; TRANSITION/RANGING/None tidak
+#: pernah memblokir, dan VOLATILE cuma ditandai (plafon ukuran = lapis 3).
+REJECTING_REGIMES: tuple[str, ...] = ("TRENDING_DOWN",)
+
+
+def gate(
+    regime: str | None,
+    adx: float | None,
+    vol_state: str | None = None,
+    *,
+    regime_fresh: bool = True,
+) -> dict[str, Any]:
+    """Gerbang rezim: boleh menolak, tapi tak boleh membisukan layar tanpa sebab.
+
+    Aturan (spec 6.5 + keputusan pemilik Q5): halaman papan hanya diam saat
+    rezim **eksplisit menolak** - tren turun yang terkonfirmasi ADX - dan
+    alasannya disebut di layar. Rezim basi tidak pernah memblokir (spec D1:
+    bagian berindeks membawa penandanya sendiri lewat ``regime_fresh``).
+    """
+    adx_ok = adx is not None and adx >= ADX_TREND
+    blocked = bool(regime_fresh and regime in REJECTING_REGIMES and adx_ok)
+    if blocked:
+        reason = f"rezim menolak: tren turun terkonfirmasi (ADX {adx:.1f}) - tahan posisi baru"
+    elif not regime_fresh and (regime is not None or adx is not None):
+        reason = (
+            "rezim basi: sesi indeks terakhir lebih lama dari sesi yang diharapkan"
+            " - layar tidak dibisukan"
+        )
+    elif not regime_fresh:
+        reason = "rezim belum terbaca: belum ada data indeks - layar tidak dibisukan"
+    elif regime in REJECTING_REGIMES:
+        reason = "arah turun, tapi ADX belum mengonfirmasi tren - layar tidak dibisukan"
+    else:
+        reason = f"rezim {regime or 'tidak terbaca'} tidak menolak - layar terbuka"
+    return {
+        "blocked": blocked,
+        "reason": reason,
+        "regime": regime,
+        "adx": adx,
+        "vol_state": vol_state,
+        "volatile": vol_state == "VOLATILE",
+        "regime_fresh": bool(regime_fresh),
     }

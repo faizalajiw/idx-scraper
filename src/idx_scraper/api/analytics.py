@@ -26,7 +26,8 @@ from ..analysis import (
     generate_signal,
     signal_series,
 )
-from ..freshness import withhold
+from ..freshness import expected_session, withhold
+from ..research.regime import gate
 from .database import get_cursor
 from .sector_map import FALLBACK_SECTOR, sector_for
 
@@ -102,8 +103,14 @@ def get_market_regime() -> dict[str, Any]:
         )
 
     if df.empty:
-        return {"regime": None, "source": None, "as_of": None,
-                "generated_at": datetime.now(WIB).isoformat(timespec="seconds")}
+        out: dict[str, Any] = {
+            "regime": None,
+            "source": None,
+            "as_of": None,
+            "generated_at": datetime.now(WIB).isoformat(timespec="seconds"),
+        }
+        out["gate"] = _gate_for(out, datetime.now(WIB))
+        return out
 
     adx_df = calculate_adx(df)
     out = classify_regime(adx_df)
@@ -116,7 +123,24 @@ def get_market_regime() -> dict[str, Any]:
         if out["regime"] == "TRENDING_UP"
         else "down" if out["regime"] == "TRENDING_DOWN" else None
     )
+    out["gate"] = _gate_for(out, datetime.now(WIB))
     return out
+
+
+def _gate_for(regime: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Gerbang rezim untuk banner: sesi indeks basi tidak pernah memblokir (D1).
+
+    Dipisah dari `get_market_regime` supaya aturannya bisa diuji tanpa DB
+    dan tanpa jam palsu.
+    """
+    as_of = regime.get("as_of")
+    expected = expected_session(now).isoformat()
+    return gate(
+        regime.get("regime"),
+        regime.get("adx"),
+        regime.get("vol_state"),
+        regime_fresh=bool(as_of) and as_of >= expected,
+    )
 
 
 def _f(v: Any) -> float | None:

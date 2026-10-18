@@ -796,6 +796,24 @@ class SectorRotation(BaseModel):
 
 
 
+class RegimeGate(BaseModel):
+    """Gerbang rezim (spec 6.5): boleh menolak, tak boleh membisukan tanpa sebab.
+
+    ``blocked`` True = papan kandidat menahan tawaran baru dan menyebut
+    ``reason`` di layar. ``volatile`` cuma penanda (plafon ukuran posisi
+    urusan lapis 3). ``regime_fresh`` False selalu berarti tidak memblokir:
+    rezim basi menandai dirinya sendiri, bukan membisukan halaman (spec D1).
+    """
+
+    blocked: bool
+    reason: str
+    regime: str | None = None
+    adx: float | None = None
+    vol_state: str | None = None
+    volatile: bool = False
+    regime_fresh: bool = True
+
+
 class MarketRegime(BaseModel):
     """Regime IHSG + volatilitas ter-annualisasi untuk banner konteks."""
 
@@ -809,6 +827,7 @@ class MarketRegime(BaseModel):
     as_of: str | None = None
     dir_hint: str | None = None
     generated_at: str | None = None
+    gate: RegimeGate | None = None
 
 
 
