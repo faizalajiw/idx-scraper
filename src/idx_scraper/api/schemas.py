@@ -637,13 +637,45 @@ class RankBasis(BaseModel):
     values: list[Any] = []
 
 
+class PositionPlanCaps(BaseModel):
+    """Plafon yang berlaku untuk satu nama, dalam % modal (spec P5 5.1)."""
+
+    per_name: float | None = None
+    liquidity: float | None = None
+    regime: float | None = None
+    portfolio: float | None = None
+
+
+class PositionPlan(BaseModel):
+    """Rencana posisi lapis 3: persen, rupiah, lot, dan rugi kalau stop kena.
+
+    Dihitung SESUDAH cache papan, dari empat angka keadaan yang diketik pemilik
+    (modal, risiko per transaksi, posisi terbuka, eksposur) - jadi papan yang
+    di-cache tidak pernah dipecah per ukuran modal. ``pct`` = angka final yang
+    berlaku; ``caps`` = tiap plafon sebelum dipilih yang terkecil;
+    ``binding_cap`` = plafon yang benar-benar memotong (None = tidak ada).
+    """
+
+    pct: float | None = None
+    pct_raw: float | None = None
+    binding_cap: str | None = None
+    caps: PositionPlanCaps | None = None
+    concurrent_risk_pct: float | None = None
+    rupiah: float | None = None
+    lots: int | None = None
+    risk_rupiah: float | None = None
+    note: str | None = None
+
+
 class RecommendationRow(BaseModel):
     """Satu kandidat beli: skor + grade + level eksekusi + alasan.
 
     Level (``entry_*``/``stop``/``target``) selalu terisi untuk kandidat yang
     masuk papan — tanpa level pembatalan yang bisa dihitung, kandidat tidak
     ditampilkan. ``position_pct`` = ukuran posisi sederhana (% modal) dari
-    risiko 1% per posisi.
+    risiko 1% per posisi. ``plan`` = rencana posisi lapis 3 (rupiah, lot, rugi,
+    plafon) yang menghormati angka modal pemilik; None = tanpa modal atau baris
+    ini ditahan.
 
     ``grade`` = **peringkat relatif pool hari itu** (C 25% · B 10% · A 2%
     teratas), bukan probabilitas dan bukan ambang skor absolut.
@@ -676,6 +708,8 @@ class RecommendationRow(BaseModel):
     horizon_days: int | None = None
     confidence: str | None = None  # tinggi | sedang | lemah (bila ada pola)
     position_pct: float | None = None
+    # Rencana posisi (lapis 3). None = tidak ada modal, atau baris ini ditahan.
+    plan: PositionPlan | None = None
     patterns: list[str] = []
     reasons: list[str] = []
     warnings: list[str] = []

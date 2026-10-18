@@ -382,6 +382,10 @@ def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
 def recommendations(
     limit: int = Query(default=20, ge=1, le=100, description="Jumlah kandidat yang ditampilkan"),
     min_grade: str = Query(default="C", pattern="^[ABCabc]$", description="Grade terendah yang ditampilkan"),
+    modal: float | None = Query(default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"),
+    risk_pct: float | None = Query(default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"),
+    open_positions: int | None = Query(default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"),
+    exposure_pct: float | None = Query(default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"),
 ) -> dict:
     """Papan kandidat beli se-pasar: skor, grade, dan level eksekusi per emiten.
 
@@ -389,7 +393,14 @@ def recommendations(
     belum, keduanya tidak menggerakkan skor dan statusnya disebut di ``layers``.
     Alat bantu riset, bukan rekomendasi keuangan.
     """
-    return analytics.get_recommendations(limit=limit, min_grade=min_grade.upper())
+    return analytics.get_recommendations(
+        limit=limit,
+        min_grade=min_grade.upper(),
+        modal=modal,
+        risk_pct=risk_pct,
+        open_positions=open_positions,
+        exposure_pct=exposure_pct,
+    )
 
 
 @app.get("/api/recommendations/track", response_model=RecommendationTrack)
@@ -399,9 +410,21 @@ def recommendations_track() -> dict:
 
 
 @app.get("/api/stocks/{code}/recommendation", response_model=StockRecommendation)
-def stock_recommendation(code: str) -> dict:
+def stock_recommendation(
+    code: str,
+    modal: float | None = Query(default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"),
+    risk_pct: float | None = Query(default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"),
+    open_positions: int | None = Query(default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"),
+    exposure_pct: float | None = Query(default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"),
+) -> dict:
     """Kandidat beli satu emiten (skor & level memakai mesin yang sama dengan papan)."""
-    return analytics.get_stock_recommendation(code.upper())
+    return analytics.get_stock_recommendation(
+        code.upper(),
+        modal=modal,
+        risk_pct=risk_pct,
+        open_positions=open_positions,
+        exposure_pct=exposure_pct,
+    )
 
 
 @app.get("/api/stocks/{code}/decision", response_model=StockDecision)
