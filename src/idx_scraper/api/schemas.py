@@ -1423,3 +1423,23 @@ class DataHealth(BaseModel):
     field_coverage: CoverageCheck
     row_counts: RowCountCheck
     session_gaps: SessionGapsCheck
+
+
+class Freshness(BaseModel):
+    """Tiga status kesegaran (spec D1) — "angka ini masih bisa dipercaya?".
+
+    ``withhold`` True = permukaan wajib menahan verdict yang lahir dari data
+    ini (hanya angka, tanggal, dan ``reason`` yang boleh tampil).
+    ``index_status`` adalah penanda terpisah untuk bagian berindeks (mis. kartu
+    rezim): ia tidak pernah mengubah ``status`` halaman.
+    """
+
+    status: str
+    withhold: bool
+    reason: str
+    panel_latest: str | None = None
+    index_latest: str | None = None
+    index_status: str
+    expected: str | None = None
+    checked_at: str
+    basis: str = "panel"

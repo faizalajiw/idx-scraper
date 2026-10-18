@@ -8,7 +8,9 @@ from idx_scraper.freshness import (
     BASI,
     SEGAR,
     TAK_DIKETAHUI,
+    current,
     expected_session,
+    format_message,
     verdict,
 )
 from idx_scraper.health import WIB
@@ -54,3 +56,36 @@ def test_sesi_hari_ini_wajib_setelah_jam_batas():
 def test_akhir_pekan_mundur_ke_jumat():
     now = datetime(2026, 10, 18, 9, 0, tzinfo=WIB)  # Minggu
     assert expected_session(now, holidays=set()).isoformat() == "2026-10-16"
+
+
+class _Cur:
+    """Cursor palsu: fetchone mengembalikan nilai berikutnya, berurutan."""
+
+    def __init__(self, values):
+        self._values = list(values)
+        self.queries: list[str] = []
+
+    def execute(self, sql, params=None):
+        self.queries.append(sql)
+
+    def fetchone(self):
+        return {"d": self._values.pop(0)}
+
+
+def test_current_memakai_basis_panel_untuk_verdict():
+    cur = _Cur(["2026-10-16", "2026-10-09"])  # panel segar, indeks tertinggal
+    out = current(cur, now=datetime(2026, 10, 18, 9, 0, tzinfo=WIB))
+    assert out["status"] == SEGAR and out["index_status"] == BASI
+    assert out["expected"] == "2026-10-16"
+
+
+def test_current_menanyakan_dua_basis_yang_berbeda():
+    cur = _Cur(["2026-10-16", "2026-10-16"])
+    current(cur, now=datetime(2026, 10, 18, 9, 0, tzinfo=WIB))
+    assert any("latest_pit" in q for q in cur.queries)
+    assert any("index_quotes" in q for q in cur.queries)
+
+
+def test_pesan_kesegaran_menyebut_tanggal_dan_alasan():
+    v = verdict("2026-10-14", "2026-10-16")
+    assert "2026-10-14" in format_message(v) and "2026-10-16" in format_message(v)

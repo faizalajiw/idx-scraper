@@ -20,10 +20,11 @@ tidak, setiap pagi bursa seluruh papan akan terbaca "basi" tanpa sebab.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from .health import EOD_DEADLINE_HOUR, expected_trading_date
+from .health import EOD_DEADLINE_HOUR, WIB, expected_trading_date, parse_holidays
 
 SEGAR = "segar"
 BASI = "basi"
@@ -81,3 +82,46 @@ def verdict(
         "index_latest": index_latest,
         "index_status": _status(index_latest, expected),
     }
+
+
+def _iso(row: Any) -> str | None:
+    """Nilai `max(...) as d` (date/None) jadi teks ISO."""
+    value = row["d"] if row else None
+    return str(value) if value else None
+
+
+def session_bases(cur: Any) -> tuple[str | None, str | None]:
+    """Sesi terakhir dua basis: panel saham dan indeks (``COMPOSITE``).
+
+    Query-nya sengaja sama dengan yang dipakai `idx health` /
+    `api.services.get_data_health` supaya tidak pernah ada dua definisi
+    kesegaran di repo ini.
+    """
+    cur.execute("select max(trade_date) as d from research.latest_pit")
+    panel = cur.fetchone()
+    cur.execute(
+        "select max((captured_at at time zone 'Asia/Jakarta')::date) as d "
+        "from index_quotes where code = 'COMPOSITE' "
+        "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16"
+    )
+    return _iso(panel), _iso(cur.fetchone())
+
+
+def current(cur: Any, *, now: datetime | None = None) -> dict[str, Any]:
+    """Status kesegaran saat ini untuk satu cursor (tanpa I/O sendiri).
+
+    Cursor wajib: pembungkus DB-nya hidup di `api.services.get_freshness`,
+    supaya modul ini tetap murni dan tak bergantung pada lapisan api.
+    """
+    moment = now or datetime.now(WIB)
+    panel_latest, index_latest = session_bases(cur)
+    expected = expected_session(moment, parse_holidays()).isoformat()
+    out = verdict(panel_latest, expected, index_latest=index_latest)
+    out["checked_at"] = moment.isoformat(timespec="seconds")
+    out["basis"] = "panel"
+    return out
+
+
+def format_message(f: Mapping[str, Any]) -> str:
+    """Satu kalimat untuk Telegram/log: status + sebabnya (spec D1)."""
+    return f"Kesegaran: {f['status']} — {f['reason']}."
