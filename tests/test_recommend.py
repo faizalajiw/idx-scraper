@@ -34,6 +34,7 @@ from idx_scraper.research.recommend import (
     score_components,
     smart_money_evidence,
     tier_sizes,
+    validated_horizons,
 )
 
 
@@ -455,3 +456,11 @@ def test_assign_grades_membawa_persentil_basis_dan_keyakinan():
     assert out[0]["percentile"] == 100.0
     assert out[0]["rank_basis"]["order"][0] == "skor"
     assert out[0]["score_confidence"] in ("meyakinkan", "belum terbukti")
+
+
+def test_label_keyakinan_memakai_horizon_default_bila_kandidat_tidak_membawanya():
+    """N1 (review): satu fallback untuk field yang sama, bukan 0 di sini dan 21 di sana."""
+    assert DEFAULT_HORIZON in validated_horizons(), "dasar tes: horizon default harus teruji"
+    out = assign_grades([{"code": "AAAA", "score": 52.0, "rr": 2.0, "metrics": {"value": 1.0e9}}])
+    assert out[0]["score_confidence"] == confidence_label(52.0, DEFAULT_HORIZON)
+    assert out[0]["score_confidence"] == "meyakinkan"

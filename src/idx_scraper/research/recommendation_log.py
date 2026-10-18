@@ -399,8 +399,14 @@ def build_records(
     """
     if metrics.empty:
         return []
+    from .pool import PoolIndex
+
     cutoff = pd.Timestamp(datetime.now(WIB).date() - timedelta(days=int(months * 31)))
     dates = sorted(d for d in metrics["date"].unique() if pd.Timestamp(d) >= cutoff)
+    # Ambang kolam per sesi, jadi satu PoolIndex untuk seluruh jendela: mengisi
+    # ulang ambang per tanggal membakar ~2,5 menit CPU untuk 126 tanggal dan
+    # tidak mengubah satu pun anggotanya (review P1).
+    index = PoolIndex(metrics, quarantined=quarantined)
     records: list[dict[str, Any]] = []
     for d in dates:
         for c in candidates_for_date(
@@ -412,6 +418,7 @@ def build_records(
             broker_adj_by_code=broker_adj_by_code,
             broker_validated=broker_validated,
             horizon=horizon,
+            pool=index.members(d),
             quarantined=quarantined,
         ):
             records.append(_to_log_row(c, pd.Timestamp(d)))

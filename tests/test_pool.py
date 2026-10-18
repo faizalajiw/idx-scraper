@@ -6,8 +6,10 @@ import pandas as pd
 
 from idx_scraper.research.pool import (
     MIN_DAY_VALUE,
+    PoolIndex,
     pool_members,
     thick_flags,
+    value_threshold_for,
     value_thresholds,
 )
 
@@ -125,3 +127,93 @@ def test_kolam_memakai_satu_daftar_untuk_semua_grade():
     only_a = candidates_for_date(m, pd.Timestamp(_DATE), pool={"AAAA"})
     assert [c["code"] for c in only_a] == ["AAAA"]
     assert only_a[0]["grade"] is not None
+
+
+# --------------------------------------------------- kolam sekali hitung (P1 review)
+
+
+def _lima_sesi():
+    """Lima sesi bursa berturut-turut - fixture bersama tes kolam berjendela."""
+    return list(pd.date_range("2026-09-25", periods=5, freq="B"))
+
+
+def test_ambang_satu_sesi_sama_dengan_yang_dihitung_lintas_sesi():
+    """Satu aturan: ambang satu sesi tidak punya definisi kedua."""
+    dates = _lima_sesi()
+    m = _frame(
+        [{"code": f"C{i:03d}", "date": d, "value": float(i) + j} for j, d in enumerate(dates) for i in range(100)]
+    )
+    per_sesi = value_thresholds(m)
+    stamped = pd.to_datetime(m["date"])
+    for d in dates:
+        assert value_threshold_for(m.loc[stamped == pd.Timestamp(d), "value"]) == per_sesi[pd.Timestamp(d)]
+
+
+def test_index_kolam_sama_dengan_kolam_satu_tanggal():
+    """PoolIndex harus jadi jalur yang sama, bukan definisi kedua."""
+    dates = _lima_sesi()
+    m = _frame(
+        [{"code": "TEBAL", "date": d, "value": 9.0e8} for d in dates]
+        + [{"code": "TIPIS", "date": d, "value": 1.0e8} for d in dates]
+        + [{"code": "JUAL", "date": d, "value": 9.0e8, "signal": "SELL"} for d in dates]
+    )
+    index = PoolIndex(m, quarantined={"TIPIS"})
+    assert index.members(dates[-1]) == {"TEBAL"}
+    for d in dates:
+        assert index.members(d) == pool_members(m, pd.Timestamp(d), quarantined={"TIPIS"})
+
+
+def test_ambang_sesi_dihitung_sekali_untuk_banyak_tanggal(monkeypatch):
+    """P1 (review): biaya ambang per sesi dibayar sekali, bukan per tanggal."""
+    from idx_scraper.research import pool as pool_module
+
+    dates = _lima_sesi()
+    m = _frame([{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)])
+    calls: list[int] = []
+    asli = pool_module.value_threshold_for
+
+    def dihitung(values):
+        calls.append(1)
+        return asli(values)
+
+    monkeypatch.setattr(pool_module, "value_threshold_for", dihitung)
+    index = PoolIndex(m)
+    index.members(dates[-1])
+    per_sesi = len(calls)
+    index.members(dates[-1])  # tanggal yang sama: nol kerja ulang
+    index.members(dates[-2])  # jendela tumpang tindih: nol kerja ulang
+    assert per_sesi == len(dates)
+    assert len(calls) == per_sesi
+
+
+def test_build_records_tidak_menghitung_ambang_per_tanggal(monkeypatch):
+    """Job jurnal (P1 review): ambang sesi dibayar sekali untuk seluruh jendela."""
+    from idx_scraper.research import pool as pool_module
+    from idx_scraper.research.recommendation_log import build_records
+
+    dates = list(pd.date_range("2026-09-25", periods=6, freq="B"))
+    m = _frame([{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)])
+    calls: list[int] = []
+    asli = pool_module.value_threshold_for
+
+    def dihitung(values):
+        calls.append(1)
+        return asli(values)
+
+    monkeypatch.setattr(pool_module, "value_threshold_for", dihitung)
+    build_records(m, months=6)
+    assert calls, "kolam jurnal tidak dihitung sama sekali"
+    assert len(calls) <= len(dates), f"ambang dihitung {len(calls)}x untuk {len(dates)} tanggal"
+
+
+def test_kolam_tidak_melihat_sesi_setelah_tanggal_target():
+    """Anti-look-ahead (N7 review): tebal SESUDAH target tidak boleh menolong."""
+    dates = _lima_sesi()
+    m = _frame(
+        [{"code": "TEBAL", "date": d, "value": 9.0e8} for d in dates]
+        + [{"code": "BELAKANGAN", "date": d, "value": 1.0e8} for d in dates[:2]]
+        + [{"code": "BELAKANGAN", "date": d, "value": 9.0e8} for d in dates[2:]]
+    )
+    index = PoolIndex(m)
+    assert "BELAKANGAN" not in index.members(dates[1])
+    assert "BELAKANGAN" in index.members(dates[-1])

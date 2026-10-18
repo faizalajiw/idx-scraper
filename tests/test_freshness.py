@@ -13,6 +13,7 @@ from idx_scraper.freshness import (
     current,
     expected_session,
     format_message,
+    session_bases,
     verdict,
     withhold,
 )
@@ -170,7 +171,23 @@ def test_penahanan_diterapkan_sesudah_cache_dibaca(monkeypatch):
     """Cache 30 menit tidak boleh mengunci status segar/basi (Review Focus 5)."""
     from idx_scraper.api import analytics
 
-    ctx = {
+    cache = _patch_board(monkeypatch, freshness=lambda: verdict("2026-10-14", "2026-10-16"))
+
+    out = analytics.get_recommendations()
+    assert out.get("withheld") is True
+    assert out["pool_size"] == 1  # kolam dari context diteruskan apa adanya
+    assert out["rows"] and all(r["grade"] is None for r in out["rows"])
+    assert all(r.get("withheld") is True for r in out["rows"])
+    # Yang tersimpan di cache tetap utuh: status berikutnya tak mewarisi penahanan.
+    assert "withheld" not in cache["recommendations:20:C"]["rows"][0]
+
+
+# --------------------------------------------------- gerbang rezim di papan (K1 review)
+
+
+def _analytics_ctx() -> dict:
+    """Context papan tanpa DB: satu baris metrik, satu anggota kolam."""
+    return {
         "metrics": _metrics_frame(),
         "histories": {},
         "factor_adj": {},
@@ -182,21 +199,99 @@ def test_penahanan_diterapkan_sesudah_cache_dibaca(monkeypatch):
         "pool": {"AAAA"},
         "quarantined": set(),
     }
+
+
+def _gerbang_menolak() -> dict:
+    return {
+        "blocked": True,
+        "reason": "rezim menolak: tren turun terkonfirmasi (ADX 40.0) - tahan posisi baru",
+        "regime": "TRENDING_DOWN",
+        "adx": 40.0,
+        "vol_state": "NORMAL",
+        "volatile": False,
+        "regime_fresh": True,
+    }
+
+
+def _patch_board(monkeypatch, *, gate: dict | None = None, freshness=None) -> dict:
+    """Papan tanpa DB: cache kosong, kesegaran & gerbang disuntik."""
+    from idx_scraper.api import analytics
+
     cache: dict = {}
-    monkeypatch.setattr(analytics, "_recommendation_context", lambda: ctx)
+    monkeypatch.setattr(analytics, "_recommendation_context", _analytics_ctx)
     monkeypatch.setattr(analytics, "_research_cache_get", lambda key: cache.get(key))
     monkeypatch.setattr(
         analytics, "_research_cache_put", lambda key, val, ttl=None: cache.__setitem__(key, val)
     )
     monkeypatch.setattr(
         "idx_scraper.api.services.get_freshness",
-        lambda: verdict("2026-10-14", "2026-10-16"),
+        freshness or (lambda: verdict("2026-10-16", "2026-10-16")),
     )
+    monkeypatch.setattr(analytics, "_regime_gate", lambda: gate)
+    return cache
 
+
+def test_papan_ditahan_saat_rezim_eksplisit_menolak(monkeypatch):
+    """K1 (review): gerbang yang bisa gagal harus benar-benar menahan tawarannya."""
+    from idx_scraper.api import analytics
+
+    _patch_board(monkeypatch, gate=_gerbang_menolak())
     out = analytics.get_recommendations()
-    assert out.get("withheld") is True
-    assert out["pool_size"] == 1  # kolam dari context diteruskan apa adanya
-    assert out["rows"] and all(r["grade"] is None for r in out["rows"])
+
+    assert out["gate"] and out["gate"]["blocked"] is True
+    assert out["rows"]
+    assert all(r["grade"] is None and r["position_pct"] is None for r in out["rows"])
     assert all(r.get("withheld") is True for r in out["rows"])
-    # Yang tersimpan di cache tetap utuh: status berikutnya tak mewarisi penahanan.
-    assert "withheld" not in cache["recommendations:20:C"]["rows"][0]
+    # Yang ditahan hanya tawarannya: angka, level, dan sebabnya tetap tampil.
+    assert all(r["score"] is not None and r["entry_ref"] is not None for r in out["rows"])
+
+
+def test_papan_terbuka_saat_rezim_basi(monkeypatch):
+    """Keputusan terkunci: rezim basi DITANDAI, tidak memblokir papan (spec D1/Q5)."""
+    from idx_scraper.api import analytics
+
+    gate = {**_gerbang_menolak(), "blocked": False, "regime_fresh": False, "reason": "rezim basi"}
+    _patch_board(monkeypatch, gate=gate)
+    out = analytics.get_recommendations()
+
+    assert out["gate"]["regime_fresh"] is False
+    assert out["rows"] and all(r["grade"] is not None for r in out["rows"])
+    assert not any(r.get("withheld") for r in out["rows"])
+
+
+def test_gerbang_tidak_terbaca_tidak_membisukan_papan(monkeypatch):
+    """Gagal baca rezim = fail-open + [warn], bukan papan yang mati tanpa sebab."""
+    from idx_scraper.api import analytics
+
+    _patch_board(monkeypatch, gate=None)
+    out = analytics.get_recommendations()
+
+    assert out["gate"] is None
+    assert out["rows"] and all(r["grade"] is not None for r in out["rows"])
+
+
+def test_emiten_ikut_ditahan_sesuai_gerbang(monkeypatch):
+    """K1 + N5 (review): jalur satu emiten memakai gerbang yang sama."""
+    from idx_scraper.api import analytics
+
+    _patch_board(monkeypatch, gate=_gerbang_menolak())
+    ditahan = analytics.get_stock_recommendation("AAAA")
+    assert ditahan["candidate"] is not None
+    assert ditahan["candidate"]["grade"] is None
+    assert ditahan["candidate"]["withheld"] is True
+    assert ditahan["gate"]["blocked"] is True
+
+    _patch_board(monkeypatch, gate={**_gerbang_menolak(), "blocked": False, "regime_fresh": False})
+    terbuka = analytics.get_stock_recommendation("AAAA")
+    assert terbuka["candidate"]["grade"] is not None
+    assert not terbuka["candidate"].get("withheld")
+
+
+def test_basis_indeks_adalah_union_summary_dan_quotes():
+    """P2 (review) + spec D1: basis indeks = index_summary_daily UNION index_quotes."""
+    cur = _Cur(["2026-10-16", "2026-10-16"])
+    panel, index_latest = session_bases(cur)
+    assert panel == "2026-10-16" and index_latest == "2026-10-16"
+    index_sql = [q for q in cur.queries if "index_" in q]
+    assert len(index_sql) == 1, "basis indeks harus satu query, bukan dua definisi"
+    assert "index_summary_daily" in index_sql[0] and "index_quotes" in index_sql[0]

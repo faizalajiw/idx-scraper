@@ -24,6 +24,7 @@ Grade A/B/C dihitung dari himpunan ini: **satu** kolam, bukan daftar terpisah
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
@@ -62,25 +63,31 @@ def _finite(value: Any) -> float | None:
     return out if math.isfinite(out) else None
 
 
-def value_thresholds(metrics: pd.DataFrame) -> dict[pd.Timestamp, float]:
-    """Ambang "tebal" per sesi: persentil-60 nilai lintas saham sesi itu.
+def value_threshold_for(values: Any) -> float:
+    """Ambang "tebal" SATU sesi dari nilai lintas sahamnya - satu aturannya.
 
     Sesi dengan kurang dari :data:`POOL_MIN_NAMES` nilai berhingga memakai
     ``MIN_DAY_VALUE`` (lantai absolut yang sama dengan sebelum P4) supaya kolam
     tidak mengosongkan papan hanya karena panelnya belum lebar.
+
+    Ambang bersifat lintas saham **per sesi**, jadi ia tidak berubah karena
+    tanggal yang ditanyakan berubah - inilah bagian yang boleh dihitung sekali
+    lalu dipakai berkali-kali (lihat :class:`PoolIndex`).
     """
+    finite = [_finite(v) for v in values]
+    finite = [v for v in finite if v is not None]
+    if len(finite) < POOL_MIN_NAMES:
+        return MIN_DAY_VALUE
+    return float(np.percentile(np.asarray(finite, dtype=float), THICK_VALUE_PERCENTILE))
+
+
+def value_thresholds(metrics: pd.DataFrame) -> dict[pd.Timestamp, float]:
+    """Ambang "tebal" per sesi: persentil-60 nilai lintas saham sesi itu."""
     out: dict[pd.Timestamp, float] = {}
     if metrics.empty:
         return out
     for date_value, group in metrics.groupby("date", sort=True):
-        values = [_finite(v) for v in group["value"]]
-        finite = [v for v in values if v is not None]
-        if len(finite) < POOL_MIN_NAMES:
-            out[pd.Timestamp(date_value)] = MIN_DAY_VALUE
-        else:
-            out[pd.Timestamp(date_value)] = float(
-                np.percentile(np.asarray(finite, dtype=float), THICK_VALUE_PERCENTILE)
-            )
+        out[pd.Timestamp(date_value)] = value_threshold_for(group["value"])
     return out
 
 
@@ -95,10 +102,77 @@ def thick_flags(metrics: pd.DataFrame) -> pd.Series:
     return (values >= per_row).fillna(False).astype(bool)
 
 
-def _window_of(metrics: pd.DataFrame, target: pd.Timestamp) -> list[pd.Timestamp]:
-    dates = pd.to_datetime(metrics["date"])
-    available = sorted(pd.Timestamp(d) for d in dates.unique() if pd.Timestamp(d) <= target)
-    return available[-THICK_WINDOW_SESSIONS:]
+def _window_of(sessions: list[pd.Timestamp], target: pd.Timestamp) -> list[pd.Timestamp]:
+    """``THICK_WINDOW_SESSIONS`` sesi terakhir yang <= ``target`` (point-in-time)."""
+    return [s for s in sessions if s <= target][-THICK_WINDOW_SESSIONS:]
+
+
+class PoolIndex:
+    """Satu panel kolam, disiapkan sekali, lalu ditanyai per tanggal.
+
+    Ambang "tebal" bersifat lintas saham **per sesi**: menanyakan 126 tanggal
+    tidak mengubah jawaban satu sesi pun. Menghitungnya per tanggal membuat
+    jurnal harian membayar ulang kerja yang sama berkali-kali (temuan review:
+    147 detik untuk 126 tanggal, hampir semuanya hitungan yang sama). Kelas ini
+    menghitung tiap sesi sekali dan mengingatnya - aturannya tidak berubah, ia
+    jalur yang sama dengan :func:`pool_members`.
+    """
+
+    __slots__ = ("_banned", "_dates", "_metrics", "_sessions", "_thick")
+
+    def __init__(self, metrics: pd.DataFrame, *, quarantined: set[str] | None = None) -> None:
+        self._metrics = metrics
+        self._banned = {str(c).upper() for c in (quarantined or ())}
+        self._thick: dict[pd.Timestamp, set[str]] = {}
+        if metrics.empty:
+            self._dates = pd.Series(dtype="datetime64[ns]")
+            self._sessions: list[pd.Timestamp] = []
+        else:
+            self._dates = pd.to_datetime(metrics["date"])
+            self._sessions = sorted(pd.Timestamp(d) for d in self._dates.unique())
+
+    @property
+    def sessions(self) -> list[pd.Timestamp]:
+        """Sesi yang ada di panel, urut naik."""
+        return list(self._sessions)
+
+    def _thick_codes(self, session: pd.Timestamp) -> set[str]:
+        """Kode yang nilainya >= ambang sesinya - dihitung SEKALI per sesi."""
+        hit = self._thick.get(session)
+        if hit is None:
+            rows = self._metrics[self._dates == session]
+            threshold = value_threshold_for(rows["value"])
+            values = pd.to_numeric(rows["value"], errors="coerce")
+            hit = {str(c).upper() for c in rows["code"][values >= threshold]}
+            self._thick[session] = hit
+        return hit
+
+    def members(self, date_value: Any) -> set[str]:
+        """Kode yang berhak masuk papan pada ``date_value`` (aturan :func:`pool_members`)."""
+        if self._metrics.empty:
+            return set()
+        target = pd.Timestamp(date_value)
+        window = _window_of(self._sessions, target)
+        if not window:
+            return set()
+        need = min(THICK_MIN_SESSIONS, len(window))
+
+        thick_sessions: Counter[str] = Counter()
+        for session in window:
+            thick_sessions.update(self._thick_codes(session))
+
+        members: set[str] = set()
+        for row in self._metrics[self._dates == target].itertuples(index=False):
+            code = str(row.code).upper()
+            if code in self._banned or thick_sessions[code] < need:
+                continue
+            history = _finite(getattr(row, "hist_days", None))
+            if history is not None and history < MIN_MARKET_HISTORY:
+                continue
+            if getattr(row, "signal", None) == "SELL":
+                continue
+            members.add(code)
+        return members
 
 
 def pool_members(
@@ -114,35 +188,11 @@ def pool_members(
     :data:`THICK_WINDOW_SESSIONS` sesi terakhir, historinya >=
     :data:`recommend.MIN_MARKET_HISTORY`, sinyalnya bukan SELL, dan tidak ada di
     ``quarantined``.
+
+    Untuk banyak tanggal pakai :class:`PoolIndex`: aturannya sama persis, tapi
+    ambang tiap sesi dibayar sekali, bukan sekali per tanggal.
     """
-    if metrics.empty:
-        return set()
-    target = pd.Timestamp(date_value)
-    window = _window_of(metrics, target)
-    if not window:
-        return set()
-    need = min(THICK_MIN_SESSIONS, len(window))
-
-    dates = pd.to_datetime(metrics["date"])
-    flags = thick_flags(metrics)
-    thick = metrics[dates.isin(window) & flags]
-    thick_sessions = thick.groupby("code")["date"].nunique()
-
-    banned = {str(c).upper() for c in (quarantined or ())}
-    members: set[str] = set()
-    for row in metrics[dates == target].itertuples(index=False):
-        code = str(row.code).upper()
-        if code in banned:
-            continue
-        if int(thick_sessions.get(row.code, 0)) < need:
-            continue
-        history = _finite(getattr(row, "hist_days", None))
-        if history is not None and history < MIN_MARKET_HISTORY:
-            continue
-        if getattr(row, "signal", None) == "SELL":
-            continue
-        members.add(code)
-    return members
+    return PoolIndex(metrics, quarantined=quarantined).members(date_value)
 
 
 def _code_of(row: Any) -> str:

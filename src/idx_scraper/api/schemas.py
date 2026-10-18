@@ -685,6 +685,24 @@ class RecommendationRow(BaseModel):
     withheld: bool = False
 
 
+class RegimeGate(BaseModel):
+    """Gerbang rezim (spec 6.5): boleh menolak, tak boleh membisukan tanpa sebab.
+
+    ``blocked`` True = papan kandidat menahan tawaran baru dan menyebut
+    ``reason`` di layar. ``volatile`` cuma penanda (plafon ukuran posisi
+    urusan lapis 3). ``regime_fresh`` False selalu berarti tidak memblokir:
+    rezim basi menandai dirinya sendiri, bukan membisukan halaman (spec D1).
+    """
+
+    blocked: bool
+    reason: str
+    regime: str | None = None
+    adx: float | None = None
+    vol_state: str | None = None
+    volatile: bool = False
+    regime_fresh: bool = True
+
+
 class RecommendationResponse(BaseModel):
     """Papan kandidat beli se-pasar untuk sesi terakhir."""
 
@@ -701,6 +719,9 @@ class RecommendationResponse(BaseModel):
     rows: list[RecommendationRow] = []
     freshness: Freshness | None = None
     withheld: bool = False
+    #: Gerbang rezim. `blocked` True berarti grade & ukuran posisi ditahan
+    #: (spec 6.5/Q5) - angkanya, level, dan sebabnya tetap tampil.
+    gate: RegimeGate | None = None
 
 
 class StockRecommendation(BaseModel):
@@ -714,6 +735,7 @@ class StockRecommendation(BaseModel):
     reason: str | None = None
     freshness: Freshness | None = None
     withheld: bool = False
+    gate: RegimeGate | None = None
     generated_at: str | None = None
 
 
@@ -817,24 +839,6 @@ class SectorRotation(BaseModel):
     unmapped_names: int = 0
     sectors: list[SectorRotationRow]
 
-
-
-class RegimeGate(BaseModel):
-    """Gerbang rezim (spec 6.5): boleh menolak, tak boleh membisukan tanpa sebab.
-
-    ``blocked`` True = papan kandidat menahan tawaran baru dan menyebut
-    ``reason`` di layar. ``volatile`` cuma penanda (plafon ukuran posisi
-    urusan lapis 3). ``regime_fresh`` False selalu berarti tidak memblokir:
-    rezim basi menandai dirinya sendiri, bukan membisukan halaman (spec D1).
-    """
-
-    blocked: bool
-    reason: str
-    regime: str | None = None
-    adx: float | None = None
-    vol_state: str | None = None
-    volatile: bool = False
-    regime_fresh: bool = True
 
 
 class MarketRegime(BaseModel):

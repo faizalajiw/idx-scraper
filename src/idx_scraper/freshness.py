@@ -91,18 +91,28 @@ def _iso(row: Any) -> str | None:
 
 
 def session_bases(cur: Any) -> tuple[str | None, str | None]:
-    """Sesi terakhir dua basis: panel saham dan indeks (``COMPOSITE``).
+    """Sesi terakhir dua basis: panel saham dan indeks (spec D1 baris 108).
 
-    Query-nya sengaja sama dengan yang dipakai `idx health` /
-    `api.services.get_data_health` supaya tidak pernah ada dua definisi
-    kesegaran di repo ini.
+    - **Panel saham**: ``research.latest_pit`` - basis yang dipijak verdict
+      halaman (keputusan pemilik Q2).
+    - **Indeks**: ``index_summary_daily`` UNION ``index_quotes`` COMPOSITE.
+      Sumbernya sama dengan kalender sesi ``health.check_session_gaps``; di sini
+      baris ``index_quotes`` dibatasi >= 16:00 WIB supaya snapshot intraday tidak
+      dibaca sebagai close resmi.
+
+    Penanda indeks tidak pernah menularkan statusnya ke halaman (spec D1): ia
+    menjawab pertanyaan berbeda - "apakah data indeks punya sesi terakhir" -
+    sementara verdict halaman menjawab "apakah panel sahamnya sudah sampai".
     """
     cur.execute("select max(trade_date) as d from research.latest_pit")
     panel = cur.fetchone()
     cur.execute(
-        "select max((captured_at at time zone 'Asia/Jakarta')::date) as d "
+        "select greatest("
+        "(select max(date) from index_summary_daily where code = 'COMPOSITE'), "
+        "(select max((captured_at at time zone 'Asia/Jakarta')::date) "
         "from index_quotes where code = 'COMPOSITE' "
-        "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16"
+        "and extract(hour from captured_at at time zone 'Asia/Jakarta') >= 16)"
+        ") as d"
     )
     return _iso(panel), _iso(cur.fetchone())
 

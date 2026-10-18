@@ -379,8 +379,11 @@ def assign_grades(candidates: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
     ordered = sorted((dict(c) for c in candidates), key=candidate_rank_key, reverse=True)
     n_a, n_b, n_c = tier_sizes(len(ordered))
     scores = [float(_f(c.get("score")) or 0.0) for c in ordered]
-    # Peringkat di SELURUH kolam, bukan hanya yang lolos potongan tier:
-    # angkanya harus bisa dibandingkan antar hari dengan definisi yang tetap.
+    # Peringkat di antara SEMUA kandidat yang lolos penyaringan hari itu, bukan
+    # hanya yang lolos potongan tier: angkanya harus bisa dibandingkan antar hari
+    # dengan definisi yang tetap. Ini BUKAN ukuran kolam likuiditas
+    # (`pool_size` / `research.pool.PoolIndex`) - "kolam" di sini berarti
+    # himpunan kandidat yang sudah dinilai.
     percentiles = pool_percentile(scores)
     out: list[dict[str, Any]] = []
     for i, c in enumerate(ordered):
@@ -393,10 +396,15 @@ def assign_grades(candidates: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
         else:
             break
         c["rank"] = i + 1
-        c["pool"] = len(ordered)
+        c["pool"] = len(ordered)  # kandidat yang dinilai, bukan besar kolam likuiditas
         c["percentile"] = percentiles[i]
         c["rank_basis"] = rank_basis(c)
-        c["score_confidence"] = confidence_label(scores[i], int(c.get("horizon_days") or 0))
+        # N1 (review): fallback yang SAMA dengan jalur papan/emiten. `or 0` di
+        # sini berarti "horizon nol" - bukan horizon default - dan melabeli
+        # kandidat tanpa field itu "belum terbukti" tanpa sebab.
+        c["score_confidence"] = confidence_label(
+            scores[i], int(c.get("horizon_days") or DEFAULT_HORIZON)
+        )
         out.append(c)
     return out
 
