@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pandas as pd
 
+from idx_scraper.research.events import _nw_tstat
 from idx_scraper.research.recommendation_log import (
+    _round_opt,
+    _summarize,
     build_records,
     candidates_for_date,
     metrics_frame,
@@ -183,3 +186,30 @@ def test_summarize_log_empty_is_safe():
     assert r["by_grade"] == []
     assert r["recent"] == []
     assert r["first_date"] is None
+
+
+
+def test_summarize_t_stat_uses_abnormal_not_raw_forward():
+    """t-stat satu irisan dihitung dari abnormal vs pasar, bukan return mentah.
+
+    Return mentah memuat drift pasar: deret yang naik terus tampak "signifikan"
+    walau tidak mengalahkan pasar sama sekali. Definisi abnormal adalah yang
+    sudah dipakai jejak sinyal (``signal_log._summarize``); dengan tes ini, dua
+    layar yang sama-sama menampilkan "t" tidak lagi dihitung dari dua hal berbeda.
+    """
+    n = 40
+    sub = pd.DataFrame(
+        {
+            # naik terus -> t-stat dari kolom ini akan ~38
+            "fwd_21": [0.05 + 0.001 * i for i in range(n)],
+            # bolak-balik, rata-rata nol -> t-stat dari kolom ini 0
+            "abn_21": [0.01 if i % 2 == 0 else -0.01 for i in range(n)],
+            "mfe_21": [0.0] * n,
+            "mae_21": [0.0] * n,
+        }
+    )
+
+    out = _summarize(sub, "A", 21)
+
+    assert out["t_stat"] == _round_opt(_nw_tstat(sub["abn_21"]))
+    assert abs(out["t_stat"]) < 1.0
