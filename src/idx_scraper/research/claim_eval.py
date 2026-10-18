@@ -25,6 +25,15 @@ ATURAN YANG DIPEGANG (spec §6.1, §6.4)
    disebut ``unresolved`` dan abnormalnya ``NaN``, bukan 0 yang ikut terhitung.
 5. **Arah selain BUY ditolak** dengan error, bukan dihitung dengan aturan yang
    salah lalu dilaporkan sebagai bukti.
+
+DUA UKURAN, DUA JAWABAN
+-----------------------
+``outcome`` (level kena atau tidak) dan ``abn_k`` (hasil relatif pasar) adalah dua
+hal berbeda dan bisa berbeda ketersediaannya: klaim bisa sudah kena target dari
+harga mentah sementara panel terkoreksinya belum punya cukup sesi, sehingga
+``abn_k``-nya ``NaN``. Karena itu pembaca agregat harus memakai
+``session_aggregate["measured_claims"]`` — jumlah klaim yang **punya angka** —
+bukan ``claims`` (semua baris), kalau yang mau dihitung adalah bukti.
 """
 
 from __future__ import annotations
@@ -38,39 +47,39 @@ from .signal_log import DEFAULT_HORIZONS, NLAGS_DEFAULT, attach_outcomes
 _CLAIM_COLUMNS = ("code", "date", "direction", "stop", "target", "horizon_days")
 
 
-def _raw_windows(raw: pd.DataFrame) -> dict[str, list[tuple[pd.Timestamp, float, float]]]:
-    """Harga mentah -> per emiten: daftar (tanggal, high, low) urut tanggal."""
+def _raw_bars(raw: pd.DataFrame) -> dict[str, dict[pd.Timestamp, tuple[float, float]]]:
+    """Harga mentah -> per emiten: ``{tanggal: (high, low)}``.
+
+    Baris tanpa high/low dibuang: tanpa keduanya, sentuhan level tidak bisa
+    diperiksa, dan menganggapnya "tidak kena" berarti mengarang hasil.
+    """
     df = raw[["code", "date", "high", "low"]].copy()
     df["date"] = pd.to_datetime(df["date"])
-    df = df.dropna(subset=["high", "low"]).sort_values(["code", "date"])
+    df = df.dropna(subset=["high", "low"])
 
-    windows: dict[str, list[tuple[pd.Timestamp, float, float]]] = {}
+    bars: dict[str, dict[pd.Timestamp, tuple[float, float]]] = {}
     for code, date, high, low in df.itertuples(index=False, name=None):
-        windows.setdefault(str(code), []).append((date, float(high), float(low)))
-    return windows
+        bars.setdefault(str(code), {})[date] = (float(high), float(low))
+    return bars
 
 
 def _resolve(
-    window: list[tuple[pd.Timestamp, float, float]],
+    observed: list[tuple[pd.Timestamp, float, float]],
     stop: float,
     target: float,
-    horizon_days: int,
-) -> tuple[str, bool, bool, str | None]:
-    """Putuskan hasil dari jendela risiko; berhenti pada sentuhan pertama.
+) -> tuple[str, bool, bool, str | None] | None:
+    """Hasil bila sebuah level tersentuh di jendela; ``None`` bila tidak ada.
 
-    ``hit_stop``/``hit_target`` mencatat apa yang terjadi **sampai klaim selesai** —
-    sentuhan setelah klaim ditutup tidak lagi relevan dan tidak dihitung.
+    Berhenti di sentuhan pertama, dan ``hit_stop``/``hit_target`` mencatat apa yang
+    terjadi **sampai klaim selesai** — sentuhan setelah klaim ditutup tidak lagi
+    relevan dan tidak dihitung.
     """
-    for date, high, low in window:
-        in_stop = low <= stop
-        in_target = high >= target
-        if in_stop:  # stop menang bila sesi yang sama menyentuh keduanya
-            return "stop", True, in_target, date.strftime("%Y-%m-%d")
-        if in_target:
+    for date, high, low in observed:
+        if low <= stop:  # stop menang bila sesi yang sama menyentuh keduanya
+            return "stop", True, high >= target, date.strftime("%Y-%m-%d")
+        if high >= target:
             return "target", False, True, date.strftime("%Y-%m-%d")
-    if len(window) < horizon_days:
-        return "unresolved", False, False, None
-    return "timeout", False, False, None
+    return None
 
 
 def claim_outcomes(
@@ -89,6 +98,12 @@ def claim_outcomes(
     ``abn_{k}`` per horizon, ``hit_stop``, ``hit_target``, ``touch_date``, dan
     ``outcome`` bernilai salah satu dari ``stop`` / ``target`` / ``timeout`` /
     ``unresolved``.
+
+    Kalender yang dipakai adalah **sesi milik ``adj``** — panel yang sama yang
+    menghasilkan ``abn_k`` — supaya jendela sentuhan dan jendela hasil tidak
+    bergeser diam-diam. Sesi yang hilang dari ``raw`` di dalam jendela membuat
+    klaim ``unresolved``: hari yang tidak teramati tidak boleh dianggap sudah lewat.
+    Sesi yang hilang **setelah** klaim selesai tidak berpengaruh.
     """
     missing = [name for name in _CLAIM_COLUMNS if name not in claims.columns]
     if missing:
@@ -99,11 +114,12 @@ def claim_outcomes(
 
     horizons = tuple(horizons)
     abn_cols = [f"abn_{k}" for k in horizons]
-    windows = _raw_windows(raw)
-    position = {
-        code: {date: i for i, (date, _high, _low) in enumerate(rows)}
-        for code, rows in windows.items()
-    }
+    bars_by_code = _raw_bars(raw)
+
+    measured = attach_outcomes(adj, horizons, nlags)
+    sessions_by_code: dict[str, list[pd.Timestamp]] = {}
+    for code, group in measured.groupby("code", sort=False):
+        sessions_by_code[str(code)] = list(group["date"])
 
     out = claims.copy()
     out["date"] = pd.to_datetime(out["date"])
@@ -114,33 +130,35 @@ def claim_outcomes(
     touches: list[str | None] = []
     for row in out.itertuples(index=False):
         code = str(row.code)
-        index = position.get(code, {}).get(pd.Timestamp(row.date))
-        rows = windows.get(code) or []
-        if index is None:
-            outcomes.append("unresolved")
-            hit_stops.append(False)
-            hit_targets.append(False)
-            touches.append(None)
-            continue
-        horizon_days = int(row.horizon_days)
-        start = index + nlags + 1
-        window = rows[start : start + horizon_days]
-        if not window:
-            outcomes.append("unresolved")
-            hit_stops.append(False)
-            hit_targets.append(False)
-            touches.append(None)
-            continue
-        outcome, hit_stop, hit_target, touch = _resolve(
-            window, float(row.stop), float(row.target), horizon_days
-        )
-        outcomes.append(outcome)
-        hit_stops.append(hit_stop)
-        hit_targets.append(hit_target)
-        touches.append(touch)
+        sessions = sessions_by_code.get(code) or []
+        index = sessions.index(pd.Timestamp(row.date)) if pd.Timestamp(row.date) in sessions else None
 
-    measured = attach_outcomes(adj, horizons, nlags)[["code", "date", *abn_cols]]
-    out = out.merge(measured, on=["code", "date"], how="left")
+        horizon_days = int(row.horizon_days)
+        expected: list[pd.Timestamp] = []
+        if index is not None:
+            expected = sessions[index + nlags + 1 : index + nlags + 1 + horizon_days]
+
+        bars = bars_by_code.get(code) or {}
+        observed: list[tuple[pd.Timestamp, float, float]] = []
+        for date in expected:
+            bar = bars.get(date)
+            if bar is None:
+                break  # bar hilang: hari ini tidak teramati, jangan lompati
+            observed.append((date, bar[0], bar[1]))
+
+        resolved = _resolve(observed, float(row.stop), float(row.target)) if observed else None
+        if resolved is None:
+            complete = len(expected) == horizon_days and len(observed) == len(expected)
+            resolved = ("timeout", False, False, None) if complete else ("unresolved", False, False, None)
+
+        outcomes.append(resolved[0])
+        hit_stops.append(resolved[1])
+        hit_targets.append(resolved[2])
+        touches.append(resolved[3])
+
+    out = out.merge(
+        measured[["code", "date", *abn_cols]], on=["code", "date"], how="left"
+    )
     out["date"] = out["date"].dt.strftime("%Y-%m-%d")
     out["outcome"] = outcomes
     out["hit_stop"] = hit_stops
@@ -158,9 +176,10 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
     pengamatan — dihitung per baris, hari yang ramai otomatis lebih berpengaruh
     daripada hari yang sepi, dan yang ingin dijawab bukan itu.
 
-    ``sessions`` menghitung sesi yang **menyumbang angka terukur**. Klaim
-    ``unresolved`` tetap dihitung di ``unresolved`` tapi tidak menambah sesi dan
-    abnormalnya tidak dianggap nol.
+    ``claims`` menghitung semua klaim yang pernah ditulis; ``measured_claims``
+    hanya yang punya angka (``abn_{horizon}`` berhingga). ``sessions`` menghitung
+    sesi yang menyumbang angka terukur. Klaim ``unresolved`` tetap dihitung di
+    ``unresolved`` tapi tidak menambah sesi dan abnormalnya tidak dianggap nol.
     """
     column = f"abn_{horizon}"
     missing = [name for name in ("date", column, "outcome") if name not in outcomes.columns]
@@ -170,6 +189,7 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
     counts = outcomes["outcome"].value_counts().to_dict() if not outcomes.empty else {}
     summary: dict[str, Any] = {
         "claims": len(outcomes),
+        "measured_claims": 0,
         "sessions": 0,
         "mean_abnormal": None,
         "median_session_abnormal": None,
@@ -194,6 +214,7 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
 
     grouped = frame.groupby("date")["abn"].agg(["size", "mean"]).sort_index()
     session_means = grouped["mean"]
+    summary["measured_claims"] = len(frame)
     summary["sessions"] = len(session_means)
     summary["mean_abnormal"] = round(float(session_means.mean()), 6)
     summary["median_session_abnormal"] = round(float(session_means.median()), 6)
@@ -210,7 +231,7 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
 # Verdict & rekaman (spec §6.1 "cara gagal", keputusan §8 Q4)
 # --------------------------------------------------------------------------- #
 
-MIN_CLAIMS = 30  # keputusan pemilik: 30 klaim, ...
+MIN_CLAIMS = 30  # keputusan pemilik: 30 klaim TERUKUR, ...
 MIN_SESSIONS = 30  # ... atau 6 minggu bursa (±30 sesi), mana yang lebih dulu
 VERDICT_HORIZON = 21  # satu-satunya horizon dengan bukti OOS (IC h21 +0,038 / t 1,95)
 
@@ -223,41 +244,57 @@ def claim_verdict(
 ) -> dict[str, Any]:
     """Terbukti / tidak terbukti / belum cukup — dari agregat per sesi.
 
+    Ambang klaim menghitung **klaim yang punya angka** (``measured_claims``), bukan
+    baris yang tercatat: klaim baru matang setelah horizonnya berjalan, jadi
+    menghitung baris membuat 30 klaim "tercapai" sebelum satu pun bisa dinilai —
+    dan verdict akan berdiri di atas satu sesi. Kalau ``measured_claims`` tidak
+    tersedia, dipakai ``claims - unresolved`` sebagai perkiraan terdekat.
+
     "Belum cukup" bukan kegagalan; itu jawaban jujur selama buktinya belum
     terkumpul, dan ia menyebut berapa yang sudah ada. Yang dilarang adalah
-    memutuskan dari sampel yang belum layak, atau menyebut sesuatu terbukti padahal
-    belum satu klaim pun punya hasil.
+    memutuskan dari sampel yang belum layak.
     """
     claims = int(agg.get("claims") or 0)
     sessions = int(agg.get("sessions") or 0)
     mean = agg.get("mean_abnormal")
+
+    measured = agg.get("measured_claims")
+    if measured is None:
+        measured = claims - int(agg.get("unresolved") or 0)
+    measured = max(int(measured or 0), 0)
 
     if mean is None or sessions < 1:
         return {
             "status": "belum cukup",
             "reason": "belum ada hasil terukur",
             "claims": claims,
+            "measured_claims": measured,
             "sessions": sessions,
             "mean_abnormal": None,
         }
 
-    enough_claims = claims >= min_claims
+    enough_claims = measured >= min_claims
     enough_sessions = sessions >= min_sessions
     if not enough_claims and not enough_sessions:
         return {
             "status": "belum cukup",
             "reason": (
-                f"baru {claims} klaim dari {min_claims} dan {sessions} sesi dari {min_sessions}"
+                f"baru {measured} klaim terukur dari {min_claims} "
+                f"dan {sessions} sesi dari {min_sessions}"
             ),
             "claims": claims,
+            "measured_claims": measured,
             "sessions": sessions,
             "mean_abnormal": mean,
         }
 
     if enough_claims and enough_sessions:
-        reason = f"{claims} klaim dan {sessions} sesi tercapai (ambang {min_claims}/{min_sessions})"
+        reason = (
+            f"{measured} klaim terukur dan {sessions} sesi tercapai "
+            f"(ambang {min_claims}/{min_sessions})"
+        )
     elif enough_claims:
-        reason = f"{claims} klaim tercapai (ambang {min_claims})"
+        reason = f"{measured} klaim terukur tercapai (ambang {min_claims})"
     else:
         reason = f"{sessions} sesi tercapai (ambang {min_sessions})"
 
@@ -265,6 +302,7 @@ def claim_verdict(
         "status": "terbukti" if float(mean) > 0 else "tidak terbukti",
         "reason": reason,
         "claims": claims,
+        "measured_claims": measured,
         "sessions": sessions,
         "mean_abnormal": mean,
     }

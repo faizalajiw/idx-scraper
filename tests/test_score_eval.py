@@ -125,6 +125,8 @@ def test_edge_table_skips_sessions_below_min_names():
     table = edge_table(feats, 21)
     assert (table["days"] == 0).all()
     assert table["edge"].isna().all()
+    # tidak ada sesi terukur -> tidak boleh ada t-stat dari sampel kosong
+    assert table["t_stat"].isna().all()
 
 
 def test_edge_table_counts_session_with_single_flagged_name():
@@ -148,7 +150,15 @@ def test_weights_zero_when_t_below_gate():
 
 
 def test_weights_zero_when_edge_below_min_edge():
-    assert weights_from_edges(_edge_row(0.0005, 5.0, 40)) == {"c": 0.0}
+    # 0,0014 dipangkas-dikecilkan jadi 0,42 -> dibulatkan 0,5 (bukan 0).
+    # Jadi angka ini HANYA nol kalau gerbang MIN_EDGE-nya sendiri bekerja.
+    assert weights_from_edges(_edge_row(0.0014, 5.0, 40)) == {"c": 0.0}
+
+
+def test_weights_rounded_to_nearest_half_point():
+    # 0,0016 -> titik 0,96 -> dikecilkan 0,48 -> dibulatkan ke 0,5.
+    # Tanpa pembulatan, hasilnya 0,48 — dan skor turun jadi tidak bisa dibaca.
+    assert weights_from_edges(_edge_row(0.0016, 5.0, 40)) == {"c": 0.5}
 
 
 def test_weights_zero_when_days_below_min_days():

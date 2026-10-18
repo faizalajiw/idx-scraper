@@ -149,6 +149,53 @@ def test_claim_date_missing_from_panel_is_unresolved():
     assert pd.isna(out.loc[0, "abn_1"])
 
 
+def test_missing_raw_session_does_not_shift_the_window():
+    """Sesi harga mentah yang hilang tidak boleh membuat jendela bergeser.
+
+    Kalau bar satu sesi tidak ada, hari itu tidak teramati: level bisa saja
+    tersentuh di sana. Melewatinya diam-diam lalu menyimpulkan hasil dari sesi
+    berikutnya berarti melaporkan angka dari hari yang bukan miliknya.
+    """
+    raw = _quiet_raw()
+    raw = raw[raw["date"] != "2026-01-07"]
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "unresolved"
+
+
+def test_touch_before_a_missing_session_still_resolves():
+    """Kalau level sudah tersentuh SEBELUM sesi yang hilang, hasilnya tetap sah —
+    kejadiannya sudah tercatat, yang tidak teramati datang belakangan."""
+    raw = _quiet_raw([("2026-01-08", 111.0, 99.0, 110.0)])
+    raw = raw[raw["date"] != "2026-01-09"]
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=3), raw=raw, adj=_flat_adj(), horizons=(3,)
+    )
+
+    assert out.loc[0, "outcome"] == "target"
+    assert out.loc[0, "touch_date"] == "2026-01-08"
+
+
+def test_touch_after_a_missing_session_does_not_resolve():
+    """Sentuhan yang datang SESUDAH sesi yang hilang belum bisa dipercaya.
+
+    Stop bisa saja kena lebih dulu di hari yang tidak teramati, jadi melaporkan
+    "target" untuk klaim ini berarti mengabaikan kemungkinan yang lebih buruk.
+    """
+    raw = _quiet_raw([("2026-01-08", 111.0, 99.0, 110.0)])
+    raw = raw[raw["date"] != "2026-01-07"]
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "unresolved"
+
+
 def test_entry_session_low_does_not_trigger_stop():
     """Level ditetapkan dari close sebelumnya: sesi entry tidak boleh memicunya.
 
@@ -255,6 +302,7 @@ def test_three_claims_in_one_session_count_as_one_session():
     )
 
     assert out["claims"] == 4
+    assert out["measured_claims"] == 4
     assert out["sessions"] == 2
     assert out["hit_target"] == 1
     assert out["hit_stop"] == 1
@@ -300,6 +348,7 @@ def test_unresolved_excluded_from_abnormal_but_still_counted():
     )
 
     assert out["claims"] == 2
+    assert out["measured_claims"] == 1
     assert out["unresolved"] == 1
     assert out["mean_abnormal"] == 0.02  # NaN tidak dianggap nol
     assert out["per_session"][0]["n"] == 1  # hanya yang terukur
@@ -326,6 +375,7 @@ def test_empty_claims_is_safe():
     out = session_aggregate(empty, horizon=21)
 
     assert out["claims"] == 0
+    assert out["measured_claims"] == 0
     assert out["sessions"] == 0
     assert out["mean_abnormal"] is None
     assert out["median_session_abnormal"] is None
@@ -343,10 +393,16 @@ def _agg(
     mean: float | None = None,
     target: int = 0,
     stop: int = 0,
+    measured: int | None = None,
 ) -> dict:
-    """Agregat seperti keluaran ``session_aggregate`` — cukup untuk menguji verdict."""
+    """Agregat seperti keluaran ``session_aggregate`` — cukup untuk menguji verdict.
+
+    ``measured`` default-nya sama dengan ``claims`` (semua klaim punya angka);
+    isi lebih kecil untuk menguji klaim yang belum matang.
+    """
     return {
         "claims": claims,
+        "measured_claims": claims if measured is None else measured,
         "sessions": sessions,
         "mean_abnormal": mean,
         "median_session_abnormal": mean,
@@ -410,8 +466,22 @@ def test_verdict_reason_states_which_threshold_was_reached():
     by_claims = claim_verdict(_agg(claims=30, sessions=8, mean=0.02))
     by_sessions = claim_verdict(_agg(claims=12, sessions=30, mean=0.02))
 
-    assert "30 klaim tercapai" in by_claims["reason"]
+    assert "30 klaim terukur tercapai" in by_claims["reason"]
     assert "30 sesi tercapai" in by_sessions["reason"]
+
+
+def test_verdict_not_ready_when_measurements_are_fewer_than_claims():
+    """30 klaim yang tercatat tapi baru 4 yang punya angka: belum cukup.
+
+    Ini lubang yang nyata: klaim baru matang setelah horizonnya berjalan, jadi
+    dengan 3–5 klaim per sesi, ambang \"30 klaim\" akan tercapai sebelum satu sesi
+    pun selesai — verdict akan berdiri di atas satu hari.
+    """
+    verdict = claim_verdict(_agg(claims=100, sessions=1, mean=0.02, measured=4))
+
+    assert verdict["status"] == "belum cukup"
+    assert verdict["measured_claims"] == 4
+    assert "4 klaim terukur" in verdict["reason"]
 
 
 def test_record_line_exact_copy():
