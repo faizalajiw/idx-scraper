@@ -492,3 +492,25 @@ git commit -m "feat: verdict klaim (30 klaim atau 30 sesi) dan baris rekaman unt
 - Task 4 mengubah satu angka yang sudah tampil di dashboard. Itu disengaja dan disebutkan di spec (§6.1). Setelah merge, API harus di-restart lewat jalur terjaga — bukan `Stop-Process`.
 - Modul baru `claim_eval.py` sengaja tidak menyentuh DB. Tabel jurnal dan job penjadwalnya masuk **P6**, bukan di sini; P3 hanya menyediakan pengukuran dan verdictnya.
 - Setelah seluruh tugas lulus: perbarui baris status P3 di `RENCANA-P0-P7.md`, lalu minta review seluruh branch sebelum merge ke `main`.
+
+
+---
+
+## Catatan eksekusi (18 Okt 2026) — bacaan wajib sebelum mengerjakan P4–P6
+
+Plan ini dieksekusi penuh. Semua penyimpangan, ruling, dan bukti uji mutasi dicatat
+di ledger `.superpowers/sdd/2026-10-18-p3-harness-validasi-jujur/progress.md`.
+Dua hal yang mengubah **antarmuka** — P4–P6 harus mengikuti yang di bawah ini,
+bukan teks rencana di atas:
+
+1. `session_aggregate()` kini juga mengembalikan **`measured_claims`**: jumlah klaim
+   yang `abn_{horizon}`-nya berhingga. `claims` tetap menghitung semua baris, dan
+   `sessions` hanya sesi yang menyumbang angka.
+2. `claim_verdict()` menakar ambang klaim dari **`measured_claims`**, bukan `claims`.
+   Tanpa itu, 30 klaim "tercapai" sebelum satu sesi pun selesai — dengan 3–5 klaim
+   per sesi dan horizon 21, verdict akan berdiri di atas satu hari. Dict verdict
+   ikut memuat `measured_claims`.
+3. `claim_outcomes()` memakai **kalender sesi milik panel terkoreksi** (`adj`).
+   Bar `raw` yang hilang di dalam jendela risiko membuat klaim `unresolved` —
+   jendela tidak bergeser diam-diam, dan sentuhan yang datang sesudah sesi yang
+   hilang tidak dipercaya.
