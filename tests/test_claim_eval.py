@@ -14,7 +14,14 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from idx_scraper.research.claim_eval import claim_outcomes, session_aggregate
+from idx_scraper.research.claim_eval import (
+    VERDICT_HORIZON,
+    claim_outcomes,
+    claim_verdict,
+    format_record_line,
+    session_aggregate,
+)
+from idx_scraper.research.signal_log import DEFAULT_HORIZONS
 
 _SESSIONS = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
 
@@ -324,3 +331,110 @@ def test_empty_claims_is_safe():
     assert out["median_session_abnormal"] is None
     assert out["session_dispersion"] is None
     assert out["per_session"] == []
+
+
+
+# --- verdict & baris rekaman (spec §6.1, §8 Q4) ---
+
+
+def _agg(
+    claims: int = 0,
+    sessions: int = 0,
+    mean: float | None = None,
+    target: int = 0,
+    stop: int = 0,
+) -> dict:
+    """Agregat seperti keluaran ``session_aggregate`` — cukup untuk menguji verdict."""
+    return {
+        "claims": claims,
+        "sessions": sessions,
+        "mean_abnormal": mean,
+        "median_session_abnormal": mean,
+        "session_dispersion": None,
+        "hit_target": target,
+        "hit_stop": stop,
+        "timeout": claims - target - stop,
+        "unresolved": 0,
+        "per_session": [],
+    }
+
+
+def test_verdict_horizon_is_a_measured_horizon():
+    """Verdict memakai horizon yang punya bukti OOS — bukan horizon karangan."""
+    assert VERDICT_HORIZON == 21
+    assert VERDICT_HORIZON in DEFAULT_HORIZONS
+
+
+def test_verdict_not_ready_below_both_thresholds():
+    verdict = claim_verdict(_agg(claims=29, sessions=29, mean=0.01))
+
+    assert verdict["status"] == "belum cukup"
+    assert "29" in verdict["reason"]
+
+
+def test_verdict_ready_at_thirty_claims_even_in_few_sessions():
+    """Ambangnya "30 klaim ATAU 6 minggu (±30 sesi), mana yang lebih dulu"."""
+    verdict = claim_verdict(_agg(claims=30, sessions=8, mean=0.02))
+
+    assert verdict["status"] == "terbukti"
+    assert verdict["sessions"] == 8
+
+
+def test_verdict_ready_at_thirty_sessions_even_with_few_claims():
+    verdict = claim_verdict(_agg(claims=12, sessions=30, mean=0.02))
+
+    assert verdict["status"] == "terbukti"
+
+
+def test_verdict_not_proven_when_mean_not_above_zero():
+    for mean in (-0.004, 0.0):
+        verdict = claim_verdict(_agg(claims=30, sessions=30, mean=mean))
+        assert verdict["status"] == "tidak terbukti", mean
+
+
+def test_verdict_proven_when_mean_above_zero():
+    verdict = claim_verdict(_agg(claims=30, sessions=30, mean=0.0001))
+
+    assert verdict["status"] == "terbukti"
+
+
+def test_verdict_not_ready_when_nothing_measured_yet():
+    """30 klaim tercatat tapi belum satu pun punya hasil: belum bisa dinilai."""
+    verdict = claim_verdict(_agg(claims=30, sessions=0, mean=None))
+
+    assert verdict["status"] == "belum cukup"
+    assert "terukur" in verdict["reason"]
+
+
+def test_verdict_reason_states_which_threshold_was_reached():
+    by_claims = claim_verdict(_agg(claims=30, sessions=8, mean=0.02))
+    by_sessions = claim_verdict(_agg(claims=12, sessions=30, mean=0.02))
+
+    assert "30 klaim tercapai" in by_claims["reason"]
+    assert "30 sesi tercapai" in by_sessions["reason"]
+
+
+def test_record_line_exact_copy():
+    line = format_record_line(_agg(claims=12, sessions=6, mean=0.014, target=5, stop=4))
+
+    assert line == (
+        "Aturan ini: 12 klaim · 5 kena target · 4 kena batas rugi · rata-rata +1,4% vs pasar"
+    )
+
+
+def test_record_line_when_no_claims():
+    assert format_record_line(_agg(claims=0)) == "Aturan ini: belum punya rekaman"
+
+
+def test_record_line_negative_average_has_no_plus():
+    line = format_record_line(_agg(claims=6, sessions=6, mean=-0.008, target=1, stop=3))
+
+    assert "rata-rata -0,8% vs pasar" in line
+    assert "+-" not in line
+
+
+def test_record_line_when_nothing_measured_yet():
+    line = format_record_line(_agg(claims=4, sessions=0, mean=None, target=0, stop=0))
+
+    assert "4 klaim" in line
+    assert "belum terukur" in line

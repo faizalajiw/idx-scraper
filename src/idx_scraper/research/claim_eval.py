@@ -204,3 +204,93 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
         for date, entry in grouped.iterrows()
     ]
     return summary
+
+
+# --------------------------------------------------------------------------- #
+# Verdict & rekaman (spec §6.1 "cara gagal", keputusan §8 Q4)
+# --------------------------------------------------------------------------- #
+
+MIN_CLAIMS = 30  # keputusan pemilik: 30 klaim, ...
+MIN_SESSIONS = 30  # ... atau 6 minggu bursa (±30 sesi), mana yang lebih dulu
+VERDICT_HORIZON = 21  # satu-satunya horizon dengan bukti OOS (IC h21 +0,038 / t 1,95)
+
+
+def claim_verdict(
+    agg: dict[str, Any],
+    *,
+    min_claims: int = MIN_CLAIMS,
+    min_sessions: int = MIN_SESSIONS,
+) -> dict[str, Any]:
+    """Terbukti / tidak terbukti / belum cukup — dari agregat per sesi.
+
+    "Belum cukup" bukan kegagalan; itu jawaban jujur selama buktinya belum
+    terkumpul, dan ia menyebut berapa yang sudah ada. Yang dilarang adalah
+    memutuskan dari sampel yang belum layak, atau menyebut sesuatu terbukti padahal
+    belum satu klaim pun punya hasil.
+    """
+    claims = int(agg.get("claims") or 0)
+    sessions = int(agg.get("sessions") or 0)
+    mean = agg.get("mean_abnormal")
+
+    if mean is None or sessions < 1:
+        return {
+            "status": "belum cukup",
+            "reason": "belum ada hasil terukur",
+            "claims": claims,
+            "sessions": sessions,
+            "mean_abnormal": None,
+        }
+
+    enough_claims = claims >= min_claims
+    enough_sessions = sessions >= min_sessions
+    if not enough_claims and not enough_sessions:
+        return {
+            "status": "belum cukup",
+            "reason": (
+                f"baru {claims} klaim dari {min_claims} dan {sessions} sesi dari {min_sessions}"
+            ),
+            "claims": claims,
+            "sessions": sessions,
+            "mean_abnormal": mean,
+        }
+
+    if enough_claims and enough_sessions:
+        reason = f"{claims} klaim dan {sessions} sesi tercapai (ambang {min_claims}/{min_sessions})"
+    elif enough_claims:
+        reason = f"{claims} klaim tercapai (ambang {min_claims})"
+    else:
+        reason = f"{sessions} sesi tercapai (ambang {min_sessions})"
+
+    return {
+        "status": "terbukti" if float(mean) > 0 else "tidak terbukti",
+        "reason": reason,
+        "claims": claims,
+        "sessions": sessions,
+        "mean_abnormal": mean,
+    }
+
+
+def _persen(value: float) -> str:
+    """``0.014`` -> ``+1,4%`` (koma desimal, tanda plus untuk yang positif)."""
+    return f"{float(value) * 100:+.1f}%".replace(".", ",")
+
+
+def format_record_line(agg: dict[str, Any]) -> str:
+    """Kalimat rekaman yang dibaca pengguna — satu baris, apa adanya.
+
+    Inilah yang mengikat mesin pada klaimnya sendiri: disusun dari agregat hasil,
+    bukan dari niat. Yang belum terukur ditulis "belum terukur", bukan 0,0% yang
+    akan terbaca seolah tidak untung.
+    """
+    claims = int(agg.get("claims") or 0)
+    if claims == 0:
+        return "Aturan ini: belum punya rekaman"
+
+    head = (
+        f"Aturan ini: {claims} klaim · {int(agg.get('hit_target') or 0)} kena target"
+        f" · {int(agg.get('hit_stop') or 0)} kena batas rugi"
+    )
+    mean = agg.get("mean_abnormal")
+    if mean is None:
+        return f"{head} · rata-rata belum terukur"
+    return f"{head} · rata-rata {_persen(mean)} vs pasar"
