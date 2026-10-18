@@ -1,7 +1,7 @@
 # Spec Desain — Lapis 3: Rencana Posisi (P5)
 
 - **Tanggal:** 18 Okt 2026
-- **Status:** **draft revisi 3, semua pertanyaan pemilik terjawab; menunggu persetujuan akhir.** Belum ada satu baris kode P5 yang ditulis. Sesudah disetujui, langkah berikutnya plan tertulis, bukan kode.
+- **Status:** **disetujui 18 Okt 2026** oleh pemilik keputusan (menjawab "saya ikut rekomendasi", termasuk kelima call penulis di bagian 4b). Langkah berikutnya plan tertulis, bukan kode. Kode P5 baru ditulis setelah plan itu disetujui.
 - **Revisi:** 3 (18 Okt 2026). Revisi 1 sesudah percakapan; revisi 2 sesudah pemeriksa konteks segar menemukan enam lubang (empat ditutup sebagai call penulis di bagian 4b, dua naik jadi pertanyaan); revisi 3 sesudah pemilik menjawab kelima pertanyaan (bagian 7).
 - **Pemilik keputusan:** pemilik proyek (pengguna dashboard)
 - **Penulis:** Lucif
