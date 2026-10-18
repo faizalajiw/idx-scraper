@@ -132,8 +132,8 @@ def test_edge_table_counts_session_with_single_flagged_name():
     flagged_rows = feats.groupby("date").head(1).index   # tepat satu baris per tanggal
     feats.loc[flagged_rows, name] = 1.0
     table = edge_table(feats, 21)
-    assert int(table.loc[name, "days"]) == 60
-    assert int(table.loc[name, "flagged"]) == 60
+    assert int(table.loc[name, "days"]) == 38        # 60 sesi − (21 + nlags 1) sesi tanpa label
+    assert int(table.loc[name, "flagged"]) == 38
 
 def test_weights_zero_when_t_below_gate():
     edges = pd.DataFrame([{"edge": 0.05, "t_stat": 1.0, "days": 40}], index=["c"])
