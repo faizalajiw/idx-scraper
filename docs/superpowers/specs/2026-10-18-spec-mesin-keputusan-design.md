@@ -1,8 +1,8 @@
 # Spec Desain — Mesin Keputusan IDX (P2)
 
 - **Tanggal:** 18 Okt 2026
-- **Status:** **belum disetujui** — isi sudah lengkap, tidak ada pertanyaan terbuka lagi; menunggu pembacaan dan persetujuan pemilik. Tidak ada kode model yang boleh ditulis sebelum itu.
-- **Revisi:** 2 (18 Okt 2026) — empat keputusan penulis dijawab "ok"; lima pertanyaan terbuka dijawab pemilik (§8)
+- **Status:** **disetujui 18 Okt 2026** oleh pemilik keputusan. Langkah berikutnya plan tertulis (P3), bukan kode. Mulai menulis kode model hanya setelah plan itu disetujui.
+- **Revisi:** 2 (18 Okt 2026) — empat keputusan penulis dijawab "ok"; lima pertanyaan terbuka dijawab pemilik (§8); persetujuan diberikan setelah pembacaan
 - **Pemilik keputusan:** pemilik proyek (pengguna dashboard)
 - **Penulis:** Lucif
 - **Cakupan:** mesin keputusan 4-lapis (`idx-scraper`) + permukaan yang menampilkannya (`idx-web`)
