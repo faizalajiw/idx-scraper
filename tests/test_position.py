@@ -20,6 +20,7 @@ from idx_scraper.research.position import (
     DEFAULT_LIMITS,
     position_plan,
     typical_day_value,
+    typical_day_values,
 )
 
 PEGE_ENTRY = 113.42
@@ -157,14 +158,81 @@ def test_buku_penuh_tidak_menyalahkan_modal():
     assert p["pct"] == 0.0
     assert p["lots"] == 0
     assert "Modal kurang untuk 1 lot." not in p["note"]
-    assert "Eksposur belum diisi, plafon portofolio dilewati." in p["note"]
+    assert "Eksposur belum diisi" in p["note"]
+
+
+# --- Temuan reviewer konteks segar (19 Okt 2026): M-1, M-2, M-3, I-2 ---
+
+
+def test_kalimat_keadaan_kosong_menyebut_bidangnya():
+    """M-1: "plafon portofolio dilewati" tidak boleh muncul saat plafonnya bekerja."""
+    p = pege(open_positions=6, exposure_pct=None)
+    assert "Sudah penuh: 6 posisi terbuka dari batas 6." in p["note"]
+    assert "Eksposur belum diisi" in p["note"]
+    assert "plafon portofolio dilewati" not in p["note"]
+
+    q = pege(open_positions=None, exposure_pct=78.0)
+    assert q["caps"]["portfolio"] == 2.0
+    assert q["pct"] == 2.0
+    assert "Posisi terbuka belum diisi" in q["note"]
+    assert "plafon portofolio dilewati" not in q["note"]
+
+
+def test_buku_penuh_dengan_likuiditas_nol_tetap_menyebut_penuh():
+    """M-2: plafon likuiditas bisa memenangkan urutan, "sudah penuh" tetap wajib."""
+    p = pege(typical_day_value=1_000.0, open_positions=6)
+    assert p["caps"]["liquidity"] == 0.0
+    assert p["binding_cap"] == "liquidity"
+    assert p["pct"] == 0.0
+    assert "Sudah penuh: 6 posisi terbuka dari batas 6." in p["note"]
+
+
+def test_keadaan_portofolio_negatif_dianggap_belum_diisi():
+    """M-3: rute menolak negatif; fungsi murni tidak boleh menghitung risiko negatif."""
+    p = pege(open_positions=-1, exposure_pct=-5.0)
+    assert p["concurrent_risk_pct"] is None
+    assert p["caps"]["portfolio"] is None
+    assert "belum diisi" in p["note"]
+
+
+def test_peta_likuiditas_sama_dengan_hitung_satu_emiten():
+    """I-2: versi massal harus sama persis dengan versi per emiten."""
+    frame = pd.DataFrame(
+        [
+            {"code": code, "date": pd.Timestamp(f"2026-10-{day:02d}"), "value": value}
+            for code, value in (("PEGE", 1.0e9), ("MGRO", 5.0e8), ("UNTD", 2.0e8))
+            for day in range(1, 9)
+        ]
+    )
+    peta = typical_day_values(frame)
+    for code in ("PEGE", "MGRO", "UNTD", "pege", "TIDAK ADA"):
+        assert peta.get(str(code).upper()) == typical_day_value(frame, code)
+
+
+def test_peta_likuiditas_menghormati_batas_sesi():
+    """Versi massal memakai jendela sesi yang sama, termasuk nilai ``sessions``."""
+    frame = pd.DataFrame(
+        [
+            {"code": "PEGE", "date": pd.Timestamp(f"2026-10-{day:02d}"), "value": float(day)}
+            for day in range(1, 11)
+        ]
+    )
+    peta = typical_day_values(frame, sessions=3)
+    assert peta["PEGE"] == 9.0  # median 8, 9, 10
+    assert peta["PEGE"] == typical_day_value(frame, "PEGE", sessions=3)
+
+
+def test_peta_likuiditas_tahan_panel_kosong():
+    """Panel kosong atau tanpa kolom yang dibutuhkan -> peta kosong, bukan meledak."""
+    assert typical_day_values(pd.DataFrame(columns=["code", "date", "value"])) == {}
+    assert typical_day_values(pd.DataFrame([{"code": "PEGE"}])) == {}
 
 
 def test_keadaan_portofolio_kosong_dilewati():
     p = pege(open_positions=None, exposure_pct=None)
     assert p["caps"]["portfolio"] is None
     assert p["concurrent_risk_pct"] is None
-    assert "portofolio" in p["note"].lower()
+    assert "batas jumlah posisi dan batas eksposur dilewati" in p["note"]
 
 
 def test_risiko_serentak_diturunkan():

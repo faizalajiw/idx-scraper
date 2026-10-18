@@ -2828,10 +2828,25 @@ def _with_position_plan(
 
     ``metrics`` hanya dipakai tes; produksi membaca panel yang sudah di-cache.
     """
-    from ..research.position import position_plan, typical_day_value
+    from ..research.position import position_plan, typical_day_values
 
     frame = metrics if metrics is not None else _recommendation_context()["metrics"]
     vol_state = (out.get("gate") or {}).get("vol_state")
+
+    peta_likuiditas: dict[str, float] | None = None
+
+    def likuiditas(code: Any) -> float | None:
+        """Nilai transaksi harian median, dihitung sekali untuk seluruh permintaan.
+
+        Versi per emiten memindai panel seluruh pasar tiap panggilan; papan
+        memanggilnya untuk puluhan baris, jadi pemindaiannya dibayar berulang.
+        """
+        nonlocal peta_likuiditas
+        if modal is None:
+            return None  # tanpa modal plafon likuiditas memang dilewati
+        if peta_likuiditas is None:
+            peta_likuiditas = typical_day_values(frame)
+        return peta_likuiditas.get(str(code or "").upper())
 
     def plan_of(row: Any) -> dict[str, Any] | None:
         if not isinstance(row, dict) or row.get("withheld"):
@@ -2841,7 +2856,7 @@ def _with_position_plan(
             stop=row.get("stop"),
             modal=modal,
             risk_pct=risk_pct,
-            typical_day_value=typical_day_value(frame, row.get("code")),
+            typical_day_value=likuiditas(row.get("code")),
             vol_state=vol_state,
             open_positions=open_positions,
             exposure_pct=exposure_pct,
