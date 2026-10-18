@@ -261,6 +261,97 @@ def candidate_rank_key(row: Mapping[str, Any]) -> tuple[float, float, float, str
     )
 
 
+#: Urutan pemutus yang BENAR-BENAR dipakai ``candidate_rank_key``, ditulis apa
+#: adanya supaya pembaca papan tahu kenapa satu nama tampil di atas nama lain
+#: saat skornya sama (spec D3: urutan tidak boleh jadi rahasia).
+RANK_BASIS: tuple[str, ...] = ("skor", "R/R", "nilai transaksi", "kode")
+
+
+def rank_basis(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Isi urutan pemutus untuk ditampilkan, sejalan dengan ``candidate_rank_key``."""
+    metrics = row.get("metrics")
+    metrics = metrics if isinstance(metrics, Mapping) else {}
+    return {
+        "order": list(RANK_BASIS),
+        "values": [
+            _f(row.get("score")),
+            _f(row.get("rr")),
+            _f(metrics.get("value")),
+            str(row.get("code") or ""),
+        ],
+    }
+
+
+def pool_percentile(scores: Iterable[float]) -> list[float]:
+    """Peringkat persentil 0-100 di dalam satu kolam; seri dapat nilai sama.
+
+    Rumusnya ``(rank - 1) / (n - 1) * 100`` dengan seri memakai peringkat
+    rata-rata; ``n == 1`` -> ``[100.0]``. Inilah yang menggantikan bacaan lama
+    "skor 0-100 = keyakinan" (spec D3): 100 hanya berarti "tertinggi di kolam
+    hari itu", bukan "peluang besar".
+    """
+    values = [float(_f(v) or 0.0) for v in scores]
+    n = len(values)
+    if n == 0:
+        return []
+    if n == 1:
+        return [100.0]
+    order = sorted(range(n), key=lambda i: values[i])
+    ranks = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        average_rank = (i + j) / 2.0 + 1.0  # peringkat rata-rata, 1-based
+        for k in range(i, j + 1):
+            ranks[order[k]] = average_rank
+        i = j + 1
+    return [round((r - 1.0) / (n - 1) * 100.0, 1) for r in ranks]
+
+
+def confidence_label(score: float, horizon: int) -> str:
+    """Label keyakinan: "meyakinkan" hanya bila skor bergerak NAIK DAN horizon teruji.
+
+    Dua aturan apa adanya (spec D3) - tidak ada ambang angka baru di sini: skor
+    yang persis ``NEUTRAL_SCORE`` berarti tidak ada komponen yang bergerak, dan
+    horizon tanpa komponen berbobot tidak punya bukti walk-forward sama sekali.
+    Skor yang jatuh **di bawah** netral juga bukan keyakinan: barisnya tetap
+    tayang sebagai kandidat, tapi labelnya tidak boleh menjanjikan apa pun.
+    """
+    value = _f(score)
+    if (
+        value is not None
+        and value > float(NEUTRAL_SCORE)
+        and int(horizon) in validated_horizons()
+    ):
+        return "meyakinkan"
+    return "belum terbukti"
+
+
+def own_history_percentile(metrics: Any, code: str, horizon: int) -> float | None:
+    """Peringkat skor terakhir emiten DI RIWAYATNYA SENDIRI (spec D3).
+
+    Batas yang jujur: yang dihitung skor **dasar** - tanpa lapisan faktor IC dan
+    aliran broker, karena keduanya cuma ada untuk sesi berjalan dan tidak bisa
+    dihitung ulang per sesi lampau. ``None`` bila riwayatnya < 20 baris: angka
+    yang lahir dari 3 sesi bukan peringkat, itu kebisingan.
+    """
+    try:
+        sub = metrics[metrics["code"].astype(str).str.upper() == str(code).upper()]
+    except (AttributeError, KeyError, TypeError):
+        return None
+    if sub is None or len(sub) < 20:
+        return None
+    ordered = sub.sort_values("date")
+    scores = [
+        score_components(candidate_features(row), int(horizon)) for _, row in ordered.iterrows()
+    ]
+    if not scores:
+        return None
+    return pool_percentile(scores)[-1]
+
+
 def tier_sizes(n: int, shares: tuple[float, float, float] = BAND_SHARES) -> tuple[int, int, int]:
     """Jumlah nama per tier (A, B, C) untuk pool ``n`` — minimal 1 nama per tier.
 
@@ -287,6 +378,10 @@ def assign_grades(candidates: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
     """
     ordered = sorted((dict(c) for c in candidates), key=candidate_rank_key, reverse=True)
     n_a, n_b, n_c = tier_sizes(len(ordered))
+    scores = [float(_f(c.get("score")) or 0.0) for c in ordered]
+    # Peringkat di SELURUH kolam, bukan hanya yang lolos potongan tier:
+    # angkanya harus bisa dibandingkan antar hari dengan definisi yang tetap.
+    percentiles = pool_percentile(scores)
     out: list[dict[str, Any]] = []
     for i, c in enumerate(ordered):
         if i < n_a:
@@ -299,6 +394,9 @@ def assign_grades(candidates: Iterable[Mapping[str, Any]]) -> list[dict[str, Any
             break
         c["rank"] = i + 1
         c["pool"] = len(ordered)
+        c["percentile"] = percentiles[i]
+        c["rank_basis"] = rank_basis(c)
+        c["score_confidence"] = confidence_label(scores[i], int(c.get("horizon_days") or 0))
         out.append(c)
     return out
 

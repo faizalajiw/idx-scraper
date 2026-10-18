@@ -625,6 +625,18 @@ class Freshness(BaseModel):
     basis: str = "panel"
 
 
+class RankBasis(BaseModel):
+    """Urutan pemutus yang dipakai peringkat kandidat (spec D3).
+
+    ``order`` = kunci berurutan; ``values`` = nilai tiap kunci untuk baris
+    ini. Ditampilkan supaya pembaca bisa melihat kenapa satu nama di atas
+    nama lain saat skornya sama.
+    """
+
+    order: list[str] = []
+    values: list[Any] = []
+
+
 class RecommendationRow(BaseModel):
     """Satu kandidat beli: skor + grade + level eksekusi + alasan.
 
@@ -645,6 +657,14 @@ class RecommendationRow(BaseModel):
     score: float
     # None = verdict ditahan karena datanya basi (spec D1).
     grade: str | None = None  # A | B | C
+    # Peringkat 0-100 di kolam sesi itu (spec D3), bukan probabilitas.
+    percentile: float | None = None
+    # Skor terakhir vs riwayat emiten itu sendiri; None = riwayat < 20 sesi.
+    own_percentile: float | None = None
+    rank_basis: RankBasis | None = None
+    # Label skor (spec D3) — BUKAN ``confidence`` pola di bawah: yang ini soal
+    # "skornya bergerak & horizonnya teruji", yang itu soal bukti pola.
+    score_confidence: str | None = None  # "meyakinkan" | "belum terbukti"
     setup: str | None = None  # pullback | breakout | trend | netral
     entry_low: float | None = None
     entry_high: float | None = None

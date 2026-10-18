@@ -2829,6 +2829,14 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     )
     candidates = _with_sizing(candidates)
     ranked = rank_candidates(candidates, limit=limit, min_grade=min_grade)
+    # Persentil riwayat sendiri hanya untuk baris yang benar-benar tampil
+    # (<= limit): biayanya per kode x panjang riwayat, bukan per pasar.
+    from ..research.recommend import DEFAULT_HORIZON, own_history_percentile
+
+    for r in ranked:
+        r["own_percentile"] = own_history_percentile(
+            metrics, r["code"], int(r.get("horizon_days") or DEFAULT_HORIZON)
+        )
 
     out["date"] = str(pd.Timestamp(last_date).date())
     out["scanned"] = scanned
