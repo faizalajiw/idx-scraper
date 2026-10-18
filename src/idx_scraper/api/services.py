@@ -1252,3 +1252,16 @@ def get_data_health(sessions: int = 30, row_threshold_pct: float = 50.0) -> dict
             "basis": gaps.basis,
         },
     }
+
+
+def get_freshness() -> dict[str, Any]:
+    """Kesegaran tiga-status untuk badge permukaan (spec D1).
+
+    Sengaja tipis: perhitungannya hidup di `idx_scraper.freshness` (murni,
+    teruji tanpa DB), dan badge di tiap halaman cuma butuh dua query
+    `max(...)` — bukan empat pemeriksa milik `/api/data-health`.
+    """
+    from .. import freshness
+
+    with get_cursor() as cur:
+        return freshness.current(cur)

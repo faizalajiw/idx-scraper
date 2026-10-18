@@ -36,6 +36,8 @@ def synthetic_panel(days: int = 130) -> dict:
 
 
 def metrics_row(**overrides) -> pd.DataFrame:
+    """Satu baris metrik; ``pool_size`` membuat N emiten sekolam sesi itu."""
+    pool_size = int(overrides.pop("pool_size", 1))
     row = {
         "code": "AAAA",
         "name": "Anak A",
@@ -57,7 +59,14 @@ def metrics_row(**overrides) -> pd.DataFrame:
         "pattern_sell": (),
     }
     row.update(overrides)
-    return pd.DataFrame([row])
+    rows = []
+    for i in range(max(1, pool_size)):
+        r = dict(row)
+        if pool_size > 1:  # kode harus unik supaya benar-benar sekolam
+            r["code"] = f"{str(row['code'])[:3]}{chr(65 + i)}"
+            r["name"] = f"Anak {chr(65 + i)}"
+        rows.append(r)
+    return pd.DataFrame(rows)
 
 
 # ------------------------------------------------------------------ metrics
@@ -213,3 +222,8 @@ def test_summarize_t_stat_uses_abnormal_not_raw_forward():
 
     assert out["t_stat"] == _round_opt(_nw_tstat(sub["abn_21"]))
     assert abs(out["t_stat"]) < 1.0
+
+
+def test_kandidat_membawa_persentil_dan_basis_urutan():
+    out = candidates_for_date(metrics_row(pool_size=3), pd.Timestamp("2026-05-01"))
+    assert out and all("percentile" in c and "rank_basis" in c for c in out)

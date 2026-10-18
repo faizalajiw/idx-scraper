@@ -13,21 +13,28 @@ Kontrak yang diuji (2026-10-09):
 
 from __future__ import annotations
 
+import pandas as pd
+
 from idx_scraper.research.recommend import (
     COMPONENT_WEIGHTS,
     DEFAULT_HORIZON,
     assign_grades,
     candidate_features,
     candidate_rank_key,
+    confidence_label,
     entry_plan,
+    own_history_percentile,
     pattern_label,
+    pool_percentile,
     position_size_pct,
+    rank_basis,
     rank_candidates,
     safe_horizon,
     score_candidate,
     score_components,
     smart_money_evidence,
     tier_sizes,
+    validated_horizons,
 )
 
 
@@ -256,9 +263,14 @@ def test_pola_menjadi_alasan_tanpa_menggeser_skor():
     assert any("Inisiasi" in r for r in with_pattern["reasons"])
 
 
-def test_sell_signal__illiquidity__short_history_are_not_candidates():
+def test_score_candidate_tidak_lagi_menyaring_likuiditas():
+    """Lantai likuiditas pindah ke research.pool (satu kolam, spec 6.6)."""
+    c = score_candidate(base_metrics(value=1.0e8))
+    assert c is not None
+
+
+def test_score_candidate_masih_menolak_sinyal_sell_dan_histori_pendek():
     assert score_candidate(base_metrics(signal="SELL")) is None
-    assert score_candidate(base_metrics(value=1.0e8)) is None
     assert score_candidate(base_metrics(hist_days=30)) is None
 
 
@@ -368,3 +380,87 @@ def test_rank_candidates_orders_by_score_then_rr_and_filters_grade():
     assert [r["code"] for r in ranked] == ["A1", "A2", "B1", "C1"]
     only_ab = rank_candidates(rows, min_grade="B")
     assert [r["code"] for r in only_ab] == ["A1", "A2", "B1"]
+
+
+# --------------------------------------------------------- skala & keyakinan
+
+
+def _own_history_frame(n: int = 60):
+    """Satu emiten, ``n`` sesi, nilai & RSI beragam (riwayat sendiri)."""
+    rows = []
+    for i in range(n):
+        row = base_metrics(value=1.0e9 + i * 1.0e7, rsi=45.0 + (i % 25), hist_days=i + 1)
+        row["date"] = pd.Timestamp("2026-01-01") + pd.Timedelta(days=i)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_persentil_satu_baris_seratus():
+    assert pool_percentile([52.0]) == [100.0]
+
+
+def test_persentil_pool_memeta_tertinggi_ke_seratus():
+    # Ruling Task 6: contoh angka di plan ([50, 50] -> 50) bertabrakan dengan
+    # rumus yang plan itu sendiri tuliskan, yaitu (rank-1)/(n-1)*100 dengan seri
+    # memakai peringkat rata-rata. Rumusnya yang dipakai (itu janji spec D3:
+    # skala 0-100 yang bisa dibandingkan); contohnya yang salah hitung.
+    assert pool_percentile([50.0, 50.0, 52.0]) == [25.0, 25.0, 100.0]
+
+
+def test_persentil_seri_dapat_nilai_sama():
+    # titik-massa di NEUTRAL_SCORE: seri tidak boleh mengklaim "tertinggi"
+    assert pool_percentile([50.0, 50.0]) == [50.0, 50.0]
+
+
+def test_urutan_pemutus_ditulis_dan_ditampilkan():
+    r = rank_basis({"score": 52.0, "rr": 2.0, "metrics": {"value": 1.2e9}, "code": "BBRI"})
+    assert r["order"] == ["skor", "R/R", "nilai transaksi", "kode"]
+    assert r["values"][0] == 52.0
+    assert r["values"][3] == "BBRI"
+
+
+def test_persentil_riwayat_sendiri_memakai_skor_dasar():
+    """Emiten beriwayat panjang: skor terakhir dibanding riwayatnya sendiri."""
+    p = own_history_percentile(_own_history_frame(n=60), "TEST", 21)
+    assert p is not None and 0.0 <= p <= 100.0
+
+
+def test_persentil_riwayat_sendiri_none_kalau_riwayat_pendek():
+    assert own_history_percentile(_own_history_frame(n=5), "TEST", 21) is None
+
+
+def test_label_meyakinkan_hanya_untuk_horizon_tervalidasi():
+    assert confidence_label(52.0, 21) == "meyakinkan"
+    assert confidence_label(50.0, 21) == "belum terbukti"
+
+
+def test_label_meyakinkan_tidak_keluar_untuk_horizon_tanpa_komponen():
+    assert confidence_label(52.0, 7) == "belum terbukti"
+
+
+def test_skor_di_bawah_netral_bukan_keyakinan():
+    """Ruling Task 6: skor yang turun dari NEUTRAL_SCORE bukan "meyakinkan".
+
+    Ditemukan di data nyata 2026-10-16: JECX (skor 50.0 = netral) diberi
+    "belum terbukti" sementara empat nama ber-skor 49.0 - komponennya bergerak
+    ke BAWAH - justru diberi "meyakinkan". Label yang terbaca pengguna adalah
+    "sinyal beli ini meyakinkan", jadi ambangnya harus di ATAS netral.
+    """
+    assert confidence_label(49.0, 21) == "belum terbukti"
+    assert confidence_label(52.0, 21) == "meyakinkan"
+
+
+def test_assign_grades_membawa_persentil_basis_dan_keyakinan():
+    out = assign_grades([score_candidate(base_metrics())])
+    assert out
+    assert out[0]["percentile"] == 100.0
+    assert out[0]["rank_basis"]["order"][0] == "skor"
+    assert out[0]["score_confidence"] in ("meyakinkan", "belum terbukti")
+
+
+def test_label_keyakinan_memakai_horizon_default_bila_kandidat_tidak_membawanya():
+    """N1 (review): satu fallback untuk field yang sama, bukan 0 di sini dan 21 di sana."""
+    assert DEFAULT_HORIZON in validated_horizons(), "dasar tes: horizon default harus teruji"
+    out = assign_grades([{"code": "AAAA", "score": 52.0, "rr": 2.0, "metrics": {"value": 1.0e9}}])
+    assert out[0]["score_confidence"] == confidence_label(52.0, DEFAULT_HORIZON)
+    assert out[0]["score_confidence"] == "meyakinkan"

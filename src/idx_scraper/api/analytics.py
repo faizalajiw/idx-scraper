@@ -26,6 +26,8 @@ from ..analysis import (
     generate_signal,
     signal_series,
 )
+from ..freshness import expected_session, withhold
+from ..research.regime import gate
 from .database import get_cursor
 from .sector_map import FALLBACK_SECTOR, sector_for
 
@@ -101,8 +103,14 @@ def get_market_regime() -> dict[str, Any]:
         )
 
     if df.empty:
-        return {"regime": None, "source": None, "as_of": None,
-                "generated_at": datetime.now(WIB).isoformat(timespec="seconds")}
+        out: dict[str, Any] = {
+            "regime": None,
+            "source": None,
+            "as_of": None,
+            "generated_at": datetime.now(WIB).isoformat(timespec="seconds"),
+        }
+        out["gate"] = _gate_for(out, datetime.now(WIB))
+        return out
 
     adx_df = calculate_adx(df)
     out = classify_regime(adx_df)
@@ -115,7 +123,24 @@ def get_market_regime() -> dict[str, Any]:
         if out["regime"] == "TRENDING_UP"
         else "down" if out["regime"] == "TRENDING_DOWN" else None
     )
+    out["gate"] = _gate_for(out, datetime.now(WIB))
     return out
+
+
+def _gate_for(regime: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Gerbang rezim untuk banner: sesi indeks basi tidak pernah memblokir (D1).
+
+    Dipisah dari `get_market_regime` supaya aturannya bisa diuji tanpa DB
+    dan tanpa jam palsu.
+    """
+    as_of = regime.get("as_of")
+    expected = expected_session(now).isoformat()
+    return gate(
+        regime.get("regime"),
+        regime.get("adx"),
+        regime.get("vol_state"),
+        regime_fresh=bool(as_of) and as_of >= expected,
+    )
 
 
 def _f(v: Any) -> float | None:
@@ -2606,6 +2631,15 @@ def _recommendation_context() -> dict[str, Any]:
     metrics = _recommendation_metrics()
     histories = _pattern_histories()
 
+    quarantined: set[str] = set()
+    try:
+        from ..research.pool import quarantined_codes
+
+        with get_cursor() as cur:
+            quarantined = quarantined_codes(cur)
+    except Exception as e:  # tabel karantina belum ada / DB sibuk
+        print(f"[warn] karantina kolam tidak terbaca: {e}", file=sys.stderr)
+
     factor_adj: dict[str, float] = {}
     factor_validated = False
     factor_note = (
@@ -2648,6 +2682,14 @@ def _recommendation_context() -> dict[str, Any]:
     except Exception as e:
         print(f"[warn] lapisan broker rekomendasi dilewati: {e}", file=sys.stderr)
 
+    from ..research.pool import pool_members
+
+    pool = (
+        pool_members(metrics, metrics["date"].max(), quarantined=quarantined)
+        if not metrics.empty
+        else set()
+    )
+
     out: dict[str, Any] = {
         "metrics": metrics,
         "histories": histories,
@@ -2657,6 +2699,8 @@ def _recommendation_context() -> dict[str, Any]:
         "broker_adj": broker_adj,
         "broker_validated": broker_validated,
         "broker_note": broker_note,
+        "pool": pool,
+        "quarantined": quarantined,
     }
     _research_cache_put("recommendation_context", out, ttl=1800.0)
     return out
@@ -2687,6 +2731,86 @@ def _with_sizing(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return candidates
 
 
+def _freshness_of() -> dict[str, Any]:
+    """Status kesegaran saat ini (spec D1).
+
+    Satu-satunya jalur `api.services` yang dipakai di modul ini, dan
+    sengaja diimpor di dalam fungsi supaya tak ada impor melingkar.
+    """
+    from .services import get_freshness
+
+    return get_freshness()
+
+
+def _withhold_panel(out: dict[str, Any]) -> dict[str, Any]:
+    """Papan + status kesegaran, verdict ditahan bila basi (spec D1).
+
+    Dipanggil SESUDAH cache dibaca/ditulis: status segar/basi berubah tiap
+    sesi, dan cache 30 menit tidak boleh menguncinya. Dict yang di-cache
+    tidak pernah termutasi - `withhold` mengembalikan salinan.
+    """
+    f = _freshness_of()
+    return {
+        **out,
+        "freshness": f,
+        "withheld": bool(f.get("withhold")),
+        "rows": withhold(list(out.get("rows") or []), f),
+    }
+
+
+def _withhold_stock(out: dict[str, Any]) -> dict[str, Any]:
+    """Sama seperti papan, untuk satu emiten (spec D1)."""
+    f = _freshness_of()
+    candidate = out.get("candidate")
+    if isinstance(candidate, dict):
+        candidate = withhold([candidate], f)[0]
+    return {**out, "freshness": f, "withheld": bool(f.get("withhold")), "candidate": candidate}
+
+
+def _regime_gate() -> dict[str, Any] | None:
+    """Gerbang rezim saat ini untuk papan (spec 6.5 + keputusan pemilik Q5).
+
+    Fail-open dengan sebab tertulis: rezim yang tidak terbaca TIDAK boleh
+    membisukan papan tanpa penjelasan. Sengaja tanpa cache - dipanggil SESUDAH
+    cache papan (statusnya berubah intraday), dan `get_market_regime` sudah
+    dibaca banner tiap 30 detik.
+    """
+    try:
+        gate = get_market_regime().get("gate")
+    except Exception as e:
+        print(f"[warn] gerbang rezim tidak terbaca: {e}", file=sys.stderr)
+        return None
+    return gate if isinstance(gate, dict) else None
+
+
+def _gate_withhold(out: dict[str, Any], gate: dict[str, Any] | None) -> dict[str, Any]:
+    """Tahan TAWARAN papan saat rezim eksplisit menolak (spec 6.5/Q5).
+
+    Yang ditahan cuma tawarannya - `grade` (label keyakinan) dan `position_pct`
+    (ukuran posisi) - sementara angka, level, tanggal, dan sebabnya tetap tampil.
+    Dipanggil SESUDAH cache, seperti penahanan D1, dan tidak pernah memutasi dict
+    yang hidup di cache (`_withhold_panel`/`_withhold_stock` sudah mengembalikan
+    salinan barisnya).
+    """
+    result: dict[str, Any] = {**out, "gate": gate}
+    if not gate or not gate.get("blocked"):
+        return result
+    if "rows" in result:
+        result["rows"] = [
+            {**row, "grade": None, "position_pct": None, "withheld": True}
+            for row in out.get("rows") or []
+        ]
+    candidate = result.get("candidate")
+    if isinstance(candidate, dict):
+        result["candidate"] = {
+            **candidate,
+            "grade": None,
+            "position_pct": None,
+            "withheld": True,
+        }
+    return result
+
+
 def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]:
     """Papan kandidat beli se-pasar untuk sesi terakhir (read-only).
 
@@ -2705,7 +2829,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     cache_key = f"recommendations:{limit}:{min_grade}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return cached
+        return _gate_withhold(_withhold_panel(cached), _regime_gate())
 
     from ..research.recommend import rank_candidates
     from ..research.recommendation_log import candidates_for_date
@@ -2732,7 +2856,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     }
     if metrics.empty:
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _gate_withhold(_withhold_panel(out), _regime_gate())
 
     last_date = metrics["date"].max()
     scanned = int((metrics["date"] == last_date).sum())
@@ -2744,16 +2868,27 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
         factor_validated=ctx["factor_validated"],
         broker_adj_by_code=ctx["broker_adj"],
         broker_validated=ctx["broker_validated"],
+        pool=ctx["pool"],
+        quarantined=ctx["quarantined"],
     )
     candidates = _with_sizing(candidates)
     ranked = rank_candidates(candidates, limit=limit, min_grade=min_grade)
+    # Persentil riwayat sendiri hanya untuk baris yang benar-benar tampil
+    # (<= limit): biayanya per kode x panjang riwayat, bukan per pasar.
+    from ..research.recommend import DEFAULT_HORIZON, own_history_percentile
+
+    for r in ranked:
+        r["own_percentile"] = own_history_percentile(
+            metrics, r["code"], int(r.get("horizon_days") or DEFAULT_HORIZON)
+        )
 
     out["date"] = str(pd.Timestamp(last_date).date())
     out["scanned"] = scanned
+    out["pool_size"] = len(ctx["pool"])
     out["total_candidates"] = len(candidates)
     out["rows"] = ranked
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return out
+    return _gate_withhold(_withhold_panel(out), _regime_gate())
 
 
 def get_stock_recommendation(code: str) -> dict[str, Any]:
@@ -2768,8 +2903,9 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     cache_key = f"recommendation_stock:{code}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return cached
+        return _gate_withhold(_withhold_stock(cached), _regime_gate())
 
+    from ..research.recommend import DEFAULT_HORIZON, own_history_percentile
     from ..research.recommendation_log import candidates_for_date
 
     ctx = _recommendation_context()
@@ -2793,22 +2929,22 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     if metrics.empty:
         out["reason"] = "Belum ada data harga yang cukup untuk menghitung kandidat."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _gate_withhold(_withhold_stock(out), _regime_gate())
 
     rows = metrics[metrics["code"] == code]
     if rows.empty:
         out["reason"] = f"Tidak ada data harga untuk {code}."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _gate_withhold(_withhold_stock(out), _regime_gate())
 
     row = rows.sort_values("date").iloc[-1]
     last_date = metrics["date"].max()
     out["has_data"] = True
     out["as_of"] = str(pd.Timestamp(last_date).date())
 
-    # Skor **dan grade** memakai jalur yang sama dengan papan (satu pool, satu
+    # Skor **dan grade** memakai jalur yang sama dengan papan (satu kolam, satu
     # peringkat), jadi angka emiten di halaman detail tidak mungkin berbeda dari
-    # angkanya di papan. Grade adalah peringkat relatif pool hari itu.
+    # angkanya di papan. Grade adalah peringkat relatif kolam hari itu.
     candidates = candidates_for_date(
         metrics,
         last_date,
@@ -2817,6 +2953,8 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
         factor_validated=ctx["factor_validated"],
         broker_adj_by_code=ctx["broker_adj"],
         broker_validated=ctx["broker_validated"],
+        pool=ctx["pool"],
+        quarantined=ctx["quarantined"],
     )
     candidate = next((c for c in candidates if c["code"] == code), None)
     if candidate is None:
@@ -2831,10 +2969,16 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
                 "likuiditas kurang, sinyal jual, atau level eksekusi tidak bisa dihitung."
             )
     else:
-        out["candidate"] = _with_sizing([candidate])[0]
+        candidate = _with_sizing([candidate])[0]
+        # N4 (review): field ini harus terisi di kedua permukaan - `null` tidak
+        # boleh ambigu antara "riwayat pendek" dan "endpoint lupa mengisi".
+        candidate["own_percentile"] = own_history_percentile(
+            metrics, candidate["code"], int(candidate.get("horizon_days") or DEFAULT_HORIZON)
+        )
+        out["candidate"] = candidate
 
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return out
+    return _gate_withhold(_withhold_stock(out), _regime_gate())
 
 
 def get_recommendation_track() -> dict[str, Any]:

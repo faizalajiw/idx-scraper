@@ -605,6 +605,38 @@ class RecommendationLayerStatus(BaseModel):
     note: str | None = None
 
 
+class Freshness(BaseModel):
+    """Tiga status kesegaran (spec D1) — "angka ini masih bisa dipercaya?".
+
+    ``withhold`` True = permukaan wajib menahan verdict yang lahir dari data
+    ini (hanya angka, tanggal, dan ``reason`` yang boleh tampil).
+    ``index_status`` adalah penanda terpisah untuk bagian berindeks (mis. kartu
+    rezim): ia tidak pernah mengubah ``status`` halaman.
+    """
+
+    status: str
+    withhold: bool
+    reason: str
+    panel_latest: str | None = None
+    index_latest: str | None = None
+    index_status: str
+    expected: str | None = None
+    checked_at: str
+    basis: str = "panel"
+
+
+class RankBasis(BaseModel):
+    """Urutan pemutus yang dipakai peringkat kandidat (spec D3).
+
+    ``order`` = kunci berurutan; ``values`` = nilai tiap kunci untuk baris
+    ini. Ditampilkan supaya pembaca bisa melihat kenapa satu nama di atas
+    nama lain saat skornya sama.
+    """
+
+    order: list[str] = []
+    values: list[Any] = []
+
+
 class RecommendationRow(BaseModel):
     """Satu kandidat beli: skor + grade + level eksekusi + alasan.
 
@@ -623,7 +655,16 @@ class RecommendationRow(BaseModel):
     code: str
     name: str | None = None
     score: float
-    grade: str  # A | B | C
+    # None = verdict ditahan karena datanya basi (spec D1).
+    grade: str | None = None  # A | B | C
+    # Peringkat 0-100 di kolam sesi itu (spec D3), bukan probabilitas.
+    percentile: float | None = None
+    # Skor terakhir vs riwayat emiten itu sendiri; None = riwayat < 20 sesi.
+    own_percentile: float | None = None
+    rank_basis: RankBasis | None = None
+    # Label skor (spec D3) — BUKAN ``confidence`` pola di bawah: yang ini soal
+    # "skornya bergerak & horizonnya teruji", yang itu soal bukti pola.
+    score_confidence: str | None = None  # "meyakinkan" | "belum terbukti"
     setup: str | None = None  # pullback | breakout | trend | netral
     entry_low: float | None = None
     entry_high: float | None = None
@@ -640,6 +681,26 @@ class RecommendationRow(BaseModel):
     warnings: list[str] = []
     layers: dict[str, bool] = {}
     metrics: RecommendationMetrics | None = None
+    # True = grade/ukuran baris ini ditahan karena data tidak segar (D1).
+    withheld: bool = False
+
+
+class RegimeGate(BaseModel):
+    """Gerbang rezim (spec 6.5): boleh menolak, tak boleh membisukan tanpa sebab.
+
+    ``blocked`` True = papan kandidat menahan tawaran baru dan menyebut
+    ``reason`` di layar. ``volatile`` cuma penanda (plafon ukuran posisi
+    urusan lapis 3). ``regime_fresh`` False selalu berarti tidak memblokir:
+    rezim basi menandai dirinya sendiri, bukan membisukan halaman (spec D1).
+    """
+
+    blocked: bool
+    reason: str
+    regime: str | None = None
+    adx: float | None = None
+    vol_state: str | None = None
+    volatile: bool = False
+    regime_fresh: bool = True
 
 
 class RecommendationResponse(BaseModel):
@@ -649,10 +710,18 @@ class RecommendationResponse(BaseModel):
     generated_at: str | None = None
     scanned: int = 0
     total_candidates: int = 0
+    #: Anggota kolam sesi itu sebelum dipotong limit/min_grade (spec 6.6:
+    #: 'berapa banyak nama yang keluar' harus terbaca, bukan ditaksir).
+    pool_size: int = 0
     limit: int = 20
     min_grade: str = "C"
     layers: RecommendationLayerStatus
     rows: list[RecommendationRow] = []
+    freshness: Freshness | None = None
+    withheld: bool = False
+    #: Gerbang rezim. `blocked` True berarti grade & ukuran posisi ditahan
+    #: (spec 6.5/Q5) - angkanya, level, dan sebabnya tetap tampil.
+    gate: RegimeGate | None = None
 
 
 class StockRecommendation(BaseModel):
@@ -664,6 +733,9 @@ class StockRecommendation(BaseModel):
     candidate: RecommendationRow | None = None
     layers: RecommendationLayerStatus
     reason: str | None = None
+    freshness: Freshness | None = None
+    withheld: bool = False
+    gate: RegimeGate | None = None
     generated_at: str | None = None
 
 
@@ -782,6 +854,7 @@ class MarketRegime(BaseModel):
     as_of: str | None = None
     dir_hint: str | None = None
     generated_at: str | None = None
+    gate: RegimeGate | None = None
 
 
 
@@ -1423,3 +1496,4 @@ class DataHealth(BaseModel):
     field_coverage: CoverageCheck
     row_counts: RowCountCheck
     session_gaps: SessionGapsCheck
+

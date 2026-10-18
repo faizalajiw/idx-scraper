@@ -33,6 +33,7 @@ from .schemas import (
     BrokerFlow,
     DataHealth,
     ForeignFlow,
+    Freshness,
     HoldCheckResponse,
     MarketLeaders,
     MarketOverview,
@@ -190,6 +191,17 @@ def data_health(
     bersama oleh `idx health` / job `health_eod`.
     """
     return services.get_data_health(sessions, row_threshold_pct)
+
+
+@app.get("/api/freshness", response_model=Freshness)
+def freshness() -> dict:
+    """Status kesegaran data satu-baris (spec D1): `segar` / `basi` / `tak diketahui`.
+
+    Dipakai badge di tiap halaman untuk menjawab "angka ini masih bisa
+    dipercaya?" tanpa memuat empat pemeriksa `/api/data-health`. Jam batas EOD
+    dihormati: sebelum ±16:00 WIB, sesi hari ini memang belum wajib ada.
+    """
+    return services.get_freshness()
 
 
 @app.get("/api/market/overview", response_model=MarketOverview)
