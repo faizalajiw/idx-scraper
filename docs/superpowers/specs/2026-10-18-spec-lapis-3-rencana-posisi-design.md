@@ -1,8 +1,8 @@
 # Spec Desain — Lapis 3: Rencana Posisi (P5)
 
 - **Tanggal:** 18 Okt 2026
-- **Status:** **draft, menunggu persetujuan pemilik.** Belum ada satu baris kode P5 yang ditulis. Sesudah disetujui, langkah berikutnya plan tertulis, bukan kode.
-- **Revisi:** 2 (18 Okt 2026). Revisi 1 sesudah percakapan. Revisi 2 sesudah pemeriksa konteks segar (builder check) menemukan enam lubang: empat ditutup sebagai call penulis (bagian 4b), dua naik jadi pertanyaan pemilik (bagian 7).
+- **Status:** **draft revisi 3, semua pertanyaan pemilik terjawab; menunggu persetujuan akhir.** Belum ada satu baris kode P5 yang ditulis. Sesudah disetujui, langkah berikutnya plan tertulis, bukan kode.
+- **Revisi:** 3 (18 Okt 2026). Revisi 1 sesudah percakapan; revisi 2 sesudah pemeriksa konteks segar menemukan enam lubang (empat ditutup sebagai call penulis di bagian 4b, dua naik jadi pertanyaan); revisi 3 sesudah pemilik menjawab kelima pertanyaan (bagian 7).
 - **Pemilik keputusan:** pemilik proyek (pengguna dashboard)
 - **Penulis:** Lucif
 - **Cakupan:** lapis 3 mesin keputusan di `idx-scraper` + tiga permukaan di `idx-web`
@@ -81,26 +81,28 @@ Diperiksa dari kode kedua repo, 18 Okt 2026.
 |---|---|---|
 | D1 | **Modal adalah input dinamis**, diketik pemilik, disimpan **di browser** (localStorage, kunci `ml-modal`). Tidak ada tabel, tidak ada endpoint penyimpanan. | pemilik, 18 Okt 2026 |
 | D2 | **Tiga permukaan**: (A) satu baris porsi di kartu papan, (B) panel Rencana posisi di halaman emiten, (C) strip portofolio di atas papan. | pemilik, 18 Okt 2026 |
-| D3 | **Risiko per transaksi juga input**, default 1% modal (default yang sudah ada di kode, `DEFAULT_RISK_PCT`). Disimpan di browser dengan kunci `ml-risk-pct`. | usulan penulis, default dikonfirmasi pemilik |
+| D3 | **Risiko per transaksi juga input**, default 1% modal (default yang sudah ada di kode, `DEFAULT_RISK_PCT`). Disimpan di browser dengan kunci `ml-risk-pct`. | pemilik, 18 Okt 2026 |
 | D4 | **Plafon per nama tetap 25% modal** (`MAX_POSITION_PCT`), tidak diubah. | kode hari ini |
-| D5 | **Plafon likuiditas memakai angka yang sama dengan backtest: 2% dari nilai transaksi harian.** Nama tipis tidak boleh dapat posisi besar karena tidak ada pintu keluar. | usulan penulis, angka dari F6 |
+| D5 | **Plafon likuiditas memakai angka yang sama dengan backtest: 2% dari nilai transaksi harian.** Nilai yang dipakai: **median nilai transaksi 5 sesi terakhir**. | pemilik, 18 Okt 2026 |
 | D6 | **Satu nilai final per nama**: porsi = yang terkecil dari plafon yang berlaku, dan plafon yang memotong disebut namanya. | usulan penulis |
 | D7 | **Tanpa modal, hanya persen.** Rupiah, lot, dan rugi maksimum kosong. | penulis |
 | D8 | **Pembulatan lot ke bawah**, 1 lot = 100 lembar. Nilai yang ditampilkan adalah nilai lot yang benar-benar bisa dibeli, bukan nilai teoretis. | penulis |
 | D9 | **Hitungan dijalankan di backend sebagai fungsi murni, sesudah cache** (F9). Web mengirim keadaan yang dibutuhkan sebagai query: `modal`, `risk_pct`, `open_positions`, `exposure_pct`. | penulis, revisi 2 |
 | D10 | **Rencana pembatalan tampil di blok yang sama** dengan porsinya (P2 §6.7). | sudah diputuskan di P2 |
 | D11 | **Verdict ditahan berarti porsi ditahan.** Saat gerbang rezim menolak atau data basi, yang tampil hanya level dan sebabnya, bukan ukuran posisi. | P4 (F10) |
-| D12 | **Keadaan portofolio diketik pemilik** di strip (jumlah posisi terbuka, eksposur sekarang). P6 yang menggantinya dengan catatan sebenarnya. | penulis, menunggu Q4 |
+| D12 | **Keadaan portofolio diketik pemilik** di strip (jumlah posisi terbuka, eksposur sekarang). P6 yang menggantinya dengan catatan sebenarnya. | pemilik, 18 Okt 2026 |
 | D13 | **Risiko serentak diturunkan, bukan input kelima**: `risiko serentak = posisi terbuka x risiko per transaksi`. Strip tetap empat kotak isian seperti mockup yang disetujui. | call penulis, bagian 4b |
 | D14 | **Plafon jumlah posisi bekerja sebagai gerbang, bukan potongan**: kalau posisi terbuka sudah mencapai batas, porsi = 0 dan sebabnya ditulis ("sudah penuh"). | call penulis, bagian 4b |
 | D15 | **Papan dan halaman emiten menampilkan angka yang sama.** Keempat angka keadaan ikut di kedua permintaan, jadi tidak mungkin satu nama punya dua porsi. | call penulis, bagian 4b |
 | D16 | **Baris "Saran porsi X% modal" yang lama digantikan**, bukan didampingi. Satu nama, satu angka porsi. | call penulis, bagian 4b |
+| D17 | **Batas portofolio terkunci: 6 posisi terbuka, risiko serentak 6% modal, eksposur total 80% modal.** | pemilik, 18 Okt 2026 (paket iii) |
+| D18 | **Potongan rezim saat VOLATILE: separuh.** | pemilik, 18 Okt 2026 |
 
 ---
 
 ## 4b. Call penulis sesudah pemeriksa konteks segar
 
-Empat lubang ditutup tanpa bertanya, karena jawabannya tidak mengubah apa yang dibangun:
+Lima lubang ditutup tanpa bertanya, karena jawabannya tidak mengubah apa yang dibangun:
 
 1. **Risiko serentak (D13).** Menambah kotak isian kelima berarti menyimpang dari mockup yang sudah kamu setujui, dan menambah satu angka yang harus kamu isi tiap kali. Menurunkannya dari jumlah posisi x risiko juga bersikap hati-hati: kalau posisi lama berisiko lebih kecil dari 1%, turunannya melebih-lebihkan risiko, bukan menyepelekan.
 2. **Plafon jumlah posisi (D14).** "Masih boleh masuk berapa nama lagi" adalah pertanyaan hitung, bukan persen: kalau buku penuh, jawabannya nol, dan potongan persen apa pun akan mengaburkan itu.
@@ -119,11 +121,11 @@ position_plan(
   entry, stop,
   modal=None,               # rupiah; None = mode persen saja
   risk_pct=1.0,
-  typical_day_value=None,   # nilai transaksi harian tipikal nama itu (rupiah)
+  typical_day_value=None,   # median nilai transaksi 5 sesi terakhir nama itu (rupiah)
   vol_state=None,           # NORMAL | VOLATILE | QUIET
-  open_positions=None,       # jumlah posisi terbuka (diketik pemilik)
-  exposure_pct=None,         # eksposur sekarang, persen modal (diketik pemilik)
-  limits=...,                # plafon: per nama, likuiditas, rezim, portofolio
+  open_positions=None,      # jumlah posisi terbuka (diketik pemilik)
+  exposure_pct=None,        # eksposur sekarang, persen modal (diketik pemilik)
+  limits=...,               # plafon: per nama, likuiditas, rezim, portofolio
 )
 ```
 
@@ -140,15 +142,15 @@ Keluaran (persen selalu ada bila stop valid; sisanya hanya bila modal ada):
 | `risk_rupiah` | `lots x 100 x (entry_ref - stop)`, yaitu rugi kalau stop kena |
 | `note` | kalimat pendek: plafon mana yang memotong, atau "sudah penuh", atau "modal kurang untuk 1 lot", atau "tanpa modal, hanya persen" |
 
-**Plafon likuiditas.** `plafon_pct = 2% x typical_day_value / modal x 100`. Tanpa modal, plafon ini dilewati dan `note` mengatakannya. Nilai `typical_day_value` diambil sebagai **median nilai transaksi 5 sesi terakhir** (jendela yang sama dengan definisi tebal di P2 D4), supaya satu hari lonjakan tidak memberi izin posisi besar. Angka pastinya diuji, bukan ditebak (bagian 7 Q3).
+**Plafon likuiditas (D5).** `plafon_pct = 2% x typical_day_value / modal x 100`. Nilai `typical_day_value` = **median nilai transaksi 5 sesi terakhir** (jendela yang sama dengan definisi tebal di P2 D4), supaya satu hari lonjakan tidak memberi izin posisi besar. Tanpa modal, plafon ini dilewati dan `note` mengatakannya.
 
-**Plafon rezim.** Saat `vol_state = VOLATILE`, porsi dipotong separuh. Saat gerbang rezim menolak, porsi ditahan sepenuhnya, dan itu urusan penahanan P4 (F10, D11), bukan fungsi murni ini. Besaran potongan menunggu bagian 7 Q2.
+**Plafon rezim (D18).** Saat `vol_state = VOLATILE`, porsi dipotong separuh. Saat gerbang rezim menolak, porsi ditahan sepenuhnya, dan itu urusan penahanan P4 (F10, D11), bukan fungsi murni ini.
 
-**Plafon portofolio.** Berpijak pada keadaan yang diketik pemilik (D12):
+**Plafon portofolio (D12, D13, D14, D17).** Batasnya 6 posisi terbuka, eksposur total 80% modal, risiko serentak 6% modal. Berpijak pada keadaan yang diketik pemilik:
 
-- jumlah posisi terbuka sudah mencapai batas: porsi 0, `binding_cap = "portfolio"`, `note` berkata "sudah penuh" (D14);
-- eksposur sekarang ditambah porsi baru akan melewati batas eksposur: porsi dipotong sampai plafon itu saja;
-- risiko serentak diturunkan dari jumlah posisi x risiko per transaksi (D13), dipakai sebagai penanda, bukan plafon terpisah.
+- jumlah posisi terbuka sudah mencapai 6: porsi 0, `binding_cap = "portfolio"`, `note` berkata "sudah penuh" (D14);
+- eksposur sekarang ditambah porsi baru akan melewati 80%: porsi dipotong sampai plafon itu saja;
+- risiko serentak (jumlah posisi terbuka x risiko per transaksi) dipakai sebagai penanda di layar, bukan plafon terpisah (D13).
 
 ### 5.2 Yang ditampilkan, per permukaan
 
@@ -165,7 +167,7 @@ Saat verdict ditahan (D11): baris ini tidak muncul, digantikan kalimat penahanan
 
 **(B) Panel "Rencana posisi" di halaman emiten** berisi kotak isian modal dan risiko, lalu tabel: porsi, nilai beli, jumlah lot, rugi maksimum, plafon likuiditas, plafon rezim, dan baris penutup berisi aturan pembatalan (D10).
 
-**(C) Strip portofolio di atas papan** berisi empat kotak isian (modal, risiko per transaksi, posisi terbuka, eksposur sekarang) dan angkanya: modal, risiko per transaksi, posisi terbuka (mis. 3 dari 8), eksposur, dan **ruang sisa = batas eksposur dikurangi eksposur sekarang** (bukan 100% dikurangi eksposur; mockup revisi 1 salah menulis 66% untuk eksposur 34% dengan batas 80%, angka yang benar 46%).
+**(C) Strip portofolio di atas papan** berisi empat kotak isian (modal, risiko per transaksi, posisi terbuka, eksposur sekarang) dan angkanya: modal, risiko per transaksi, posisi terbuka (mis. 3 dari 6), eksposur, dan **ruang sisa = batas eksposur dikurangi eksposur sekarang** (bukan 100% dikurangi eksposur; mockup revisi 1 salah menulis 66% untuk eksposur 34% dengan batas 80%, angka yang benar 46%). Risiko serentak ditampilkan sebagai turunan, dengan penanda bahwa ia dihitung dari angka yang kamu isi sendiri.
 
 ### 5.3 Pemisahan dari penahanan (P4)
 
@@ -189,17 +191,17 @@ Urutan ini yang menjaga cache tetap utuh, menjaga aturan D11 tetap dihormati, da
 
 ---
 
-## 7. Pertanyaan terbuka untuk pemilik keputusan
+## 7. Jawaban pemilik keputusan (18 Okt 2026)
 
-| # | Pertanyaan | Usulan penulis |
-|---|---|---|
-| Q1 | Batas portofolio. Usulan revisi 1 tidak konsisten: 8 posisi x risiko 1% = 8% risiko serentak, jadi plafon risiko 4% akan memotong lebih dulu dan angka 8 tidak pernah bekerja. Pilih satu paket yang konsisten: **(i)** 8 posisi, risiko serentak 8%, eksposur 80%; **(ii)** 4 posisi, risiko serentak 4%, eksposur 80%; **(iii)** 6 posisi, risiko serentak 6%, eksposur 80%. | **(iii) 6 posisi / 6% / 80%** |
-| Q2 | Potongan rezim saat VOLATILE: separuh, atau angka lain? | separuh |
-| Q3 | Plafon likuiditas memakai nilai sesi terakhir, atau median 5 sesi? | median 5 sesi |
-| Q4 | Keadaan portofolio (posisi terbuka, eksposur) diketik manual di strip untuk P5, atau ditunda ke P6? | diketik manual dulu |
-| Q5 | Kunci penyimpanan browser `ml-modal` dan `ml-risk-pct` (mengikuti pola `ml-theme`)? | ya |
+| # | Pertanyaan | Jawaban | Akibat di aturan |
+|---|---|---|---|
+| Q1 | Batas portofolio, satu paket yang konsisten | **(iii) 6 posisi, risiko serentak 6%, eksposur 80%** | D17, bagian 5.1 plafon portofolio |
+| Q2 | Potongan rezim saat VOLATILE | **separuh** | D18, bagian 5.1 plafon rezim |
+| Q3 | Plafon likuiditas: median 5 sesi atau sesi terakhir | **median 5 sesi** | D5, bagian 5.1 plafon likuiditas |
+| Q4 | Keadaan portofolio: diketik manual atau ditunda ke P6 | **diketik manual dulu** | D12, permukaan (C) |
+| Q5 | Kunci simpan browser `ml-modal` dan `ml-risk-pct` | **ya** | D1, D3 |
 
-Q1 sampai Q4 mengubah hal yang dibangun. Q5 cukup dijawab "ya" atau "ganti nama".
+Tidak ada pertanyaan terbuka tersisa.
 
 ---
 
@@ -209,7 +211,7 @@ Q1 sampai Q4 mengubah hal yang dibangun. Q5 cukup dijawab "ya" atau "ganti nama"
 |---|---|---|
 | R1 | Tanpa modal, ukuran tidak bisa jadi rupiah. | Diterima sebagai mode: layar menampilkan persen saja dan mengatakannya. |
 | R2 | Plafon portofolio berpijak pada angka yang diketik pemilik, bukan catatan posisi sebenarnya. | Dinyatakan di layar sebagai "angka yang kamu isi". Ditutup P6. |
-| R3 | Plafon likuiditas memakai nilai transaksi tipikal; nama yang likuiditasnya kering mendadak tidak terlihat. | Risiko diterima, dicatat. Bisa ditambah penanda "nilai sesi ini di bawah biasanya" di iterasi berikutnya. |
+| R3 | Plafon likuiditas memakai median nilai transaksi 5 sesi; nama yang likuiditasnya kering mendadak tidak terlihat. | Risiko diterima, dicatat. Bisa ditambah penanda "nilai sesi ini di bawah biasanya" di iterasi berikutnya. |
 | R4 | Lot dibulatkan ke bawah, jadi porsi efektif selalu kurang atau sama dengan porsi teoretis. Di modal kecil, satu lot bisa melebihi porsi yang diizinkan. | Layar harus bisa berkata "modal kurang untuk 1 lot", bukan menampilkan 0 tanpa sebab. |
 | R5 | Risiko serentak bukan jaminan kerugian maksimum: harga bisa melewati stop (gap). | Di layar disebut "risiko rencana", bukan janji. |
 | R6 | Penyimpanan hanya di browser: hilang kalau ganti browser atau bersihkan data. | Dinyatakan di layar. |
