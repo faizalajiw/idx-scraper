@@ -1,0 +1,219 @@
+"""Unit tests for idx_scraper.research.claim_eval (hasil satu klaim).
+
+Tidak menyentuh DB atau jaringan.
+
+Yang dikunci di sini adalah aturan pengukuran yang kalau salah akan membuat
+seluruh rekaman mesin berbohong: level (stop/target) dibaca dari **harga mentah**
+dan hasilnya diukur pada **harga terkoreksi**; kalau satu sesi menyentuh stop dan
+target sekaligus, yang dicatat **stop** (asumsi terburuk); dan sesi entry sendiri
+tidak bisa memicu apa pun karena levelnya ditetapkan dari close sebelumnya.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from idx_scraper.research.claim_eval import claim_outcomes
+
+_SESSIONS = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+
+
+def _panel(rows: list[tuple[str, float, float, float]], code: str = "AAA") -> pd.DataFrame:
+    """``rows`` = (tanggal, high, low, close)."""
+    return pd.DataFrame(
+        [{"code": code, "date": d, "high": h, "low": lo, "close": c} for d, h, lo, c in rows]
+    )
+
+
+def _quiet_raw(extra: list[tuple[str, float, float, float]] | None = None) -> pd.DataFrame:
+    """Panel mentah yang tidak menyentuh level apa pun, kecuali ``extra``."""
+    rows = {d: (101.0, 99.0, 100.0) for d in _SESSIONS}
+    for d, h, lo, c in extra or []:
+        rows[d] = (h, lo, c)
+    return _panel([(d, *rows[d]) for d in _SESSIONS])
+
+
+def _flat_adj(codes: tuple[str, ...] = ("AAA",), sessions: list[str] | None = None) -> pd.DataFrame:
+    """Panel terkoreksi datar — cukup untuk mengisi kolom ``abn_{k}``."""
+    frames = [
+        _panel([(d, 100.0, 100.0, 100.0) for d in sessions or _SESSIONS], code=code)
+        for code in codes
+    ]
+    return pd.concat(frames, ignore_index=True)
+
+
+def _claim(
+    date: str,
+    *,
+    target: float = 110.0,
+    stop: float = 95.0,
+    horizon: int = 1,
+    code: str = "AAA",
+    direction: str = "BUY",
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "code": code,
+                "date": date,
+                "direction": direction,
+                "stop": stop,
+                "target": target,
+                "horizon_days": horizon,
+            }
+        ]
+    )
+
+
+def test_stop_wins_when_both_touched_in_same_session():
+    """Satu sesi menyentuh target DAN stop: yang dicatat stop (asumsi terburuk),
+    karena urutan intra-sesi tidak diketahui dari data harian."""
+    raw = _quiet_raw([("2026-01-07", 111.0, 94.0, 100.0)])
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,)
+    )
+
+    assert out.loc[0, "outcome"] == "stop"
+    assert bool(out.loc[0, "hit_stop"]) is True
+    assert bool(out.loc[0, "hit_target"]) is True
+    assert out.loc[0, "touch_date"] == "2026-01-07"
+
+
+def test_target_hit_before_stop_is_target():
+    raw = _quiet_raw(
+        [("2026-01-07", 111.0, 99.0, 105.0), ("2026-01-08", 105.0, 90.0, 95.0)]
+    )
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "target"
+    assert out.loc[0, "touch_date"] == "2026-01-07"
+    # stop kena SESUDAH target: klaim sudah ditutup di target, jadi tidak dihitung
+    assert bool(out.loc[0, "hit_stop"]) is False
+
+
+def test_stop_hit_before_target_is_stop():
+    raw = _quiet_raw(
+        [("2026-01-07", 100.0, 90.0, 92.0), ("2026-01-08", 111.0, 92.0, 110.0)]
+    )
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "stop"
+    assert out.loc[0, "touch_date"] == "2026-01-07"
+
+
+def test_timeout_when_horizon_passes_without_touch():
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=2), raw=_quiet_raw(), adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "timeout"
+    assert out.loc[0, "touch_date"] is None or pd.isna(out.loc[0, "touch_date"])
+    assert bool(out.loc[0, "hit_stop"]) is False
+    assert bool(out.loc[0, "hit_target"]) is False
+
+
+def test_unresolved_when_horizon_not_reached_and_no_touch():
+    """Klaim yang jendelanya baru sebagian berjalan belum punya hasil: unresolved,
+    dan abnormalnya NaN — bukan nol yang ikut terhitung sebagai "tidak untung"."""
+    out = claim_outcomes(
+        _claim("2026-01-07", horizon=2), raw=_quiet_raw(), adj=_flat_adj(), horizons=(2,)
+    )
+
+    assert out.loc[0, "outcome"] == "unresolved"
+    assert pd.isna(out.loc[0, "abn_2"])
+
+
+def test_claim_date_missing_from_panel_is_unresolved():
+    """Data bolong: klaim di tanggal yang tidak punya bar tidak bisa diukur.
+    Harus unresolved — bukan diukur dari sesi lain yang kebetulan ada."""
+    out = claim_outcomes(
+        _claim("2026-01-04", horizon=1), raw=_quiet_raw(), adj=_flat_adj(), horizons=(1,)
+    )
+
+    assert out.loc[0, "outcome"] == "unresolved"
+    assert pd.isna(out.loc[0, "abn_1"])
+
+
+def test_entry_session_low_does_not_trigger_stop():
+    """Level ditetapkan dari close sebelumnya: sesi entry tidak boleh memicunya.
+
+    Entry di close T+1, jadi low sesi T+1 terjadi SEBELUM posisi ada."""
+    raw = _quiet_raw([("2026-01-06", 101.0, 90.0, 100.0)])  # low 90 < stop 95
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,)
+    )
+
+    assert bool(out.loc[0, "hit_stop"]) is False
+    assert out.loc[0, "outcome"] == "timeout"
+
+
+def test_abnormal_uses_adjusted_panel_while_levels_use_raw_panel():
+    """Dua dasar harga, dua peran: level dari harga nyata, hasil dari harga terkoreksi."""
+    raw = _panel(
+        [
+            ("2026-01-05", 101.0, 99.0, 100.0),
+            ("2026-01-06", 101.0, 99.0, 100.0),  # entry
+            ("2026-01-07", 101.0, 90.0, 95.0),  # low 90 -> stop kena
+        ]
+    )
+    adj = pd.concat(
+        [
+            _panel(
+                [
+                    ("2026-01-05", 100.0, 100.0, 100.0),
+                    ("2026-01-06", 100.0, 100.0, 100.0),
+                    ("2026-01-07", 120.0, 120.0, 120.0),
+                ],
+                code="AAA",
+            ),
+            _panel(
+                [
+                    ("2026-01-05", 100.0, 100.0, 100.0),
+                    ("2026-01-06", 100.0, 100.0, 100.0),
+                    ("2026-01-07", 100.0, 100.0, 100.0),
+                ],
+                code="BBB",
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=1), raw=raw, adj=adj, horizons=(1,)
+    )
+
+    assert bool(out.loc[0, "hit_stop"]) is True
+    assert out.loc[0, "abn_1"] > 0  # AAA +20% vs pasar +10% (dari panel terkoreksi)
+
+
+def test_missing_code_in_panel_is_unresolved_not_zero():
+    out = claim_outcomes(
+        _claim("2026-01-05", horizon=1, code="ZZZ"),
+        raw=_quiet_raw(),
+        adj=_flat_adj(),
+        horizons=(1,),
+    )
+
+    assert out.loc[0, "outcome"] == "unresolved"
+    assert pd.isna(out.loc[0, "abn_1"])
+
+
+def test_sell_direction_raises_value_error():
+    """Menghitung stop/target untuk arah SELL dengan aturan BUY akan menghasilkan
+    angka terbalik. Lebih baik menolak daripada diam-diam salah."""
+    with pytest.raises(ValueError, match="SELL"):
+        claim_outcomes(
+            _claim("2026-01-05", horizon=1, direction="SELL"),
+            raw=_quiet_raw(),
+            adj=_flat_adj(),
+            horizons=(1,),
+        )
