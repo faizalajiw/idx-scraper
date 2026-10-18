@@ -512,7 +512,7 @@ def _summarize(sub: pd.DataFrame, grade: str, horizon: int) -> dict[str, Any]:
             "mean_fwd": round(float(fwd.mean()), 6),
             "median_fwd": round(float(fwd.median()), 6),
             "mean_abnormal": round(float(abn.mean()), 6) if not abn.empty else None,
-            "t_stat": _round_opt(_nw(sub[f"fwd_{horizon}"])),
+            "t_stat": _round_opt(_nw(sub[f"abn_{horizon}"])),
             "avg_mfe": _round_opt(sub[f"mfe_{horizon}"].mean()),
             "avg_mae": _round_opt(sub[f"mae_{horizon}"].mean()),
         }

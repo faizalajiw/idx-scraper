@@ -7,8 +7,11 @@ import pandas as pd
 import pytest
 
 from idx_scraper.analysis import calculate_indicators, signal_series
+from idx_scraper.research.events import _nw_tstat
 from idx_scraper.research.signal_log import (
     _recent_ex_div_cash,
+    _round_opt,
+    _summarize,
     attach_outcomes,
     compute_signal_rows,
     summarize_outcomes,
@@ -259,3 +262,26 @@ def test_returns_dataframe_columns_sorted():
         "code", "date", "signal", "close", "rsi", "sma_short", "sma_long", "trend_up",
     ]
     assert np.issubdtype(rows["date"].dtype, np.datetime64)
+
+
+
+def test_summarize_t_stat_uses_abnormal_not_raw_forward():
+    """Arah yang dikunci: t-stat jejak sinyal dihitung dari abnormal vs pasar.
+
+    Tes ini ada supaya definisi itu tidak diam-diam pindah ke return mentah,
+    yang memuat drift pasar dan akan membuat sinyal biasa tampak signifikan.
+    """
+    n = 40
+    sub = pd.DataFrame(
+        {
+            "fwd_21": [0.05 + 0.001 * i for i in range(n)],
+            "abn_21": [0.01 if i % 2 == 0 else -0.01 for i in range(n)],
+            "mfe_21": [0.0] * n,
+            "mae_21": [0.0] * n,
+        }
+    )
+
+    out = _summarize(sub, "BUY", None, 21)
+
+    assert out["t_stat"] == _round_opt(_nw_tstat(sub["abn_21"]))
+    assert abs(out["t_stat"]) < 1.0
