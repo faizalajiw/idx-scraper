@@ -14,7 +14,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from idx_scraper.research.claim_eval import claim_outcomes
+from idx_scraper.research.claim_eval import claim_outcomes, session_aggregate
 
 _SESSIONS = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
 
@@ -217,3 +217,110 @@ def test_sell_direction_raises_value_error():
             adj=_flat_adj(),
             horizons=(1,),
         )
+
+
+
+# --- agregat per sesi (spec §6.1, R7) ---
+
+
+def _outcomes(rows: list[tuple[str, float, str]]) -> pd.DataFrame:
+    """``rows`` = (tanggal, abn_21, outcome) — frame kecil seperti keluaran
+    ``claim_outcomes``."""
+    return pd.DataFrame(
+        [
+            {"code": f"C{i:03d}", "date": d, "abn_21": a, "outcome": o}
+            for i, (d, a, o) in enumerate(rows)
+        ]
+    )
+
+
+def test_three_claims_in_one_session_count_as_one_session():
+    out = session_aggregate(
+        _outcomes(
+            [
+                ("2026-01-05", 0.02, "target"),
+                ("2026-01-05", -0.01, "stop"),
+                ("2026-01-05", 0.01, "timeout"),
+                ("2026-01-06", 0.03, "timeout"),
+            ]
+        ),
+        horizon=21,
+    )
+
+    assert out["claims"] == 4
+    assert out["sessions"] == 2
+    assert out["hit_target"] == 1
+    assert out["hit_stop"] == 1
+    assert out["timeout"] == 2
+    assert out["unresolved"] == 0
+
+
+def test_mean_is_of_session_means_not_row_mean():
+    """2 klaim +1% di satu sesi dan 1 klaim -3% di sesi lain: rata-ratanya -1,0%
+    (rata-rata dari rata-rata sesi), BUKAN -0,33% (rata-rata seluruh baris)."""
+    out = session_aggregate(
+        _outcomes(
+            [
+                ("2026-01-05", 0.01, "timeout"),
+                ("2026-01-05", 0.01, "timeout"),
+                ("2026-01-06", -0.03, "stop"),
+            ]
+        ),
+        horizon=21,
+    )
+
+    assert out["mean_abnormal"] == -0.01
+    assert [s["n"] for s in out["per_session"]] == [2, 1]
+    assert [s["mean_abnormal"] for s in out["per_session"]] == [0.01, -0.03]
+
+
+def test_dispersion_none_for_single_session():
+    out = session_aggregate(_outcomes([("2026-01-05", 0.01, "timeout")]), horizon=21)
+
+    assert out["sessions"] == 1
+    assert out["session_dispersion"] is None
+
+
+def test_unresolved_excluded_from_abnormal_but_still_counted():
+    out = session_aggregate(
+        _outcomes(
+            [
+                ("2026-01-05", 0.02, "timeout"),
+                ("2026-01-05", float("nan"), "unresolved"),
+            ]
+        ),
+        horizon=21,
+    )
+
+    assert out["claims"] == 2
+    assert out["unresolved"] == 1
+    assert out["mean_abnormal"] == 0.02  # NaN tidak dianggap nol
+    assert out["per_session"][0]["n"] == 1  # hanya yang terukur
+
+
+def test_per_session_is_sorted_by_date():
+    out = session_aggregate(
+        _outcomes(
+            [
+                ("2026-01-07", 0.03, "timeout"),
+                ("2026-01-05", 0.01, "timeout"),
+                ("2026-01-06", 0.02, "timeout"),
+            ]
+        ),
+        horizon=21,
+    )
+
+    assert [s["date"] for s in out["per_session"]] == ["2026-01-05", "2026-01-06", "2026-01-07"]
+
+
+def test_empty_claims_is_safe():
+    empty = pd.DataFrame(columns=["code", "date", "abn_21", "outcome"])
+
+    out = session_aggregate(empty, horizon=21)
+
+    assert out["claims"] == 0
+    assert out["sessions"] == 0
+    assert out["mean_abnormal"] is None
+    assert out["median_session_abnormal"] is None
+    assert out["session_dispersion"] is None
+    assert out["per_session"] == []

@@ -29,6 +29,8 @@ ATURAN YANG DIPEGANG (spec §6.1, §6.4)
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 from .signal_log import DEFAULT_HORIZONS, NLAGS_DEFAULT, attach_outcomes
@@ -146,3 +148,59 @@ def claim_outcomes(
     out["touch_date"] = touches
 
     return out[[*claims.columns, *abn_cols, "hit_stop", "hit_target", "touch_date", "outcome"]]
+
+
+def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]:
+    """Agregat hasil klaim **per sesi**, bukan per klaim (spec §6.1, R7).
+
+    Rata-rata dihitung dua kali: lebih dulu lintas klaim di dalam satu tanggal,
+    lalu lintas tanggal. Tiga sampai lima klaim di hari yang sama adalah SATU
+    pengamatan — dihitung per baris, hari yang ramai otomatis lebih berpengaruh
+    daripada hari yang sepi, dan yang ingin dijawab bukan itu.
+
+    ``sessions`` menghitung sesi yang **menyumbang angka terukur**. Klaim
+    ``unresolved`` tetap dihitung di ``unresolved`` tapi tidak menambah sesi dan
+    abnormalnya tidak dianggap nol.
+    """
+    column = f"abn_{horizon}"
+    missing = [name for name in ("date", column, "outcome") if name not in outcomes.columns]
+    if missing:
+        raise ValueError(f"kolom hasil kurang: {', '.join(missing)}")
+
+    counts = outcomes["outcome"].value_counts().to_dict() if not outcomes.empty else {}
+    summary: dict[str, Any] = {
+        "claims": len(outcomes),
+        "sessions": 0,
+        "mean_abnormal": None,
+        "median_session_abnormal": None,
+        "session_dispersion": None,
+        "hit_target": int(counts.get("target", 0)),
+        "hit_stop": int(counts.get("stop", 0)),
+        "timeout": int(counts.get("timeout", 0)),
+        "unresolved": int(counts.get("unresolved", 0)),
+        "per_session": [],
+    }
+    if outcomes.empty:
+        return summary
+
+    frame = pd.DataFrame(
+        {
+            "date": outcomes["date"].astype(str).str.slice(0, 10),
+            "abn": pd.to_numeric(outcomes[column], errors="coerce"),
+        }
+    ).dropna(subset=["abn"])
+    if frame.empty:
+        return summary
+
+    grouped = frame.groupby("date")["abn"].agg(["size", "mean"]).sort_index()
+    session_means = grouped["mean"]
+    summary["sessions"] = len(session_means)
+    summary["mean_abnormal"] = round(float(session_means.mean()), 6)
+    summary["median_session_abnormal"] = round(float(session_means.median()), 6)
+    if len(session_means) >= 2:
+        summary["session_dispersion"] = round(float(session_means.std(ddof=1)), 6)
+    summary["per_session"] = [
+        {"date": str(date), "n": int(entry["size"]), "mean_abnormal": round(float(entry["mean"]), 6)}
+        for date, entry in grouped.iterrows()
+    ]
+    return summary
