@@ -26,6 +26,7 @@ from ..analysis import (
     generate_signal,
     signal_series,
 )
+from ..freshness import withhold
 from .database import get_cursor
 from .sector_map import FALLBACK_SECTOR, sector_for
 
@@ -2687,6 +2688,42 @@ def _with_sizing(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return candidates
 
 
+def _freshness_of() -> dict[str, Any]:
+    """Status kesegaran saat ini (spec D1).
+
+    Satu-satunya jalur `api.services` yang dipakai di modul ini, dan
+    sengaja diimpor di dalam fungsi supaya tak ada impor melingkar.
+    """
+    from .services import get_freshness
+
+    return get_freshness()
+
+
+def _withhold_panel(out: dict[str, Any]) -> dict[str, Any]:
+    """Papan + status kesegaran, verdict ditahan bila basi (spec D1).
+
+    Dipanggil SESUDAH cache dibaca/ditulis: status segar/basi berubah tiap
+    sesi, dan cache 30 menit tidak boleh menguncinya. Dict yang di-cache
+    tidak pernah termutasi - `withhold` mengembalikan salinan.
+    """
+    f = _freshness_of()
+    return {
+        **out,
+        "freshness": f,
+        "withheld": bool(f.get("withhold")),
+        "rows": withhold(list(out.get("rows") or []), f),
+    }
+
+
+def _withhold_stock(out: dict[str, Any]) -> dict[str, Any]:
+    """Sama seperti papan, untuk satu emiten (spec D1)."""
+    f = _freshness_of()
+    candidate = out.get("candidate")
+    if isinstance(candidate, dict):
+        candidate = withhold([candidate], f)[0]
+    return {**out, "freshness": f, "withheld": bool(f.get("withhold")), "candidate": candidate}
+
+
 def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]:
     """Papan kandidat beli se-pasar untuk sesi terakhir (read-only).
 
@@ -2705,7 +2742,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     cache_key = f"recommendations:{limit}:{min_grade}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return cached
+        return _withhold_panel(cached)
 
     from ..research.recommend import rank_candidates
     from ..research.recommendation_log import candidates_for_date
@@ -2732,7 +2769,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     }
     if metrics.empty:
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _withhold_panel(out)
 
     last_date = metrics["date"].max()
     scanned = int((metrics["date"] == last_date).sum())
@@ -2753,7 +2790,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     out["total_candidates"] = len(candidates)
     out["rows"] = ranked
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return out
+    return _withhold_panel(out)
 
 
 def get_stock_recommendation(code: str) -> dict[str, Any]:
@@ -2768,7 +2805,7 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     cache_key = f"recommendation_stock:{code}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return cached
+        return _withhold_stock(cached)
 
     from ..research.recommendation_log import candidates_for_date
 
@@ -2793,13 +2830,13 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     if metrics.empty:
         out["reason"] = "Belum ada data harga yang cukup untuk menghitung kandidat."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _withhold_stock(out)
 
     rows = metrics[metrics["code"] == code]
     if rows.empty:
         out["reason"] = f"Tidak ada data harga untuk {code}."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return out
+        return _withhold_stock(out)
 
     row = rows.sort_values("date").iloc[-1]
     last_date = metrics["date"].max()
@@ -2834,7 +2871,7 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
         out["candidate"] = _with_sizing([candidate])[0]
 
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return out
+    return _withhold_stock(out)
 
 
 def get_recommendation_track() -> dict[str, Any]:

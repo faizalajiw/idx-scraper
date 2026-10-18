@@ -1,8 +1,10 @@
-"""Tes kesegaran: tiga status (spec D1) — murni, tanpa DB."""
+"""Tes kesegaran: tiga status (spec D1) + penahanan verdict — murni, tanpa DB."""
 
 from __future__ import annotations
 
 from datetime import datetime
+
+import pandas as pd
 
 from idx_scraper.freshness import (
     BASI,
@@ -12,6 +14,7 @@ from idx_scraper.freshness import (
     expected_session,
     format_message,
     verdict,
+    withhold,
 )
 from idx_scraper.health import WIB
 
@@ -89,3 +92,108 @@ def test_current_menanyakan_dua_basis_yang_berbeda():
 def test_pesan_kesegaran_menyebut_tanggal_dan_alasan():
     v = verdict("2026-10-14", "2026-10-16")
     assert "2026-10-14" in format_message(v) and "2026-10-16" in format_message(v)
+
+
+# ------------------------------------------------------- penahanan verdict D1
+
+
+def _row(**extra):
+    return {
+        "code": "BBRI",
+        "score": 52.0,
+        "grade": "A",
+        "position_pct": 12.5,
+        "entry_ref": 4200.0,
+        "stop": 3900.0,
+        "target": 4900.0,
+        **extra,
+    }
+
+
+def test_baris_kehilangan_grade_dan_ukuran_saat_basi():
+    out = withhold([_row()], verdict("2026-10-14", "2026-10-16"))
+    assert out[0]["grade"] is None and out[0]["position_pct"] is None
+
+
+def test_angka_dan_level_tetap_terlihat_saat_basi():
+    out = withhold([_row()], verdict("2026-10-14", "2026-10-16"))
+    assert out[0]["score"] == 52.0 and out[0]["stop"] == 3900.0
+
+
+def test_baris_utuh_saat_segar():
+    out = withhold([_row()], verdict("2026-10-16", "2026-10-16"))
+    assert out[0]["grade"] == "A" and out[0]["position_pct"] == 12.5
+
+
+def test_penahanan_tidak_menghapus_baris_hanya_labelnya():
+    assert len(withhold([_row(), _row(code="TLKM")], verdict(None, "2026-10-16"))) == 2
+
+
+def test_penahanan_tidak_mengubah_dict_masukan():
+    rows = [_row()]
+    withhold(rows, verdict("2026-10-14", "2026-10-16"))
+    assert rows[0]["grade"] == "A"
+
+
+def _metrics_frame() -> pd.DataFrame:
+    """Satu baris metrik yang cukup menghasilkan satu kandidat beli.
+
+    Gaya fixture `tests/test_recommendation_log.py:38-60` (tanpa DB).
+    """
+    return pd.DataFrame(
+        [
+            {
+                "code": "AAAA",
+                "name": "Anak A",
+                "date": pd.Timestamp("2026-05-01"),
+                "close": 1000.0,
+                "signal": "BUY",
+                "trend_up": True,
+                "rsi": 60.0,
+                "mom_20d": 4.0,
+                "vol_daily": 0.02,
+                "dist_52w_pct": -1.0,
+                "vol_ratio": 2.0,
+                "bb_lower": 980.0,
+                "range_low_20": None,
+                "value": 5.0e9,
+                "z_score": 0.5,
+                "hist_days": 200,
+                "pattern_buy": (),
+                "pattern_sell": (),
+            }
+        ]
+    )
+
+
+def test_penahanan_diterapkan_sesudah_cache_dibaca(monkeypatch):
+    """Cache 30 menit tidak boleh mengunci status segar/basi (Review Focus 5)."""
+    from idx_scraper.api import analytics
+
+    ctx = {
+        "metrics": _metrics_frame(),
+        "histories": {},
+        "factor_adj": {},
+        "factor_validated": False,
+        "factor_note": "-",
+        "broker_adj": {},
+        "broker_validated": False,
+        "broker_note": "-",
+    }
+    cache: dict = {}
+    monkeypatch.setattr(analytics, "_recommendation_context", lambda: ctx)
+    monkeypatch.setattr(analytics, "_research_cache_get", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        analytics, "_research_cache_put", lambda key, val, ttl=None: cache.__setitem__(key, val)
+    )
+    monkeypatch.setattr(
+        "idx_scraper.api.services.get_freshness",
+        lambda: verdict("2026-10-14", "2026-10-16"),
+    )
+
+    out = analytics.get_recommendations()
+    assert out.get("withheld") is True
+    assert out["rows"] and all(r["grade"] is None for r in out["rows"])
+    assert all(r.get("withheld") is True for r in out["rows"])
+    # Yang tersimpan di cache tetap utuh: status berikutnya tak mewarisi penahanan.
+    assert "withheld" not in cache["recommendations:20:C"]["rows"][0]

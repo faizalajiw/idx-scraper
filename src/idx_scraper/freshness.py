@@ -125,3 +125,21 @@ def current(cur: Any, *, now: datetime | None = None) -> dict[str, Any]:
 def format_message(f: Mapping[str, Any]) -> str:
     """Satu kalimat untuk Telegram/log: status + sebabnya (spec D1)."""
     return f"Kesegaran: {f['status']} — {f['reason']}."
+
+
+def withhold(rows: list[dict[str, Any]], f: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Salinan baris papan dengan verdict ditahan bila datanya tidak segar (spec D1).
+
+    Yang tampil hanya angka, tanggalnya, dan sebabnya: ``grade`` (label
+    keyakinan) dan ``position_pct`` (ukuran) dilepas, sementara skor dan level
+    entry/stop/target tetap. Salinan dibuat supaya dict yang hidup di cache
+    30 menit tidak pernah termutasi.
+    """
+    out = [{**row} for row in rows]
+    if not f.get("withhold"):
+        return out
+    for row in out:
+        row["grade"] = None
+        row["position_pct"] = None
+        row["withheld"] = True
+    return out

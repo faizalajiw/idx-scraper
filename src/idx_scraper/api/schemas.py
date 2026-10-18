@@ -605,6 +605,26 @@ class RecommendationLayerStatus(BaseModel):
     note: str | None = None
 
 
+class Freshness(BaseModel):
+    """Tiga status kesegaran (spec D1) — "angka ini masih bisa dipercaya?".
+
+    ``withhold`` True = permukaan wajib menahan verdict yang lahir dari data
+    ini (hanya angka, tanggal, dan ``reason`` yang boleh tampil).
+    ``index_status`` adalah penanda terpisah untuk bagian berindeks (mis. kartu
+    rezim): ia tidak pernah mengubah ``status`` halaman.
+    """
+
+    status: str
+    withhold: bool
+    reason: str
+    panel_latest: str | None = None
+    index_latest: str | None = None
+    index_status: str
+    expected: str | None = None
+    checked_at: str
+    basis: str = "panel"
+
+
 class RecommendationRow(BaseModel):
     """Satu kandidat beli: skor + grade + level eksekusi + alasan.
 
@@ -623,7 +643,8 @@ class RecommendationRow(BaseModel):
     code: str
     name: str | None = None
     score: float
-    grade: str  # A | B | C
+    # None = verdict ditahan karena datanya basi (spec D1).
+    grade: str | None = None  # A | B | C
     setup: str | None = None  # pullback | breakout | trend | netral
     entry_low: float | None = None
     entry_high: float | None = None
@@ -640,6 +661,8 @@ class RecommendationRow(BaseModel):
     warnings: list[str] = []
     layers: dict[str, bool] = {}
     metrics: RecommendationMetrics | None = None
+    # True = grade/ukuran baris ini ditahan karena data tidak segar (D1).
+    withheld: bool = False
 
 
 class RecommendationResponse(BaseModel):
@@ -653,6 +676,8 @@ class RecommendationResponse(BaseModel):
     min_grade: str = "C"
     layers: RecommendationLayerStatus
     rows: list[RecommendationRow] = []
+    freshness: Freshness | None = None
+    withheld: bool = False
 
 
 class StockRecommendation(BaseModel):
@@ -664,6 +689,8 @@ class StockRecommendation(BaseModel):
     candidate: RecommendationRow | None = None
     layers: RecommendationLayerStatus
     reason: str | None = None
+    freshness: Freshness | None = None
+    withheld: bool = False
     generated_at: str | None = None
 
 
@@ -1424,22 +1451,3 @@ class DataHealth(BaseModel):
     row_counts: RowCountCheck
     session_gaps: SessionGapsCheck
 
-
-class Freshness(BaseModel):
-    """Tiga status kesegaran (spec D1) — "angka ini masih bisa dipercaya?".
-
-    ``withhold`` True = permukaan wajib menahan verdict yang lahir dari data
-    ini (hanya angka, tanggal, dan ``reason`` yang boleh tampil).
-    ``index_status`` adalah penanda terpisah untuk bagian berindeks (mis. kartu
-    rezim): ia tidak pernah mengubah ``status`` halaman.
-    """
-
-    status: str
-    withhold: bool
-    reason: str
-    panel_latest: str | None = None
-    index_latest: str | None = None
-    index_status: str
-    expected: str | None = None
-    checked_at: str
-    basis: str = "panel"
