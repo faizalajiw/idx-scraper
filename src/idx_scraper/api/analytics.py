@@ -2811,7 +2811,83 @@ def _gate_withhold(out: dict[str, Any], gate: dict[str, Any] | None) -> dict[str
     return result
 
 
-def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]:
+def _with_position_plan(
+    out: dict[str, Any],
+    *,
+    modal: float | None = None,
+    risk_pct: float | None = None,
+    open_positions: int | None = None,
+    exposure_pct: float | None = None,
+    metrics: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Tempelkan rencana posisi ke baris yang benar-benar tampil (spec P5 5.3).
+
+    Dipanggil SESUDAH cache dan SESUDAH penahanan: baris ber-``withheld`` tidak
+    pernah membawa ukuran posisi, dan cache papan tidak dipecah per angka modal.
+    Dict yang masuk tidak pernah dimutasi - baris dan kandidatnya disalin.
+
+    ``metrics`` hanya dipakai tes; produksi membaca panel yang sudah di-cache.
+    """
+    from ..research.position import position_plan, typical_day_values
+
+    frame = metrics if metrics is not None else _recommendation_context()["metrics"]
+    vol_state = (out.get("gate") or {}).get("vol_state")
+
+    peta_likuiditas: dict[str, float] | None = None
+
+    def likuiditas(code: Any) -> float | None:
+        """Nilai transaksi harian median, dihitung sekali untuk seluruh permintaan.
+
+        Versi per emiten memindai panel seluruh pasar tiap panggilan; papan
+        memanggilnya untuk puluhan baris, jadi pemindaiannya dibayar berulang.
+        """
+        nonlocal peta_likuiditas
+        if modal is None:
+            return None  # tanpa modal plafon likuiditas memang dilewati
+        if peta_likuiditas is None:
+            peta_likuiditas = typical_day_values(frame)
+        return peta_likuiditas.get(str(code or "").upper())
+
+    def plan_of(row: Any) -> dict[str, Any] | None:
+        if not isinstance(row, dict) or row.get("withheld"):
+            return None
+        return position_plan(
+            entry=row.get("entry_ref"),
+            stop=row.get("stop"),
+            modal=modal,
+            risk_pct=risk_pct,
+            typical_day_value=likuiditas(row.get("code")),
+            vol_state=vol_state,
+            open_positions=open_positions,
+            exposure_pct=exposure_pct,
+        )
+
+    result: dict[str, Any] = {**out}
+    if "rows" in result:
+        result["rows"] = [
+            {**row, "plan": plan_of(row)} for row in out.get("rows") or []
+        ]
+    candidate = result.get("candidate")
+    if isinstance(candidate, dict):
+        result["candidate"] = {**candidate, "plan": plan_of(candidate)}
+    return result
+
+
+def _close_recommendation(out: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """Urutan tetap: penahanan D1 -> gerbang rezim -> rencana posisi (spec P5 5.3)."""
+    withheld = _withhold_panel(out) if "rows" in out else _withhold_stock(out)
+    return _with_position_plan(_gate_withhold(withheld, _regime_gate()), **state)
+
+
+def get_recommendations(
+    limit: int = 20,
+    min_grade: str = "C",
+    *,
+    modal: float | None = None,
+    risk_pct: float | None = None,
+    open_positions: int | None = None,
+    exposure_pct: float | None = None,
+) -> dict[str, Any]:
     """Papan kandidat beli se-pasar untuk sesi terakhir (read-only).
 
     Menggabungkan: setup teknikal + entry timing (modul pure ``recommend``),
@@ -2821,15 +2897,25 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
 
     Cache 30 menit (metrik harian, tidak berubah intraday). Papan kosong berarti
     tidak ada kandidat yang lolos gate hari itu — bukan error.
+
+    Empat angka keadaan (modal, risiko per transaksi, posisi terbuka, eksposur)
+    hanya dipakai untuk menghitung rencana posisi SESUDAH cache: papan yang sama
+    tidak pernah disimpan terpisah per ukuran modal.
     """
     limit = max(1, min(limit, 100))
     min_grade = str(min_grade).upper()
     if min_grade not in ("A", "B", "C"):
         min_grade = "C"
+    state = {
+        "modal": modal,
+        "risk_pct": risk_pct,
+        "open_positions": open_positions,
+        "exposure_pct": exposure_pct,
+    }
     cache_key = f"recommendations:{limit}:{min_grade}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return _gate_withhold(_withhold_panel(cached), _regime_gate())
+        return _close_recommendation(cached, state)
 
     from ..research.recommend import rank_candidates
     from ..research.recommendation_log import candidates_for_date
@@ -2856,7 +2942,7 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     }
     if metrics.empty:
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return _gate_withhold(_withhold_panel(out), _regime_gate())
+        return _close_recommendation(out, state)
 
     last_date = metrics["date"].max()
     scanned = int((metrics["date"] == last_date).sum())
@@ -2888,22 +2974,38 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
     out["total_candidates"] = len(candidates)
     out["rows"] = ranked
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return _gate_withhold(_withhold_panel(out), _regime_gate())
+    return _close_recommendation(out, state)
 
 
-def get_stock_recommendation(code: str) -> dict[str, Any]:
+def get_stock_recommendation(
+    code: str,
+    *,
+    modal: float | None = None,
+    risk_pct: float | None = None,
+    open_positions: int | None = None,
+    exposure_pct: float | None = None,
+) -> dict[str, Any]:
     """Kandidat beli untuk SATU emiten (skor + level + alasan).
 
     Skor memakai mesin yang sama dengan papan se-pasar, jadi angka emiten di
     halaman detail persis sama dengan angkanya di papan. Emiten tanpa kandidat
     (di bawah grade C / likuiditas kurang / sinyal SELL) tetap mengembalikan
     alasan penolakan, bukan kandidat rekaan.
+
+    Empat angka keadaan sama seperti papan: hanya untuk rencana posisi SESUDAH
+    cache, supaya angka papan dan halaman emiten tidak pernah berbeda.
     """
     code = code.strip().upper()
+    state = {
+        "modal": modal,
+        "risk_pct": risk_pct,
+        "open_positions": open_positions,
+        "exposure_pct": exposure_pct,
+    }
     cache_key = f"recommendation_stock:{code}"
     cached = _research_cache_get(cache_key)
     if cached is not None:
-        return _gate_withhold(_withhold_stock(cached), _regime_gate())
+        return _close_recommendation(cached, state)
 
     from ..research.recommend import DEFAULT_HORIZON, own_history_percentile
     from ..research.recommendation_log import candidates_for_date
@@ -2929,13 +3031,13 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     if metrics.empty:
         out["reason"] = "Belum ada data harga yang cukup untuk menghitung kandidat."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return _gate_withhold(_withhold_stock(out), _regime_gate())
+        return _close_recommendation(out, state)
 
     rows = metrics[metrics["code"] == code]
     if rows.empty:
         out["reason"] = f"Tidak ada data harga untuk {code}."
         _research_cache_put(cache_key, out, ttl=1800.0)
-        return _gate_withhold(_withhold_stock(out), _regime_gate())
+        return _close_recommendation(out, state)
 
     row = rows.sort_values("date").iloc[-1]
     last_date = metrics["date"].max()
@@ -2978,7 +3080,7 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
         out["candidate"] = candidate
 
     _research_cache_put(cache_key, out, ttl=1800.0)
-    return _gate_withhold(_withhold_stock(out), _regime_gate())
+    return _close_recommendation(out, state)
 
 
 def get_recommendation_track() -> dict[str, Any]:

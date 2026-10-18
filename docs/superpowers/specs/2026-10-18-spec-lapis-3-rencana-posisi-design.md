@@ -237,6 +237,13 @@ Risiko 1% modal, modal contoh Rp 100 juta:
 
 Mockup yang disetujui menulis Rp 999.669. Itu salah hitung di mockup; rumus di tabel ini yang berlaku.
 
+**Diperiksa ulang 18 Okt 2026 terhadap metrik DB nyata** (lewat fungsi produksi, bukan hitungan tangan):
+
+- Plafon likuiditas PEGE = 2% x Rp 950.034.000 / Rp 100.000.000 = **19,0%**, jadi ia **tidak** memotong: seluruh angka tabel A berlaku apa adanya, tanpa koreksi.
+- Angka tabel A berlaku untuk rezim **NORMAL**. Sesi berjalan 18 Okt 2026 berstatus `VOLATILE` (D18), jadi porsi PEGE nyata terpotong separuh: 8,0% / 705 lot / Rp 7.996.110 / rugi Rp 499.845. Kartu menampilkan angka final yang benar-benar dibeli (Rp 15.992.220 pada keadaan NORMAL), bukan nilai teoretis Rp 16.000.000.
+- Label risiko di baris rugi adalah **rugi nyata dibagi modal**, jadi ia bisa lebih kecil dari risiko yang diketik ketika ada plafon memotong (contoh: risiko 1%, pasar VOLATILE → 0,5% modal).
+- D6 berlaku harfiah saat dua plafon memotong bersamaan: yang disebut adalah plafon yang menyentuh angka akhir (buku penuh saat pasar VOLATILE → `portfolio`, bukan `regime`).
+
 **B. Mockup yang dipilih pemilik**
 
 `idx-scraper/.superpowers/brainstorm/570-1792320980/content/posisi-card.html` (tiga permukaan, angka contoh yang sama dengan lampiran A).

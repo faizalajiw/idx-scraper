@@ -71,7 +71,17 @@ PEGE_STOP = 106.33
 
 
 def pege(**kw):
-    base = dict(entry=PEGE_ENTRY, stop=PEGE_STOP, modal=100_000_000.0, risk_pct=1.0)
+    # Keadaan portofolio lengkap (0 posisi, 0% eksposur) supaya `note` hanya bicara
+    # soal plafon per nama/likuiditas/rezim; tes keadaan kosong memanggil
+    # pege(open_positions=None, exposure_pct=None).
+    base = {
+        "entry": PEGE_ENTRY,
+        "stop": PEGE_STOP,
+        "modal": 100_000_000.0,
+        "risk_pct": 1.0,
+        "open_positions": 0,
+        "exposure_pct": 0.0,
+    }
     base.update(kw)
     return position_plan(**base)
 
@@ -169,7 +179,7 @@ def test_plafon_eksposur_memotong():
 
 
 def test_keadaan_portofolio_kosong_dilewati():
-    p = pege()
+    p = pege(open_positions=None, exposure_pct=None)
     assert p["caps"]["portfolio"] is None
     assert p["concurrent_risk_pct"] is None
     assert "portofolio" in p["note"].lower()
@@ -178,7 +188,7 @@ def test_keadaan_portofolio_kosong_dilewati():
 def test_risiko_serentak_diturunkan():
     p = pege(open_positions=3)
     assert p["concurrent_risk_pct"] == 3.0
-    assert p["caps"]["portfolio"] is None
+    assert p["caps"]["portfolio"] == 80.0  # eksposur 0%: seluruh batas 80% masih ruang
 
 
 def test_modal_kurang_untuk_satu_lot():
@@ -264,7 +274,7 @@ Algoritma `position_plan` (urutan ini yang diuji; jangan disederhanakan tanpa me
 - [ ] **Step 4: Jalankan tes, pastikan lulus**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_position.py -q`
-Expected: PASS (18 tes).
+Expected: PASS (19 tes).
 
 - [ ] **Step 5: Cek gaya**
 
