@@ -305,6 +305,8 @@ def candidates_for_date(
     broker_adj_by_code: dict[str, float] | None = None,
     broker_validated: bool = False,
     horizon: int | None = None,
+    pool: set[str] | None = None,
+    quarantined: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Semua kandidat beli pada satu tanggal (pure) — hasil ``score_candidate``.
 
@@ -314,9 +316,16 @@ def candidates_for_date(
     sejalan dengan pilihan "hanya lapisan tervalidasi yang boleh menggerakkan
     skor".
 
+    ``pool`` = himpunan kode yang berhak masuk papan (``research.pool.pool_members``).
+    ``None`` berarti dihitung di sini dari ``metrics`` sampai ``date_value``,
+    jadi papan, halaman emiten, dan jurnal harian memakai definisi kolam yang
+    sama; pemanggil produksi mengirim satu kolam yang sudah dihitung sekali
+    supaya ketiganya benar-benar identik. ``quarantined`` diteruskan ke
+    ``pool_members`` saat kolam dihitung di sini.
+
     Grade ditentukan di sini lewat ``recommend.assign_grades``: peringkat relatif
-    pool hari itu (C 25% · B 10% · A 2% teratas). Kandidat di luar 25% teratas
-    tidak dikembalikan — itu definisi "masuk papan".
+    kolam hari itu (C 25% · B 10% · A 2% teratas). Kandidat di luar kolam — atau
+    di luar 25% teratas — tidak dikembalikan; itu definisi "masuk papan".
     """
     if metrics.empty:
         return []
@@ -325,10 +334,18 @@ def candidates_for_date(
     if day.empty:
         return []
 
+    if pool is None:
+        from .pool import pool_members
+
+        pool = pool_members(metrics, target, quarantined=quarantined)
+    allowed = {str(c).upper() for c in pool}
+
     fac = factor_adj_by_code or {}
     brk = broker_adj_by_code or {}
     out: list[dict[str, Any]] = []
     for row in day.itertuples(index=False):
+        if str(row.code).upper() not in allowed:
+            continue
         m = {
             "code": row.code,
             "name": row.name,
@@ -372,8 +389,14 @@ def build_records(
     broker_adj_by_code: dict[str, float] | None = None,
     broker_validated: bool = False,
     horizon: int | None = None,
+    quarantined: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Kandidat untuk semua tanggal dalam rentang ``months`` terakhir (pure)."""
+    """Kandidat untuk semua tanggal dalam rentang ``months`` terakhir (pure).
+
+    ``quarantined`` diteruskan ke setiap tanggal: jurnal harian harus mengukur
+    populasi yang sama dengan yang dilihat pemilik di papan (spec D4 + harness
+    P3), bukan kolam yang lebih longgar.
+    """
     if metrics.empty:
         return []
     cutoff = pd.Timestamp(datetime.now(WIB).date() - timedelta(days=int(months * 31)))
@@ -389,6 +412,7 @@ def build_records(
             broker_adj_by_code=broker_adj_by_code,
             broker_validated=broker_validated,
             horizon=horizon,
+            quarantined=quarantined,
         ):
             records.append(_to_log_row(c, pd.Timestamp(d)))
     return records
@@ -452,6 +476,13 @@ def record(
     """
     panel = load_candidate_panel(dsn, sessions=sessions)
     metrics = metrics_frame(panel)
+    from .pool import load_quarantined_codes
+
+    try:
+        quarantined = load_quarantined_codes(dsn)
+    except Exception as e:  # kolam tanpa karantina lebih baik daripada job mati
+        print(f"[warn] karantina tidak terbaca, kolam tanpa karantina: {e}", file=sys.stderr)
+        quarantined = set()
     records = build_records(
         metrics,
         histories=histories,
@@ -461,6 +492,7 @@ def record(
         broker_adj_by_code=broker_adj_by_code,
         broker_validated=broker_validated,
         horizon=horizon,
+        quarantined=quarantined,
     )
     cutoff = (datetime.now(WIB).date() - timedelta(days=int(months * 31)))
     with psycopg.connect(dsn, connect_timeout=15) as conn, conn.cursor() as cur:

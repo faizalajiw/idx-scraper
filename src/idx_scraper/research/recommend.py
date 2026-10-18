@@ -626,8 +626,10 @@ def score_candidate(
     Returns dict kandidat ``{code, name, score, setup, entry_low, entry_high,
     entry_ref, stop, target, rr, horizon_days, reasons, warnings, layers,
     metrics}`` atau ``None`` bila emiten tidak layak jadi kandidat (sinyal SELL,
-    likuiditas di bawah lantai, histori kurang, atau level eksekusi tak bisa
-    dihitung).
+    histori kurang, atau level eksekusi tak bisa dihitung). **Likuiditas
+    bukan urusan fungsi ini**: kolam kandidat ditentukan `research.pool`
+    (satu kolam, spec 6.6) supaya papan, halaman emiten, dan jurnal harian
+    memakai definisi yang sama.
     """
     code = str(metrics.get("code") or "").upper()
     if not code:
@@ -638,8 +640,6 @@ def score_candidate(
         return None
 
     value = _f(metrics.get("value"))
-    if value is not None and value < MIN_DAY_VALUE:
-        return None
 
     signal = metrics.get("signal")
     if signal == "SELL":

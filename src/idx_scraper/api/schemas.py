@@ -672,6 +672,9 @@ class RecommendationResponse(BaseModel):
     generated_at: str | None = None
     scanned: int = 0
     total_candidates: int = 0
+    #: Anggota kolam sesi itu sebelum dipotong limit/min_grade (spec 6.6:
+    #: 'berapa banyak nama yang keluar' harus terbaca, bukan ditaksir).
+    pool_size: int = 0
     limit: int = 20
     min_grade: str = "C"
     layers: RecommendationLayerStatus

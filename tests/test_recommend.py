@@ -256,9 +256,14 @@ def test_pola_menjadi_alasan_tanpa_menggeser_skor():
     assert any("Inisiasi" in r for r in with_pattern["reasons"])
 
 
-def test_sell_signal__illiquidity__short_history_are_not_candidates():
+def test_score_candidate_tidak_lagi_menyaring_likuiditas():
+    """Lantai likuiditas pindah ke research.pool (satu kolam, spec 6.6)."""
+    c = score_candidate(base_metrics(value=1.0e8))
+    assert c is not None
+
+
+def test_score_candidate_masih_menolak_sinyal_sell_dan_histori_pendek():
     assert score_candidate(base_metrics(signal="SELL")) is None
-    assert score_candidate(base_metrics(value=1.0e8)) is None
     assert score_candidate(base_metrics(hist_days=30)) is None
 
 

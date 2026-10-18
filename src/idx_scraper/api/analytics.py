@@ -2631,6 +2631,15 @@ def _recommendation_context() -> dict[str, Any]:
     metrics = _recommendation_metrics()
     histories = _pattern_histories()
 
+    quarantined: set[str] = set()
+    try:
+        from ..research.pool import quarantined_codes
+
+        with get_cursor() as cur:
+            quarantined = quarantined_codes(cur)
+    except Exception as e:  # tabel karantina belum ada / DB sibuk
+        print(f"[warn] karantina kolam tidak terbaca: {e}", file=sys.stderr)
+
     factor_adj: dict[str, float] = {}
     factor_validated = False
     factor_note = (
@@ -2673,6 +2682,14 @@ def _recommendation_context() -> dict[str, Any]:
     except Exception as e:
         print(f"[warn] lapisan broker rekomendasi dilewati: {e}", file=sys.stderr)
 
+    from ..research.pool import pool_members
+
+    pool = (
+        pool_members(metrics, metrics["date"].max(), quarantined=quarantined)
+        if not metrics.empty
+        else set()
+    )
+
     out: dict[str, Any] = {
         "metrics": metrics,
         "histories": histories,
@@ -2682,6 +2699,8 @@ def _recommendation_context() -> dict[str, Any]:
         "broker_adj": broker_adj,
         "broker_validated": broker_validated,
         "broker_note": broker_note,
+        "pool": pool,
+        "quarantined": quarantined,
     }
     _research_cache_put("recommendation_context", out, ttl=1800.0)
     return out
@@ -2805,12 +2824,15 @@ def get_recommendations(limit: int = 20, min_grade: str = "C") -> dict[str, Any]
         factor_validated=ctx["factor_validated"],
         broker_adj_by_code=ctx["broker_adj"],
         broker_validated=ctx["broker_validated"],
+        pool=ctx["pool"],
+        quarantined=ctx["quarantined"],
     )
     candidates = _with_sizing(candidates)
     ranked = rank_candidates(candidates, limit=limit, min_grade=min_grade)
 
     out["date"] = str(pd.Timestamp(last_date).date())
     out["scanned"] = scanned
+    out["pool_size"] = len(ctx["pool"])
     out["total_candidates"] = len(candidates)
     out["rows"] = ranked
     _research_cache_put(cache_key, out, ttl=1800.0)
@@ -2867,9 +2889,9 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
     out["has_data"] = True
     out["as_of"] = str(pd.Timestamp(last_date).date())
 
-    # Skor **dan grade** memakai jalur yang sama dengan papan (satu pool, satu
+    # Skor **dan grade** memakai jalur yang sama dengan papan (satu kolam, satu
     # peringkat), jadi angka emiten di halaman detail tidak mungkin berbeda dari
-    # angkanya di papan. Grade adalah peringkat relatif pool hari itu.
+    # angkanya di papan. Grade adalah peringkat relatif kolam hari itu.
     candidates = candidates_for_date(
         metrics,
         last_date,
@@ -2878,6 +2900,8 @@ def get_stock_recommendation(code: str) -> dict[str, Any]:
         factor_validated=ctx["factor_validated"],
         broker_adj_by_code=ctx["broker_adj"],
         broker_validated=ctx["broker_validated"],
+        pool=ctx["pool"],
+        quarantined=ctx["quarantined"],
     )
     candidate = next((c for c in candidates if c["code"] == code), None)
     if candidate is None:

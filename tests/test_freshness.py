@@ -179,6 +179,8 @@ def test_penahanan_diterapkan_sesudah_cache_dibaca(monkeypatch):
         "broker_adj": {},
         "broker_validated": False,
         "broker_note": "-",
+        "pool": {"AAAA"},
+        "quarantined": set(),
     }
     cache: dict = {}
     monkeypatch.setattr(analytics, "_recommendation_context", lambda: ctx)
@@ -193,6 +195,7 @@ def test_penahanan_diterapkan_sesudah_cache_dibaca(monkeypatch):
 
     out = analytics.get_recommendations()
     assert out.get("withheld") is True
+    assert out["pool_size"] == 1  # kolam dari context diteruskan apa adanya
     assert out["rows"] and all(r["grade"] is None for r in out["rows"])
     assert all(r.get("withheld") is True for r in out["rows"])
     # Yang tersimpan di cache tetap utuh: status berikutnya tak mewarisi penahanan.
