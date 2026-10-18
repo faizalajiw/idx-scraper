@@ -137,6 +137,29 @@ def test_plafon_eksposur_memotong():
     assert p["binding_cap"] == "portfolio"
 
 
+def test_dua_plafon_memotong_menyebut_yang_paling_kecil():
+    """Rezim memotong separuh, buku penuh memotong sampai nol (spec 5.1).
+
+    Yang benar-benar memotong adalah plafon yang menyentuh angka akhir, bukan
+    plafon pertama yang kebetulan lebih kecil dari porsi mentah.
+    """
+    p = pege(vol_state="VOLATILE", typical_day_value=950_034_000.0, open_positions=6)
+    assert p["caps"]["regime"] == 8.0
+    assert p["caps"]["portfolio"] == 0.0
+    assert p["pct"] == 0.0
+    assert p["binding_cap"] == "portfolio"
+    assert "Sudah penuh: 6 posisi terbuka dari batas 6." in p["note"]
+
+
+def test_buku_penuh_tidak_menyalahkan_modal():
+    """Porsi nol karena buku penuh bukan karena modal kurang (spec 5.1 D14)."""
+    p = pege(vol_state="VOLATILE", open_positions=6, exposure_pct=None)
+    assert p["pct"] == 0.0
+    assert p["lots"] == 0
+    assert "Modal kurang untuk 1 lot." not in p["note"]
+    assert "Eksposur belum diisi, plafon portofolio dilewati." in p["note"]
+
+
 def test_keadaan_portofolio_kosong_dilewati():
     p = pege(open_positions=None, exposure_pct=None)
     assert p["caps"]["portfolio"] is None

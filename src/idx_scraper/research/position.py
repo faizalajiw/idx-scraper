@@ -184,9 +184,13 @@ def position_plan(
     pct = round(min([pct_raw] + [v for v in caps.values() if v is not None]), 1)
 
     binding: str | None = None
+    # Yang benar-benar memotong = plafon yang angkanya sama dengan hasil akhir.
+    # Dua plafon bisa sama-sama memotong (mis. VOLATILE lalu buku penuh): yang
+    # dipanggil harus yang menyentuh angka akhir, bukan yang kebetulan pertama
+    # lebih kecil dari porsi mentah.
     for name in CAP_ORDER:
         value = caps.get(name)
-        if value is not None and value < pct_raw:
+        if value is not None and value < pct_raw and round(value, 1) == pct:
             binding = name
             break
 
@@ -222,7 +226,9 @@ def position_plan(
 
     if m is None:
         notes.append("Tanpa modal: porsi hanya dalam persen.")
-    elif lots == 0:
+    elif lots == 0 and pct > 0:
+        # Porsi nol sudah dijelaskan plafon yang memotongnya; menyebut modal di
+        # situ menuduh hal yang salah.
         notes.append("Modal kurang untuk 1 lot.")
 
     if open_n is None and expo is None:
