@@ -898,13 +898,20 @@ _EOD_RETRY_DELAYS: tuple[int, ...] = (60, 180)
 def _retry_percobaan(now: datetime | None = None) -> int:
     """Jumlah percobaan untuk langkah EOD berat, menurut jam WIB.
 
-    Sebelum jam close (16:00) EOD pasar memang belum terbit — ``refresh_s1``
-    12:00 membuktikannya tiap hari dengan 0 baris. Di jendela itu percobaan
-    ulang cuma membuang ~4 menit dan menambah beban IDX tanpa bisa berhasil,
-    jadi dimatikan (1 percobaan). Sesudah close, retry penuh.
+    Sebelum tenggat EOD (17:30) ringkasan pasar memang belum terbit: di
+    ``_serve.log`` EOD penuh hanya pernah berhasil 17:13:38 (16 Okt) dan
+    17:16:16 (19 Okt), sementara ``refresh_s1`` 12:00 dan rantai 16:10 tiap hari
+    dibalas 0 baris. Percobaan ulang di jendela itu cuma membuang ~4 menit plus
+    tiga baris log dan menambah beban IDX tanpa bisa berhasil, jadi dimatikan
+    (1 percobaan). Sesudah tenggat retry penuh — di situlah jaring kedua 17:30
+    bekerja, dan ia memang berjalan setelah datanya ada.
     """
+    from .health import EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE
+
     now = now or datetime.now(WIB)
-    return len(_EOD_RETRY_DELAYS) + 1 if now.hour >= 16 else 1
+    if (now.hour, now.minute) >= (EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE):
+        return len(_EOD_RETRY_DELAYS) + 1
+    return 1
 
 
 def _retry_step(label: str, step, *, percobaan: int | None = None) -> int:
@@ -1035,7 +1042,7 @@ def _pipeline_refresh_body(client: IDXClient, storage, *, label: str, do_eod: bo
 
     Dua langkah yang bergantung pada endpoint berat IDX (EOD saham, broker
     summary) diberi percobaan ulang lewat ``_retry_step``; sisanya DB murni.
-    Percobaan ulang dimatikan sebelum jam close — lihat ``_retry_percobaan``.
+    Percobaan ulang dimatikan sebelum tenggat EOD - lihat ``_retry_percobaan``.
     """
     print(f"[{datetime.now(WIB).isoformat()}] pipeline refresh — {label}")
     percobaan = _retry_percobaan()

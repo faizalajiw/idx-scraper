@@ -52,9 +52,19 @@ def test_sesi_hari_ini_belum_wajib_sebelum_jam_batas():
     assert expected_session(now, holidays=set()).isoformat() == "2026-10-15"
 
 
-def test_sesi_hari_ini_wajib_setelah_jam_batas():
-    now = datetime(2026, 10, 16, 17, 0, tzinfo=WIB)
-    assert expected_session(now, holidays=set()).isoformat() == "2026-10-16"
+def test_sesi_hari_ini_wajib_dari_tenggat_presisi_menit():
+    """Batasnya tenggat 17:30, presisi menit - bukan jam bulat.
+
+    Dengan batas jam bulat (16:00 dulu) sesi hari itu sudah dianggap wajib pada
+    17:10, padahal di `_serve.log` ringkasan EOD per saham IDX memang belum
+    terbit (terukur 17:13:32 dan 17:16:16) - papan akan terbaca "basi" tanpa
+    sebab tiap sore.
+    """
+    belum = datetime(2026, 10, 16, 17, 10, tzinfo=WIB)
+    assert expected_session(belum, holidays=set()).isoformat() == "2026-10-15"
+
+    sudah = datetime(2026, 10, 16, 17, 31, tzinfo=WIB)
+    assert expected_session(sudah, holidays=set()).isoformat() == "2026-10-16"
 
 
 def test_akhir_pekan_mundur_ke_jumat():

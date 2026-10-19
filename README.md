@@ -272,11 +272,13 @@ rekomendasi → broker summary → clear cache. Dua langkah yang menyentuh endpo
 berat IDX (**EOD saham**, **broker summary**) diulang sampai 3 percobaan dengan
 jeda 60 s lalu 180 s — IDX pernah menolaknya `403` hanya sesaat (15 Okt 2026:
 16:10 dan 16:15 gagal, 17:40 permintaan identik berhasil 963 baris dalam 0,3 s).
-Percobaan ulang itu **dimatikan sebelum jam close** (`_retry_percobaan`): di
-`refresh_s1` 12:00 EOD pasar memang belum terbit, jadi retry di sana hanya
-membuang menit dan menambah beban IDX. Penolakan yang bertahan lebih lama
-daripada dua retry ditutup job `eod_fallback`, yang mengulang ceknya tiap jam
-16:30–20:30 sampai EOD hari itu benar-benar terisi.
+Percobaan ulang itu **dimatikan sebelum tenggat EOD** (`_retry_percobaan`, 17:30):
+di `refresh_s1` 12:00 dan di rantai 16:10 ringkasan pasar memang belum terbit —
+terukur, EOD penuh di `_serve.log` hanya pernah berhasil 17:13:38 (16 Okt) dan
+17:16:16 (19 Okt) — jadi retry di sana hanya membuang menit dan menambah beban
+IDX. Penolakan yang bertahan lebih lama daripada dua retry ditutup job
+`eod_fallback`, yang mengulang ceknya tiap jam 16:30–20:30 sampai EOD hari itu
+benar-benar terisi (slot 17:30 adalah yang pertama di belakang jendela terbit).
 
 Dua pipeline tidak pernah berjalan bersamaan: kunci `_PIPELINE_BUSY` melewati
 job kedua (pekerjaannya sudah tercakup yang sedang jalan). Perilaku ini dikunci

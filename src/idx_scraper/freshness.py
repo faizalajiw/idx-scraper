@@ -13,9 +13,10 @@ yang tampil hanya angka, tanggalnya, dan sebabnya. Bagian yang bersumber
 indeks (mis. kartu rezim) membawa penandanya sendiri lewat ``index_status``
 dan tidak menularkan statusnya ke halaman.
 
-Jam batas EOD dihormati: sebelum ``EOD_DEADLINE_HOUR``, sesi hari ini belum
-wajib ada, jadi sesi yang diharapkan adalah sesi bursa sebelumnya — kalau
-tidak, setiap pagi bursa seluruh papan akan terbaca "basi" tanpa sebab.
+Jam batas EOD (tenggat 17:30, presisi menit) dihormati: sebelum tenggat itu,
+sesi hari ini belum wajib ada, jadi sesi yang diharapkan adalah sesi bursa
+sebelumnya — kalau tidak, setiap sore bursa seluruh papan akan terbaca "basi"
+tanpa sebab.
 """
 
 from __future__ import annotations
@@ -24,7 +25,13 @@ from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from .health import EOD_DEADLINE_HOUR, WIB, expected_trading_date, parse_holidays
+from .health import (
+    EOD_DEADLINE_HOUR,
+    EOD_DEADLINE_MINUTE,
+    WIB,
+    expected_trading_date,
+    parse_holidays,
+)
 
 SEGAR = "segar"
 BASI = "basi"
@@ -34,11 +41,14 @@ TAK_DIKETAHUI = "tak diketahui"
 def expected_session(now: datetime, holidays: set[date] | None = None) -> date:
     """Sesi bursa yang seharusnya sudah punya data EOD pada ``now``.
 
-    Hari ini belum dihitung sebelum jam batas EOD; akhir pekan dan libur
+    Hari ini belum dihitung sebelum tenggat EOD (17:30); akhir pekan dan libur
     bursa dilewati oleh :func:`health.expected_trading_date`.
     """
     today = expected_trading_date(now, holidays)
-    if now.date() == today and now.hour < EOD_DEADLINE_HOUR:
+    if now.date() == today and (now.hour, now.minute) < (
+        EOD_DEADLINE_HOUR,
+        EOD_DEADLINE_MINUTE,
+    ):
         return expected_trading_date(now - timedelta(days=1), holidays)
     return today
 

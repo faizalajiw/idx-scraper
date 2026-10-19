@@ -154,14 +154,23 @@ def test_pipeline_sebelum_close_tidak_mengulang(monkeypatch, sleeps):
     assert sleeps == []
 
 
-def test_retry_percobaan_mengikuti_jam_close():
-    """1 percobaan sebelum 16:00 WIB, penuh sesudahnya."""
+def test_retry_percobaan_mengikuti_jendela_terbit():
+    """1 percobaan sebelum tenggat EOD (17:30 WIB), penuh sesudahnya.
+
+    Batasnya dulu jam close (16:00), tapi ringkasan EOD per saham IDX terukur
+    baru terbit 17:13-17:16: di `_serve.log` EOD penuh hanya pernah berhasil
+    17:13:38 (16 Okt) dan 17:16:16 (19 Okt) — percobaan ulang di rantai 16:10
+    tidak pernah sekali pun membawa baris. Jaring kedua 17:30 yang mengambil
+    alih dan ia berjalan SETELAH tenggat, jadi retry penuh tetap hidup di
+    tempat yang memang bisa berhasil.
+    """
     from datetime import datetime
 
     penuh = len(cli._EOD_RETRY_DELAYS) + 1
     assert cli._retry_percobaan(datetime(2026, 10, 15, 12, 0, tzinfo=cli.WIB)) == 1
-    assert cli._retry_percobaan(datetime(2026, 10, 15, 15, 59, tzinfo=cli.WIB)) == 1
-    assert cli._retry_percobaan(datetime(2026, 10, 15, 16, 0, tzinfo=cli.WIB)) == penuh
+    assert cli._retry_percobaan(datetime(2026, 10, 15, 16, 10, tzinfo=cli.WIB)) == 1
+    assert cli._retry_percobaan(datetime(2026, 10, 15, 17, 29, tzinfo=cli.WIB)) == 1
+    assert cli._retry_percobaan(datetime(2026, 10, 15, 17, 30, tzinfo=cli.WIB)) == penuh
     assert cli._retry_percobaan(datetime(2026, 10, 15, 17, 40, tzinfo=cli.WIB)) == penuh
 
 
