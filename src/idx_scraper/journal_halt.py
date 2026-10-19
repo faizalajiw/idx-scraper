@@ -61,7 +61,10 @@ def state(path: Path | None = None) -> dict[str, Any]:
         data = json.loads(p.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return dict(_KOSONG)
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
+        # ValueError menampung json.JSONDecodeError sekaligus UnicodeDecodeError:
+        # berkas yang bukan UTF-8 (mis. tersentuh editor lain) harus pulang sebagai
+        # "tidak dihentikan" + catatan, bukan melempar ke pemanggil.
         return {**_KOSONG, "note": f"berkas halt rusak atau tidak terbaca: {e}"}
     if not isinstance(data, dict):
         return {**_KOSONG, "note": "berkas halt rusak: isinya bukan objek JSON"}

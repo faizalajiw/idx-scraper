@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from idx_scraper.research.claim_eval import claim_verdict
 from idx_scraper.research.journal import (
     CLAIM_COLUMNS,
     GATE_REASONS,
@@ -183,3 +184,79 @@ def test_hasil_belum_terukur_tidak_dihitung_sebagai_nol() -> None:
     assert out["claims"] == 1
     assert out["open"] == 1
     assert out["mean_abnormal"] is None
+
+
+def test_horizon_tidak_sah_ditolak() -> None:
+    """Klaim tanpa horizon tidak pernah matang, jadi ditolak di muka.
+
+    Spec lampiran A.1 minta satu tes per aturan pre-commit; horizon tadinya satu-satunya
+    yang tidak punya, padahal `horizon_days` NULL membuat barisnya duduk terbuka selamanya.
+    """
+    assert (
+        claim_reject_reason(
+            entry=113.42, stop=106.33, target=127.60, size_pct=16.0, horizon_days=None
+        )
+        == "horizon"
+    )
+    assert (
+        claim_reject_reason(
+            entry=113.42, stop=106.33, target=127.60, size_pct=16.0, horizon_days=0
+        )
+        == "horizon"
+    )
+
+
+def test_ukuran_lewat_lot_saja_tetap_lolos() -> None:
+    """Spec 6.2 menerima ukuran persen ATAU lot: salah satu kosong bukan cacat."""
+    assert (
+        claim_reject_reason(
+            entry=113.42,
+            stop=106.33,
+            target=127.60,
+            size_pct=None,
+            size_lots=2,
+            horizon_days=21,
+        )
+        is None
+    )
+
+
+def test_sesi_terukur_dipisah_dari_sesi_menulis() -> None:
+    """Ambang "enam minggu" menghitung sesi terukur, bukan sesi yang cuma menulis.
+
+    30 sesi menulis dengan 8 sesi terukur tidak boleh terbaca sebagai bukti 30 sesi:
+    kalau ikut disuapkan ke verdict, rata-ratanya berdiri di atas 8 sesi sementara
+    kalimatnya menyebut 30, dan kill-switch memutuskan dari sampel yang belum layak.
+    """
+    rows = [_row(f"2026-10-{d:02d}", abn=0.02, status="kena_target") for d in range(1, 9)]
+    rows += [_row(f"2026-09-{d:02d}", abn=None, status="terbuka") for d in range(1, 23)]
+    out = summarize_claims(rows)
+
+    assert out["claims"] == 30
+    assert out["measured_claims"] == 8
+    assert out["sessions"] == 8
+    assert out["claim_sessions"] == 30
+    assert out["mean_abnormal"] == pytest.approx(0.02)
+
+    verdict = claim_verdict(out)
+    assert verdict["status"] == "belum cukup"
+    assert "8 klaim terukur" in verdict["reason"]
+    assert "30 sesi tercapai" not in verdict["reason"]
+
+
+def test_baris_berhorizon_lain_tidak_masuk_rata_rata() -> None:
+    """Rata-rata campur horizon bukan bukti: yang tidak sebanding dinyatakan, bukan dirata-ratakan.
+
+    Barisnya tetap dihitung sebagai klaim dan tetap muncul di ``horizon_mismatch``
+    supaya ketidakcocokannya terlihat di layar.
+    """
+    rows = [
+        _row("2026-10-15", abn=0.50, status="kena_target", horizon=5),
+        _row("2026-10-16", abn=-0.02, status="kena_stop", horizon=21),
+    ]
+    out = summarize_claims(rows)
+    assert out["claims"] == 2
+    assert out["horizon_mismatch"] == 1
+    assert out["measured_claims"] == 1
+    assert out["sessions"] == 1
+    assert out["mean_abnormal"] == pytest.approx(-0.02)

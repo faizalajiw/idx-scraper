@@ -12,7 +12,7 @@ penolakan jam 17:00 lalu klaim jam 18:00, dan keduanya benar.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -30,9 +30,14 @@ from .journal import (
     STATUS_STOP,
     STATUS_TARGET,
     claim_from_candidate,
+    claim_reject_reason,
     summarize_claims,
 )
 from .position import position_plan
+
+#: Zona bursa. Dipakai untuk batas akhir jendela pengukuran: tanggal lokal mesin
+#: bisa berbeda sehari dari WIB, dan run susulan tengah malam akan bergeser.
+WIB = timezone(timedelta(hours=7))
 
 #: DDL yang sama dengan ``sql/journal.sql`` (berkas itu untuk deploy, ini untuk jalan).
 _DDL = """
@@ -258,13 +263,17 @@ def write_session(
             freshness_status=konteks.get("freshness_status"),
         )
         if baris is None:
-            sebab = "tidak lengkap"
-            if not k.get("stop"):
-                sebab = "tanpa_stop"
-            elif not k.get("target"):
-                sebab = "tanpa_target"
-            elif not k.get("size_pct"):
-                sebab = "tanpa_ukuran"
+            # Sebab penolakan ditanyakan ke aturan yang sama yang menolaknya, bukan
+            # disusun ulang di sini: dua definisi "klaim tidak lengkap" akan berbeda
+            # diam-diam, dan yang muncul di buku jadi sebab yang bukan penyebabnya.
+            sebab = claim_reject_reason(
+                entry=k.get("entry_ref"),
+                stop=k.get("stop"),
+                target=k.get("target"),
+                size_pct=k.get("size_pct"),
+                size_lots=k.get("size_lots"),
+                horizon_days=k.get("horizon_days"),
+            ) or "tidak lengkap"
             ditolak.setdefault(sebab, []).append(str(k.get("code")))
             continue
         klaim.append(baris)
@@ -417,7 +426,7 @@ def fill_outcomes(cur, *, trade_date: str | None = None) -> dict[str, int]:
 
     kode = sorted({str(c["code"]) for c in klaim})
     awal = min(str(c["trade_date"])[:10] for c in klaim)
-    akhir = datetime.now().astimezone().date().isoformat()
+    akhir = datetime.now(WIB).date().isoformat()
     raw, adj = panel(cur, codes=kode, start=awal, end=akhir)
 
     for baris in fill_outcomes_from_frames(klaim, raw=raw, adj=adj):
@@ -449,10 +458,15 @@ def journal_summary(
 
     Penyaring dilakukan di Python setelah baca terbatas: bukunya kecil, dan satu
     jalur baca berarti satu tempat yang bisa salah.
+
+    Urutannya **terbaru dulu** justru karena batas bacanya ada: dengan urutan menaik,
+    satu tabel yang sudah lewat ``SUMMARY_LIMIT`` akan menyembunyikan klaim terbaru
+    dari agregat dan verdict tanpa satu pun tanda di layar. Terbaru dulu membuat
+    batas itu memotong riwayat lama, bukan kejadian hari ini.
     """
     cur.execute(
         "select code, trade_date, rule, status, outcome_abn, horizon_days"
-        " from research.claim_journal order by trade_date, code limit %s",
+        " from research.claim_journal order by trade_date desc, code limit %s",
         (SUMMARY_LIMIT,),
     )
     rows = [dict(r) for r in cur.fetchall()]

@@ -164,6 +164,31 @@ def test_summary_memakai_aturan_papan_bawaan(monkeypatch) -> None:
     assert "research.claim_journal" in cur.sql[0]
 
 
+def test_summary_db_mati_fail_open_dengan_catatan(monkeypatch) -> None:
+    """Buku yang tidak terbaca bukan 500, dan bukan juga dilaporkan sebagai buku kosong.
+
+    Bentuk balasannya sama, sebabnya di ``note``: layar harus bisa membedakan
+    "belum ada klaim" dari "belum terbaca" tanpa membaca log server.
+    """
+    pasang(monkeypatch, boom=True)
+    out = journal_api.summary()
+    assert out["claims"] == 0
+    assert out["claim_sessions"] == 0
+    assert out["record_line"] == "Aturan ini: belum punya rekaman"
+    assert out["verdict"]["status"] == "belum cukup"
+    assert out["note"] and "belum terbaca" in out["note"]
+
+
+def test_claims_db_mati_fail_open(monkeypatch) -> None:
+    """Daftar rincian memulangkan kosong supaya blok gerbang tetap bisa dirender.
+
+    Rute yang mati karena DB akan mematikan juga bagian gerbang di layar, dan
+    gerbang justru bagian yang harus tetap terbaca saat ada yang rusak.
+    """
+    pasang(monkeypatch, boom=True)
+    assert journal_api.claims() == []
+
+
 def test_rute_halt_tanpa_sebab_menghasilkan_422(monkeypatch, tmp_path) -> None:
     from fastapi import HTTPException
 

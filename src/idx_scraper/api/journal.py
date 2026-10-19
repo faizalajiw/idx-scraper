@@ -17,7 +17,8 @@ from typing import Any
 
 from .. import journal_halt
 from ..research import journal_store
-from ..research.journal import RULE_PAPAN, claim_gate
+from ..research.claim_eval import claim_verdict, format_record_line
+from ..research.journal import RULE_PAPAN, claim_gate, summarize_claims
 from .database import get_cursor
 from .services import get_freshness
 
@@ -83,33 +84,63 @@ def _freshness() -> tuple[str | None, str | None]:
         return None, f"kesegaran belum terbaca: {e}"
 
 
+def _ringkasan_kosong(catatan: str) -> dict[str, Any]:
+    """Buku yang tidak terbaca: bentuk yang sama, angka nol, sebabnya di ``note``.
+
+    Disusun dari fungsi murni yang sama dengan jalur normal supaya tidak ada
+    definisi kedua; yang berbeda hanya datanya (kosong) dan catatannya.
+    """
+    ringkas = summarize_claims([])
+    ringkas["verdict"] = claim_verdict(ringkas)
+    ringkas["record_line"] = format_record_line(ringkas)
+    ringkas["note"] = catatan
+    return ringkas
+
+
 def summary(*, rule: str | None = None, code: str | None = None) -> dict[str, Any]:
-    """Agregat buku + kalimat rekaman + verdict. Bawaan: aturan papan."""
-    with get_cursor() as cur:
-        return journal_store.journal_summary(cur, rule=rule or RULE_PAPAN, code=code)
+    """Agregat buku + kalimat rekaman + verdict. Bawaan: aturan papan.
+
+    Buku yang tidak terbaca tidak jadi 500 dan tidak juga dilaporkan sebagai buku
+    kosong: bentuknya sama, tapi sebabnya ditulis di ``note`` supaya layar bisa
+    membedakan "belum ada klaim" dari "belum terbaca".
+    """
+    try:
+        with get_cursor() as cur:
+            return journal_store.journal_summary(cur, rule=rule or RULE_PAPAN, code=code)
+    except Exception as e:
+        return _ringkasan_kosong(f"buku klaim belum terbaca: {e}")
 
 
 def claims(
     *, trade_date: str | None = None, code: str | None = None, limit: int = 50
 ) -> list[dict[str, Any]]:
-    """Baris buku klaim, urut kode; tanpa tanggal dipakai sesi bursa terakhir."""
+    """Baris buku klaim, urut kode; tanpa tanggal dipakai sesi bursa terakhir.
+
+    Buku yang tidak terbaca memulangkan daftar kosong, bukan 500: daftarnya
+    rincian, dan keadaan bukunya sudah dilaporkan ``summary()["note"]``. Rute
+    yang mati karena DB akan mematikan juga blok gerbang di layar, dan gerbang
+    justru bagian yang harus tetap terbaca saat ada yang rusak.
+    """
     batas = max(1, min(int(limit or 50), CLAIM_LIMIT_MAX))
-    with get_cursor() as cur:
-        tanggal = _teks(trade_date) or _last_session(cur)
-        if tanggal is None:
-            return []
-        sql = (
-            f"select {', '.join(CLAIM_FIELDS)} from research.claim_journal"
-            " where trade_date = %s"
-        )
-        params: list[Any] = [tanggal]
-        if code:
-            sql += " and upper(code) = %s"
-            params.append(str(code).upper())
-        sql += " order by code limit %s"
-        params.append(batas)
-        cur.execute(sql, tuple(params))
-        rows = [dict(r) for r in cur.fetchall()]
+    try:
+        with get_cursor() as cur:
+            tanggal = _teks(trade_date) or _last_session(cur)
+            if tanggal is None:
+                return []
+            sql = (
+                f"select {', '.join(CLAIM_FIELDS)} from research.claim_journal"
+                " where trade_date = %s"
+            )
+            params: list[Any] = [tanggal]
+            if code:
+                sql += " and upper(code) = %s"
+                params.append(str(code).upper())
+            sql += " order by code limit %s"
+            params.append(batas)
+            cur.execute(sql, tuple(params))
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
 
     return [
         {k: _teks(v) if k in _TANGGAL_FIELDS else v for k, v in row.items()}

@@ -238,8 +238,19 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
     seluruh rekaman, dan rekaman itu yang dibaca verdict. Sesi tanpa hasil
     terukur tidak dihitung nol: ia tidak dihitung sama sekali.
 
-    ``measured_claims`` adalah jumlah baris yang **punya angka**, dan itu yang
-    dipakai verdict sebagai ambang; ``claims`` hanyalah jumlah baris.
+    Dua hitungan sesi yang berbeda, jadi namanya dipisah: ``sessions`` menghitung
+    sesi yang **menyumbang angka terukur** (arti yang sama dengan medan senama di
+    ``claim_eval.session_aggregate``, dan itu yang dipakai verdict sebagai ambang
+    enam minggu), sedangkan ``claim_sessions`` menghitung sesi yang menulis klaim,
+    termasuk yang belum matang. Selisih keduanya adalah cerita "klaimnya sudah ada,
+    hasilnya belum jalan", dan tanpa pemisahan ini ambang verdict bisa tercapai
+    oleh 30 sesi tulis sementara rata-ratanya berdiri di atas 8 sesi.
+
+    Baris yang horizonnya bukan ``VERDICT_HORIZON`` tetap dihitung sebagai klaim
+    dan tetap muncul di ``horizon_mismatch``, tetapi tidak masuk ``measured_claims``,
+    rata-rata, maupun verdict: rata-rata campur horizon bukan bukti untuk ambang
+    yang dikunci di satu horizon, dan yang tidak sebanding lebih baik dinyatakan
+    daripada dirata-ratakan.
     """
     per_sesi: dict[str, list[float]] = {}
     klaim_per_sesi: dict[str, int] = {}
@@ -250,7 +261,11 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
         per_sesi.setdefault(tanggal, [])
         klaim_per_sesi[tanggal] = klaim_per_sesi.get(tanggal, 0) + 1
 
-        hasil = _num(row.get("outcome_abn"))
+        cocok_horizon = _int_of(row.get("horizon_days")) == VERDICT_HORIZON
+        if not cocok_horizon:
+            mismatch += 1
+
+        hasil = _num(row.get("outcome_abn")) if cocok_horizon else None
         if hasil is not None:
             per_sesi[tanggal].append(hasil)
             terukur += 1
@@ -265,9 +280,6 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
         elif status == STATUS_OPEN:
             terbuka += 1
 
-        if _int_of(row.get("horizon_days")) != VERDICT_HORIZON:
-            mismatch += 1
-
     rata_sesi = [hasil for _, hasil in sorted(per_sesi.items()) if hasil]
     mean = (
         sum(sum(hasil) / len(hasil) for hasil in rata_sesi) / len(rata_sesi)
@@ -278,7 +290,8 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "claims": len(rows),
         "measured_claims": terukur,
-        "sessions": len(per_sesi),
+        "sessions": len(rata_sesi),
+        "claim_sessions": len(klaim_per_sesi),
         "hit_target": hit_target,
         "hit_stop": hit_stop,
         "expired": expired,

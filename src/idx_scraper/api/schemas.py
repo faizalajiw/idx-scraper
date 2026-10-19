@@ -1205,11 +1205,16 @@ class JournalSummary(BaseModel):
     ``mean_abnormal`` = abnormal rata-rata vs pasar dalam fraksi. ``record_line``
     adalah kalimat rekaman P3 — satu baris yang mengikat mesin pada klaimnya
     sendiri; yang belum terukur ditulis "belum terukur", bukan 0,0%.
+
+    ``sessions`` = sesi yang menyumbang angka terukur (ambang verdict);
+    ``claim_sessions`` = sesi yang menulis klaim, termasuk yang belum matang.
+    ``note`` diisi kalau bukunya belum/tidak terbaca — bentuknya tetap sama.
     """
 
     claims: int
     measured_claims: int
     sessions: int
+    claim_sessions: int = 0
     hit_target: int
     hit_stop: int
     expired: int
@@ -1219,6 +1224,7 @@ class JournalSummary(BaseModel):
     per_session: list[JournalSessionSummary] = []
     verdict: JournalVerdict | None = None
     record_line: str
+    note: str | None = None
 
 
 class JournalClaim(BaseModel):

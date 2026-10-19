@@ -352,3 +352,68 @@ def test_klaim_diukur_pada_horizon_klaimnya_sendiri() -> None:
     baris = toko.fill_outcomes_from_frames([_klaim(horizon_days=3)], raw=_raw(), adj=_adj())
     assert baris[0]["status"] == STATUS_EXPIRED
     assert baris[0]["outcome_abn"] == pytest.approx(0.0)
+
+
+def test_fill_outcomes_menulis_status_lewat_kunci_tiga_kolom(monkeypatch) -> None:
+    """Badan ``fill_outcomes``: baca klaim terbuka, susun panel, tulis statusnya.
+
+    ``fill_outcomes_from_frames`` (murni) sudah diuji; yang belum pernah dijalankan
+    adalah badannya. Kunci ``where code/trade_date/rule`` ikut diuji karena SQL yang
+    salah kunci akan menulis status ke baris yang salah tanpa satu pun tes gagal.
+    """
+    cur = _FakeCursor(klaim=[_klaim(horizon_days=3)])
+    monkeypatch.setattr(
+        toko, "panel", lambda *a, **k: (_raw([(_TOUCH, 105.0, 90.0, 95.0)]), _adj())
+    )
+    out = toko.fill_outcomes(cur)
+    assert out == {
+        "diperiksa": 1,
+        "kena_target": 0,
+        "kena_stop": 1,
+        "kedaluwarsa": 0,
+        "terbuka": 0,
+    }
+    update = [q for q in cur.queries if q.startswith("update research.claim_journal")]
+    assert len(update) == 1
+    assert "where code = %s and trade_date = %s and rule = %s" in update[0]
+
+
+def test_penolakan_yang_sama_tidak_menumpuk() -> None:
+    """Penolakan = catatan percobaan: sesi dan sebab yang sama tetap satu baris.
+
+    Percobaan kedua jam 18:05 tidak boleh menimpa sebab yang dicatat jam 17:05.
+    """
+    cur = _FakeCursor()
+    toko.record_refusal(cur, trade_date="2026-10-16", reason="regime", detail="pertama")
+    toko.record_refusal(cur, trade_date="2026-10-16", reason="regime", detail="kedua")
+    assert len(cur.penolakan) == 1
+    assert cur.penolakan[0]["detail"] == "pertama"
+    assert "on conflict (trade_date, reason) do nothing" in cur.queries[0]
+
+
+def test_kandidat_geometrinya_salah_menyebut_geometri_bukan_tidak_lengkap(monkeypatch) -> None:
+    """Sebab penolakan ditanya ke aturan yang menolaknya, bukan disusun ulang di penulis."""
+    cur = _FakeCursor()
+    monkeypatch.setattr(toko, "candidates_for", lambda *a, **k: [_kandidat(stop=200.0)])
+    out = toko.write_session("dsn", cur, trade_date="2026-10-15")
+    assert out["written"] == 0
+    assert cur.penolakan[0]["reason"] == "geometri"
+
+
+def test_kandidat_tanpa_horizon_menyebut_horizon(monkeypatch) -> None:
+    cur = _FakeCursor()
+    monkeypatch.setattr(toko, "candidates_for", lambda *a, **k: [_kandidat(horizon_days=None)])
+    out = toko.write_session("dsn", cur, trade_date="2026-10-15")
+    assert out["written"] == 0
+    assert cur.penolakan[0]["reason"] == "horizon"
+
+
+def test_ringkasan_membaca_baris_terbaru_dulu() -> None:
+    """Batas baca memotong riwayat lama, bukan kejadian hari ini.
+
+    Dengan urutan menaik, tabel yang sudah lewat ``SUMMARY_LIMIT`` akan menyembunyikan
+    klaim terbaru dari agregat dan verdict tanpa satu pun tanda di layar.
+    """
+    cur = _FakeCursor()
+    toko.journal_summary(cur, rule=RULE_PAPAN)
+    assert "order by trade_date desc" in cur.queries[0]

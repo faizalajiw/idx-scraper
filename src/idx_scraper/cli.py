@@ -650,7 +650,7 @@ def _job_journal_outcomes() -> None:
 
 
 def _job_journal_reminder() -> int:
-    """Pengingat 17:45: klaim yang tersentuh hari ini + penjaga sesi yang bisu."""
+    """Pengingat 17:50: klaim yang tersentuh hari ini + penjaga sesi yang bisu."""
     notifier = TelegramNotifier()
     dsn = _journal_dsn()
     if not notifier.enabled or not dsn:
@@ -738,7 +738,8 @@ def cmd_journal(args) -> None:
                 print(f"{aturan}: {ringkas['record_line']}")
                 print(
                     f"baris {ringkas['claims']} · terukur {ringkas['measured_claims']} · "
-                    f"sesi {ringkas['sessions']} · verdict {ringkas['verdict']['status']}"
+                    f"sesi terukur {ringkas['sessions']} dari {ringkas['claim_sessions']} "
+                    f"sesi menulis · verdict {ringkas['verdict']['status']}"
                 )
                 if celah:
                     print(

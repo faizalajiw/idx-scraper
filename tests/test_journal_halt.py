@@ -60,3 +60,17 @@ def test_path_env_dipakai_kalau_argumen_kosong(tmp_path, monkeypatch) -> None:
     set_halt(reason="dari env")
     assert state()["halted"] is True
     assert state()["reason"] == "dari env"
+
+
+def test_berkas_bukan_utf8_tetap_fail_open(tmp_path) -> None:
+    """Berkas yang tersentuh perkakas lain tidak boleh mematikan gerbang dari belakang.
+
+    ``state()`` dipanggil job penulis klaim tiap jam dan rute keadaan gerbang: kalau
+    ia melempar, job berhenti tanpa satu pun baris penolakan tercatat dan layar
+    kehilangan blok gerbangnya, justru saat ada yang rusak.
+    """
+    p = tmp_path / "halt.json"
+    p.write_bytes(b'{"halted": true, "reason": "uji", "by": "\xff\xfe pemilik"}')
+    st = state(path=p)
+    assert st["halted"] is False
+    assert st["note"] and "rusak" in st["note"]
