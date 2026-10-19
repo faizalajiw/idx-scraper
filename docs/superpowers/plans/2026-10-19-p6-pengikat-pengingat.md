@@ -25,6 +25,9 @@
 - **Dua dasar harga** (P2 6.4): level (`ref_raw`, `stop_raw`, `target_raw`) dari harga mentah; hasil (`outcome_abn`) dari harga terkoreksi. Satu klaim menyimpan `ref_adj`.
 - **Satuan dikunci:** `size_pct` adalah persen sebagai angka (16,0 artinya 16% modal, sama dengan `position.pct`); `outcome_abn` memakai satuan `abn_k` milik `claim_eval` (fraksi, bukan persen).
 - **Empat sebab gerbang, urutan tetap** (spec D5): `manual`, `data`, `regime`, `verdict`. Hanya sebab pertama yang dilaporkan.
+- **Daftar pendek = baris `grade = 'A'` sesi itu, dipotong 5.** Diperiksa ke data nyata 19 Okt 2026: 5 sesi terakhir (2026-10-12 sampai 2026-10-16) berisi 4, 5, 4, 5, 5 baris grade A, jadi persis "3 sampai 5 nama per sesi" yang dijanjikan Q1. `detail` penolakan menyebut "N kandidat, M grade A" supaya daftar kosong selalu bisa dijelaskan.
+- **Kolom `signal` lapis 1 tidak disaring.** Papan memutuskan lewat grade + rencana, bukan lewat pola. Di sesi nyata 2026-10-16 empat baris grade A punya `signal` HOLD semua; menyaring `signal = 'BUY'` akan memangkas daftar pendek jadi 0-2 baris dan melanggar Q1. Membaca `signal` apa adanya juga yang membuat klaim jujur: yang dipegang mesin adalah level, bukan label.
+- **Horizon klaim apa adanya dari kandidat, dan kenyataannya seragam:** 286 baris `recommendation_log` sepekan terakhir semua `horizon_days = 21`, jadi `horizon_mismatch` diharapkan 0 dan verdict memakai angka yang sama dengan `VERDICT_HORIZON`.
 - **Reuse, bukan tulis ulang** (spec D9, D10, D11): pengukuran hasil memakai `claim_eval.claim_outcomes`; verdict memakai `claim_eval.claim_verdict`; kalimat rekaman memakai `claim_eval.format_record_line`; patokan pasar memakai definisi di `/api/recommendations/track`.
 - **Tidak menambah menu web** (P2 R6, spec D15).
 - **Tidak mengubah perilaku P1 sampai P5.** Baseline data nyata sesi 2026-10-16 wajib tetap: kolam 191, kandidat 46, karantina 16, PEGE skor 56.7 / entry 113,42 / stop 106,33 / target 127,60.
@@ -264,7 +267,7 @@ git commit -m "feat(p6): penyimpan halt manual (tulis atomik, fail-open saat ber
 - Consumes: `research.journal` (Task 1), `research.claim_eval.claim_outcomes`, `research.recommendation_log` (tabel), `research.prices_adjusted` (view, `adj_close`), `research.raw_eod`.
 - Produces (dipakai Task 4, 5):
   - `_DDL: str`, `ensure_table(cur) -> None`
-  - `candidates_for(dsn: str, trade_date: str, *, limit: int = SHORTLIST_SIZE) -> list[dict[str, Any]]` (baris `recommendation_log` + `size_pct` dari `position.position_plan`, urut seperti papan)
+  - `candidates_for(dsn: str, trade_date: str, *, limit: int = SHORTLIST_SIZE) -> list[dict[str, Any]]` (baris `recommendation_log` sesi itu **dengan `grade = 'A'`**, urut skor menurun, dipotong `limit`; ditambah `size_pct` dari `position.position_plan` memakai `entry_ref`/`stop`/`target` baris itu dan keadaan portofolio kosong)
   - `record_claims(cur, claims: list[dict[str, Any]]) -> int` (jumlah baris yang benar-benar masuk)
   - `record_refusal(cur, *, trade_date: str, reason: str, detail: str | None = None) -> None`
   - `panel(conn, *, codes: list[str], start: str, end: str) -> tuple[pd.DataFrame, pd.DataFrame]` (frame `raw` dan `adj` dengan kolom yang diminta `claim_eval`, yaitu `code, date, high, low, close` dan `code, date, close`)
@@ -374,7 +377,7 @@ Aturan yang dikunci:
 
 - `ensure_table` menjalankan `_DDL` dengan `create ... if not exists`, dipanggil sebelum menulis (pola `recommendation_log.ensure_table`).
 - `record_claims` memakai `insert ... on conflict (code, trade_date, rule) do nothing` **satu per baris** (bukan `executemany`) supaya jumlah baris masuk bisa dihitung; kolom yang tidak ada di klaim diisi `None`, bukan 0.
-- `write_session(cur, *, trade_date, gate=None)` (fungsi tipis di modul ini, dipakai CLI Task 4): ambil `candidates_for`; kosong berarti `record_refusal(reason="kolam_kosong")`; kalau `gate` menolak, `record_refusal(reason=gate["reason"], detail=gate["message"])`; kalau lolos, bangun klaim via `claim_from_candidate` untuk setiap kandidat, tulis yang lengkap, dan catat `record_refusal(reason=...)` per kandidat yang ditolak pre-commit. Mengembalikan `{"written": n, "refused": n}`.
+- `write_session(cur, *, trade_date, gate=None)` (fungsi tipis di modul ini, dipakai CLI Task 4): ambil `candidates_for`; daftar kosong berarti `record_refusal(reason="kolam_kosong", detail="N kandidat, M grade A")` (N dan M dihitung apa adanya, jadi "tidak ada klaim" selalu punya sebab yang bisa dibaca); kalau `gate` menolak, `record_refusal(reason=gate["reason"], detail=gate["message"])`; kalau lolos, bangun klaim via `claim_from_candidate` untuk setiap kandidat, tulis yang lengkap, dan catat `record_refusal(reason=...)` per kandidat yang ditolak pre-commit. Mengembalikan `{"written": n, "refused": n}`.
 - `panel` mengembalikan frame dengan **nama kolom yang diminta `claim_eval`**: `raw` = `code, date, high, low, close` dari `research.raw_eod`; `adj` = `code, date, close` dari `research.prices_adjusted.adj_close` **via `research.latest_pit`** (PIT, bukan `raw_eod`).
 - `fill_outcomes` membangun frame klaim dari `claim_journal` (kolom `code, trade_date AS date, direction, stop_raw AS stop, target_raw AS target, horizon_days`), memanggil `claim_eval.claim_outcomes(claims, raw=..., adj=..., horizons=(VERDICT_HORIZON,))`, lalu memetakan hasil apa adanya: `stop` → `kena_stop`, `target` → `kena_target`, `timeout` → `kedaluwarsa`, `unresolved` → tetap `terbuka`. `outcome_abn` diambil dari kolom `abn_{VERDICT_HORIZON}` pada satuan aslinya (fraksi). Perpindahan status **tidak dibatalkan**: klaim yang statusnya bukan `terbuka` tidak diperiksa ulang.
 - `journal_summary` merakit baris dengan kunci yang diminta `summarize_claims`, memanggilnya, lalu menambahkan `record_line = claim_eval.format_record_line(...)` memakai `claims`, `hit_target`, `hit_stop`, `mean_abnormal` (satu formatter, tidak ada yang kedua).
@@ -568,7 +571,7 @@ idx journal record --trade-date 2026-10-16
 idx journal outcomes --trade-date 2026-10-16
 idx journal summary
 ```
-Expected: klaim sesi 2026-10-16 masuk buku (maksimum 5 baris, sebab `papan-teratas`), `record_line` menyebut jumlah klaim dan hasilnya apa adanya, dan **angka baseline P1 sampai P5 tidak berubah** (kolam 191, kandidat 46, PEGE seperti lampiran P5 spec).
+Expected: **persis 4 baris masuk** untuk sesi 2026-10-16, aturan `papan-teratas`, yaitu CAKK (entry 143,55 / stop 136,49 / target 157,67), PEGE (113,42 / 106,33 / 127,60), TBIG (1185,00 / 1082,85 / 1389,30), MGRO (720,00 / 685,00 / 790,00), semuanya `horizon_days = 21` dan `status` awal `terbuka` (sesi entry belum bisa memicu level). `record_line` menyebut jumlah klaim dan hasilnya apa adanya, dan **angka baseline P1 sampai P5 tidak berubah** (kolam 191, kandidat 46, PEGE seperti lampiran P5 spec).
 
 - [ ] **Step 2: Tulis komponen + hook, lalu tempel di `/rekomendasi`**
 
