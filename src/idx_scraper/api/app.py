@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import news, watchlist_store
 
-from . import alerts, analytics, services, simulation
+from . import alerts, analytics, journal, services, simulation
 from .config import get_settings
 from .database import close_pool, get_cursor, init_pool
 from .schemas import (
@@ -35,6 +35,11 @@ from .schemas import (
     ForeignFlow,
     Freshness,
     HoldCheckResponse,
+    JournalClaim,
+    JournalGateState,
+    JournalHaltRequest,
+    JournalResumeRequest,
+    JournalSummary,
     MarketLeaders,
     MarketOverview,
     MarketRegime,
@@ -735,6 +740,53 @@ def alerts_test() -> dict:
             else "Gagal mengirim pesan uji. Cek token bot dan chat id."
         ),
     }
+
+
+# ------------------------------------------------- buku klaim (lapis 4, P6)
+
+
+@app.get("/api/journal/summary", response_model=JournalSummary)
+def journal_summary(rule: str | None = None, code: str | None = None) -> dict:
+    """Rekaman aturan buku klaim + kalimat rekaman (buku kosong ditulis apa adanya)."""
+    return journal.summary(rule=rule, code=code)
+
+
+@app.get("/api/journal/claims", response_model=list[JournalClaim])
+def journal_claims(
+    trade_date: str | None = None,
+    code: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[dict]:
+    """Baris buku klaim; tanpa `trade_date` dipakai sesi bursa terakhir.
+
+    Klaim yang belum selesai ikut tampil dengan ``outcome_abn`` kosong: hari yang
+    belum teramati bukan hari yang sudah lewat.
+    """
+    tanggal = _parse_optional_date(trade_date, "trade_date")
+    return journal.claims(
+        trade_date=tanggal.isoformat() if tanggal else None, code=code, limit=limit
+    )
+
+
+@app.get("/api/journal/state", response_model=JournalGateState)
+def journal_state() -> dict:
+    """Boleh atau tidak menulis klaim baru sekarang, dengan sebab pertamanya."""
+    return journal.state()
+
+
+@app.post("/api/journal/halt", response_model=JournalGateState)
+def journal_halt(payload: JournalHaltRequest) -> dict:
+    """Hentikan penulisan klaim baru. Sebab kosong ditolak, bukan disimpan."""
+    try:
+        return journal.halt(reason=payload.reason, by=payload.by)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+@app.post("/api/journal/resume", response_model=JournalGateState)
+def journal_resume(payload: JournalResumeRequest) -> dict:
+    """Buka lagi penulisan klaim; jejak waktu dan pelakunya tetap tercatat."""
+    return journal.resume(by=payload.by)
 
 
 @app.get("/api/backtest/config", response_model=BacktestConfig)
