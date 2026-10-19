@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import sys
 import threading
@@ -41,6 +42,8 @@ from .live_capture import LiveCapture
 from .notify import (
     SignalState,
     TelegramNotifier,
+    format_claim_hits,
+    format_claim_silence,
     format_recommendation_message,
     format_rule_message,
     format_smart_money_message,
@@ -477,6 +480,330 @@ def cmd_recommendations(args) -> None:
     written = record(dsn, months=args.months, **inputs)
     print(f"[ok] {written} baris kandidat ditulis")
     print_report(evaluate(dsn, horizons=tuple(args.k)))
+
+
+# --------------------------------------------------------------------------- #
+# Buku klaim (lapis 4, P6)
+# --------------------------------------------------------------------------- #
+
+
+def _journal_dsn() -> str | None:
+    """DSN DB untuk job buku klaim, atau None kalau belum diatur."""
+    return os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+
+
+def _now_wib() -> datetime:
+    """Waktu WIB sekarang, dipisah supaya tes bisa memakukannya."""
+    return datetime.now(WIB)
+
+
+def _last_session_date(dsn: str) -> str | None:
+    """Tanggal bursa terakhir yang datanya sudah masuk (``research.raw_eod``)."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(
+        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        cur.execute("select max(trade_date) as tanggal from research.raw_eod")
+        row = cur.fetchone() or {}
+    tanggal = row.get("tanggal")
+    return str(tanggal) if tanggal else None
+
+
+def _journal_session(dsn: str | None = None, trade_date: str | None = None) -> str:
+    """Sesi yang ditulis job: ``--trade-date`` kalau ada, kalau tidak sesi bursa terakhir.
+
+    Bukan tanggal kalender: job jam 00:10 WIB masih milik sesi kemarin, dan tanggal
+    kalender akan membuatnya menulis sesi yang datanya belum ada.
+    """
+    if trade_date:
+        return str(trade_date)
+    terakhir = _last_session_date(dsn) if dsn else None
+    return terakhir or _now_wib().date().isoformat()
+
+
+def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
+    """(gerbang, konteks) untuk sesi yang akan ditulis. Tidak pernah melempar.
+
+    Sebabnya dibaca dari sumber yang sudah ada: halt manual dari berkas halt,
+    kesegaran dari ``freshness.current``, rezim dari gerbang papan, verdict dari
+    buku klaim aturan ini sendiri. Yang tidak terbaca ditulis sebagai peringatan
+    dan gerbangnya dibiarkan seperti apa adanya - bukan ditebak.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from . import journal_halt
+    from .freshness import current as freshness_current
+    from .research import journal_store
+    from .research.journal import RULE_PAPAN, claim_gate
+
+    halt = journal_halt.state()
+    kesegaran: str | None = None
+    verdict: str | None = None
+    regime: str | None = None
+    vol_state: str | None = None
+    blocked = False
+    alasan_rezim: str | None = None
+
+    try:
+        with psycopg.connect(
+            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+        ) as conn, conn.cursor() as cur:
+            kesegaran = str(freshness_current(cur).get("status") or "") or None
+            try:
+                ringkas = journal_store.journal_summary(cur, rule=RULE_PAPAN)
+                verdict = str(ringkas["verdict"].get("status") or "") or None
+            except Exception as e:
+                print(f"[warn] verdict buku klaim belum terbaca: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"[warn] kesegaran data tidak terbaca: {e}", file=sys.stderr)
+
+    try:
+        from .api import analytics as analytics_api
+
+        regime_row = analytics_api.get_market_regime() or {}
+        regime = regime_row.get("regime")
+        vol_state = regime_row.get("vol_state")
+        gate = analytics_api._regime_gate() or {}
+        blocked = bool(gate.get("blocked"))
+        alasan_rezim = str(gate.get("reason") or gate.get("regime") or "") or None
+    except Exception as e:
+        print(f"[warn] gerbang rezim tidak terbaca: {e}", file=sys.stderr)
+
+    return (
+        claim_gate(
+            manual_halt=bool(halt.get("halted")),
+            halt_reason=halt.get("reason"),
+            freshness_status=kesegaran,
+            gate_blocked=blocked,
+            gate_reason=alasan_rezim,
+            verdict=verdict,
+        ),
+        {"regime": regime, "vol_state": vol_state, "freshness_status": kesegaran},
+    )
+
+
+def _journal_write(dsn: str, *, trade_date: str | None = None, cetak: bool = True) -> dict:
+    """Tulis satu sesi: gerbang dulu, baru kandidat; yang ditolak tetap bercatatan."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from .research import journal_store
+
+    sesi = _journal_session(dsn, trade_date)
+    gerbang, konteks = _journal_gate_parts(dsn)
+    with psycopg.connect(
+        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+    ) as conn, conn.cursor() as cur:
+        hasil = journal_store.write_session(
+            dsn, cur, trade_date=sesi, gate=gerbang, konteks=konteks
+        )
+    if cetak:
+        sebab = f" ({hasil['reason']})" if hasil.get("reason") else ""
+        print(
+            f"[ok] sesi {sesi}: {hasil['written']} klaim ditulis, "
+            f"{hasil['refused']} penolakan{sebab}"
+        )
+    return {"session": sesi, **hasil}
+
+
+def _job_journal_claims() -> None:
+    """Tulis klaim sesi bursa terakhir; diulang tiap jam 17:00-21:00.
+
+    Kalau klaim sesi itu sudah ada, `write_session` tidak menulis apa-apa (kunci
+    code+tanggal+aturan); kalau datanya belum masuk, ia mencatat penolakannya dan
+    pengulangan jam berikutnya mencoba lagi. Tidak ada jalur yang menimpa.
+    """
+    dsn = _journal_dsn()
+    if not dsn:
+        return
+    try:
+        _journal_write(dsn)
+    except Exception as e:  # DB down must not kill the scheduler
+        print(f"[err] buku klaim job: {e}", file=sys.stderr)
+
+
+def _job_journal_outcomes() -> None:
+    """Isi hasil klaim yang sudah matang. Perpindahan status tidak dibatalkan."""
+    dsn = _journal_dsn()
+    if not dsn:
+        return
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        from .research import journal_store
+
+        with psycopg.connect(
+            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+        ) as conn, conn.cursor() as cur:
+            hitung = journal_store.fill_outcomes(cur)
+        print(
+            f"[{_now_wib().isoformat()}] buku klaim: diperiksa {hitung['diperiksa']} klaim "
+            f"terbuka · target {hitung['kena_target']} · stop {hitung['kena_stop']} · "
+            f"kedaluwarsa {hitung['kedaluwarsa']}"
+        )
+    except Exception as e:
+        print(f"[err] isi hasil buku klaim: {e}", file=sys.stderr)
+
+
+def _job_journal_reminder() -> int:
+    """Pengingat 17:50: klaim yang tersentuh hari ini + penjaga sesi yang bisu."""
+    notifier = TelegramNotifier()
+    dsn = _journal_dsn()
+    if not notifier.enabled or not dsn:
+        return 0
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        sesi = _journal_session(dsn)
+        hits: list[dict] = []
+        with psycopg.connect(
+            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+        ) as conn, conn.cursor() as cur:
+            cur.execute(
+                "select code, status, outcome_abn from research.claim_journal"
+                " where touch_date = %s and status in ('kena_target','kena_stop')"
+                " order by code",
+                (sesi,),
+            )
+            hits = [dict(r) for r in cur.fetchall()]
+            if hits:
+                teks = format_claim_hits(hits)
+            else:
+                cur.execute(
+                    "select (select count(*) from research.claim_journal"
+                    " where trade_date = %s) as klaim,"
+                    " (select count(*) from research.claim_refusal"
+                    " where trade_date = %s) as penolakan",
+                    (sesi, sesi),
+                )
+                row = cur.fetchone() or {}
+                ada_catatan = int(row.get("klaim") or 0) or int(row.get("penolakan") or 0)
+                teks = format_claim_hits([]) if ada_catatan else format_claim_silence(sesi)
+        return len(hits) if notifier.send_message(teks) else 0
+    except Exception as e:
+        print(f"[err] pengingat buku klaim: {e}", file=sys.stderr)
+        return 0
+
+
+def cmd_journal(args) -> None:
+    """Buku klaim: tulis, isi hasil, ringkas, keadaan, halt, lanjut."""
+    aksi = getattr(args, "journal_cmd", None)
+    if aksi == "halt":
+        cmd_journal_halt(args)
+        return
+    if aksi == "resume":
+        cmd_journal_resume(args)
+        return
+
+    dsn = _journal_dsn()
+    if not dsn:
+        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        return
+
+    from . import journal_halt
+    from .research import journal_store
+    from .research.journal import RULE_PAPAN
+
+    if aksi == "record":
+        _journal_write(dsn, trade_date=getattr(args, "trade_date", None))
+        return
+
+    if aksi in ("outcomes", "summary", "state"):
+        import psycopg
+        from psycopg.rows import dict_row
+
+        sesi = _journal_session(dsn, getattr(args, "trade_date", None))
+        with psycopg.connect(
+            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
+        ) as conn, conn.cursor() as cur:
+            if aksi == "outcomes":
+                hitung = journal_store.fill_outcomes(cur, trade_date=sesi)
+                print(
+                    f"[ok] sesi {sesi}: diperiksa {hitung['diperiksa']} klaim terbuka · "
+                    f"target {hitung['kena_target']} · stop {hitung['kena_stop']} · "
+                    f"kedaluwarsa {hitung['kedaluwarsa']} · masih terbuka {hitung['terbuka']}"
+                )
+                return
+            if aksi == "summary":
+                aturan = getattr(args, "rule", None) or RULE_PAPAN
+                ringkas = journal_store.journal_summary(
+                    cur, rule=aturan, code=getattr(args, "code", None)
+                )
+                celah = journal_store.gaps(cur, sessions=10)
+                print(f"{aturan}: {ringkas['record_line']}")
+                print(
+                    f"baris {ringkas['claims']} · terukur {ringkas['measured_claims']} · "
+                    f"sesi terukur {ringkas['sessions']} dari {ringkas['claim_sessions']} "
+                    f"sesi menulis · verdict {ringkas['verdict']['status']}"
+                )
+                if celah:
+                    print(
+                        "[warn] sesi tanpa klaim dan tanpa penolakan: "
+                        + ", ".join(c["trade_date"] for c in celah),
+                        file=sys.stderr,
+                    )
+                return
+
+            halt = journal_halt.state()
+            ringkas = journal_store.journal_summary(cur, rule=RULE_PAPAN)
+            celah = journal_store.gaps(cur, sessions=10)
+            cur.execute(
+                "select trade_date, reason, detail from research.claim_refusal"
+                " order by trade_date desc, reason limit 10"
+            )
+            penolakan = [dict(r) for r in cur.fetchall()]
+
+        print(
+            "halt: " + ("ya" if halt["halted"] else "tidak")
+            + (f" ({halt['reason']} · {halt['by']} {halt['at']})" if halt["halted"] else "")
+        )
+        if halt.get("note"):
+            print(f"[warn] {halt['note']}", file=sys.stderr)
+        print(f"aturan {RULE_PAPAN}: {ringkas['record_line']}")
+        print(f"verdict: {ringkas['verdict']['status']} ({ringkas['verdict']['reason']})")
+        for p in penolakan:
+            print(f"  {p['trade_date']} {p['reason']}: {p['detail'] or '-'}")
+        if celah:
+            print(
+                "[warn] sesi bisu (tanpa klaim dan tanpa penolakan): "
+                + ", ".join(c["trade_date"] for c in celah),
+                file=sys.stderr,
+            )
+        return
+
+    print(
+        "[err] aksi journal tidak dikenal: pakai record, outcomes, summary, state, halt, resume",
+        file=sys.stderr,
+    )
+
+
+def cmd_journal_halt(args) -> None:
+    """Hentikan penulisan klaim baru. Sebab wajib: halt tanpa sebab tidak bisa dibaca."""
+    from . import journal_halt
+
+    alasan = str(getattr(args, "reason", "") or "").strip()
+    if not alasan:
+        print(
+            "[err] --reason wajib: sebab halt adalah satu-satunya yang membedakannya "
+            "dari mesin yang rusak",
+            file=sys.stderr,
+        )
+        return
+    keadaan = journal_halt.set_halt(reason=alasan, by=getattr(args, "by", None) or "pemilik")
+    print(f"[ok] klaim baru dihentikan: {keadaan['reason']} ({keadaan['at']} oleh {keadaan['by']})")
+
+
+def cmd_journal_resume(args) -> None:
+    """Buka lagi penulisan klaim; waktu dan pelakunya tetap tercatat."""
+    from . import journal_halt
+
+    keadaan = journal_halt.clear(by=getattr(args, "by", None) or "pemilik")
+    print(f"[ok] klaim baru jalan lagi ({keadaan['at']} oleh {keadaan['by']})")
 
 
 def cmd_signal_log(args) -> None:
@@ -1809,6 +2136,30 @@ def cmd_serve(args) -> None:
         _job_monthly_ic, "cron", day_of_week="mon-fri", hour=16, minute=50,
         id="daily_ic",
     )
+    # Buku klaim (P6) — ditulis SESUDAH sinyal/IC selesai dan SEBELUM hasilnya
+    # diketahui; itu seluruh gunanya. Diulang tiap jam 17:05-21:05 seperti
+    # `eod_fallback`: kalau data sesi belum masuk ia mencatat penolakannya dan
+    # mencoba lagi jam berikutnya, dan kalau klaimnya sudah ada ia tidak menulis
+    # apa-apa (kunci code+tanggal+aturan). Tidak ada jalur yang menimpa.
+    scheduler.add_job(
+        _job_journal_claims, "cron", day_of_week="mon-fri", hour="17-21", minute=5,
+        id="journal_claims", misfire_grace_time=7200, coalesce=True,
+    )
+    # Isi hasil 17:35: mengukur klaim yang horizonnya sudah berjalan. Perpindahan
+    # status tidak pernah dibatalkan, jadi job ini boleh jalan berkali-kali.
+    # Menit :35 dan :50, bukan :30/:45 — tiap :30 sudah ditempati `eod_fallback`,
+    # dan dua job cron di menit yang sama adalah pola yang dilarang di jadwal ini.
+    scheduler.add_job(
+        _job_journal_outcomes, "cron", day_of_week="mon-fri", hour=17, minute=35,
+        id="journal_outcomes", misfire_grace_time=7200, coalesce=True,
+    )
+    # Pengingat 17:50: klaim yang levelnya tersentuh, ATAU alarm kalau sesi ini
+    # tidak melahirkan klaim DAN tidak mencatat penolakan apa pun (job yang gagal
+    # tanpa bersuara justru yang paling perlu terdengar).
+    scheduler.add_job(
+        _job_journal_reminder, "cron", day_of_week="mon-fri", hour=17, minute=50,
+        id="journal_reminder", misfire_grace_time=7200, coalesce=True,
+    )
     # Snapshot pemegang saham — Senin 17:00 WIB. Job ini membuka klien IDX
     # sendiri, jadi jaraknya ke refresh_s2 (16:10) dijaga lebar: kalau IDX
     # menolak jalur HTTP dan transport jatuh ke Chrome, dua klien bersamaan akan
@@ -1864,6 +2215,8 @@ def cmd_serve(args) -> None:
     print("jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
           "kalau EOD hari ini sudah lengkap); "
           "health EOD 16:45; IC 16:50; ownership Senin 17:00")
+    print("buku klaim lapis 4 — tulis 17:05 lalu tiap jam sampai 21:05 (idempoten), "
+          "isi hasil 17:35, pengingat 17:50; gerbang penahan punya sebab sendiri")
     print(f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
           "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
           "tidak bisa ditarik otomatis");
@@ -1896,7 +2249,23 @@ def cmd_serve(args) -> None:
         storage.close()
 
 
+def _tutup_pool_api() -> None:
+    """Tutup pool koneksi API kalau jalur CLI ini sempat memakainya.
+
+    Helper pembacaan di ``api/`` membuka pool sendiri saat pertama dipakai
+    (``api/database.init_pool``). Di proses panjang (API, ``serve``) pool itu memang
+    hidup terus; di proses CLI pendek ia masih hidup saat interpreter bubar, dan
+    Python menutup job dengan ``PythonFinalizationError`` di log. Menutupnya di sini
+    menghilangkan noise itu tanpa mengubah perilaku: pool berikutnya dibuat ulang
+    saat dibutuhkan.
+    """
+    from .api.database import close_pool
+
+    close_pool()
+
+
 def main() -> None:
+    atexit.register(_tutup_pool_api)
     parser = argparse.ArgumentParser(prog="idx")
     sub = parser.add_subparsers(dest="command")
 
@@ -1952,6 +2321,28 @@ def main() -> None:
     p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
                           help="force source (optional; omit to just show state)")
 
+    from .research.journal import RULE_PAPAN
+
+    p_journal = sub.add_parser(
+        "journal", help="buku klaim (lapis 4): tulis, isi hasil, ringkas, keadaan, halt"
+    )
+    jsub = p_journal.add_subparsers(dest="journal_cmd")
+    j_rec = jsub.add_parser("record", help="tulis klaim sesi bursa terakhir (idempoten)")
+    j_rec.add_argument("--trade-date", help="YYYY-MM-DD (default: sesi bursa terakhir)")
+    j_out = jsub.add_parser("outcomes", help="isi hasil klaim yang sudah matang")
+    j_out.add_argument("--trade-date", help="YYYY-MM-DD (batasi ke satu sesi)")
+    j_sum = jsub.add_parser("summary", help="ringkasan buku + kalimat rekaman aturan")
+    j_sum.add_argument("--rule", default=RULE_PAPAN, help=f"aturan (default: {RULE_PAPAN})")
+    j_sum.add_argument("--code", help="batasi ke satu emiten")
+    jsub.add_parser(
+        "state", help="keadaan gerbang: halt, verdict, penolakan terakhir, sesi bisu"
+    )
+    j_halt = jsub.add_parser("halt", help="hentikan penulisan klaim baru (wajib --reason)")
+    j_halt.add_argument("--reason", help="sebab halt; tercatat di berkas halt")
+    j_halt.add_argument("--by", default="pemilik", help="pelaku (default: pemilik)")
+    j_resume = jsub.add_parser("resume", help="buka lagi penulisan klaim")
+    j_resume.add_argument("--by", default="pemilik", help="pelaku (default: pemilik)")
+
     args = parser.parse_args()
     if args.command == "snapshot":
         cmd_snapshot(args)
@@ -1971,6 +2362,8 @@ def main() -> None:
         cmd_signal_log(args)
     elif args.command == "recommendations":
         cmd_recommendations(args)
+    elif args.command == "journal":
+        cmd_journal(args)
     elif args.command == "watchlist":
         client = IDXClient()
         storage = get_storage_from_env()

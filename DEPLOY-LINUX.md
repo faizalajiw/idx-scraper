@@ -199,18 +199,20 @@ $PSQL -f sql/intraday_schema.sql        # intraday_ticks (partisi bulanan) + vie
 $PSQL -f sql/signal_log.sql             # research.signal_log
 $PSQL -f sql/factor_ic_history.sql      # research.factor_ic_history
 $PSQL -f sql/market_segment_daily.sql   # research.market_segment_daily
+$PSQL -f sql/journal.sql                # research.claim_journal + research.claim_refusal (buku klaim P6)
 ```
 
-### Cek hasil: harus ada 23 objek
+### Cek hasil: harus ada 25 objek
 
-Terverifikasi di DB pengembangan — **6 objek `public`, 17 objek `research`**:
+Terverifikasi di DB pengembangan — **6 objek `public`, 19 objek `research`**:
 
 ```
 public    tabel   index_quotes, index_summary_daily, news_items,
                   stock_daily, stock_quotes, stock_summary_daily
-research  tabel   broker_daily, corporate_actions, factor_ic_history,
-                  market_segment_daily, ownership, prices_pit, quarantine_eod,
-                  raw_eod, recommendation_log, regime_daily, signal_log
+research  tabel   broker_daily, claim_journal, claim_refusal, corporate_actions,
+                  factor_ic_history, market_segment_daily, ownership, prices_pit,
+                  quarantine_eod, raw_eod, recommendation_log, regime_daily,
+                  signal_log
 research  partisi intraday_ticks (+ intraday_ticks_2026_09, _2026_10)
 research  view    latest_pit, prices_adjusted, intraday_bars_5m
 ```
