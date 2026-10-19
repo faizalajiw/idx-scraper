@@ -11,7 +11,6 @@ service publicly, add authentication/authorization and rate limiting.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -68,64 +67,120 @@ from .schemas import (
     WatchlistUpdate,
 )
 
+# Parameter warm-up papan: harus sama dengan yang diminta web
+# (`useRecommendations(limit = 20, minGrade = "C")` di `lib/hooks.ts`), karena
+# key cache-nya (`recommendations:{limit}:{min_grade}`) memuat keduanya.
+BOARD_WARM_LIMIT = 20
+BOARD_WARM_GRADE = "C"
 
-@asynccontextmanager
+
+def _catat(pesan: str) -> None:
+    """Tulis satu baris ke log startup, di-flush langsung.
+
+    Tanpa ``flush`` barisnya bisa tidak pernah muncul: saat stdout diarahkan ke
+    berkas atau pipa (cara ``serve`` dan launcher menjalankannya), Python memakai
+    buffer blok, jadi barisnya baru ikut tertulis ketika buffernya penuh - dan
+    hilang total kalau prosesnya dibunuh sebelum itu. Sudah kejadian: log uji
+    hanya memuat dua dari enam baris warm-up walau keenam tugasnya selesai.
+    """
+    print(pesan, flush=True)
+
+
 def _warm_heavy_caches() -> None:
-    """Hitung cache berat sekali saat startup (background thread, fire-and-forget).
+    """Hangatkan cache berat sekali saat startup (background thread, fire-and-forget).
 
-    Event study butuh ~2 menit saat dingin — tanpa warm-up, permintaan pertama
-    ke Ruang Keputusan/Event Study menggantung sampai selesai hitung. Kalau
-    gagal (DB belum siap dsb.), cache terisi otomatis di permintaan berikutnya.
+    Enam cache dijalankan BERURUTAN di satu thread, papan kandidat paling depan.
+    Versi sebelumnya menjalankan lima thread bersamaan dan **tidak pernah
+    menghangatkan papan kandidat**, jadi halaman /rekomendasi tetap membayar
+    penuh ~44 detik di kunjungan pertama - dan setiap pengunjung yang datang
+    bersamaan membayarnya masing-masing, karena jalur itu belum punya
+    hitung-sekali. Berurutan juga menyingkirkan rebutan: di port uji, begitu
+    papan dimasukkan ke kumpulan yang jalan bersamaan, permintaan papan yang
+    datang di tengah warm-up menunggu 298 detik.
+
+    Event study (paling mahal, ~2 menit dingin) ditaruh paling belakang supaya
+    tidak menahan yang lain. Kalau ada yang gagal (DB belum siap dsb.), cache
+    terisi otomatis di permintaan berikutnya; tidak ada jalur yang menahan
+    permintaan.
+
+    Jangan dipasangi ``@asynccontextmanager``. Versi lama memang berdekorator
+    itu, dan bodynya **tetap jalan** - ``contextlib`` memanggil fungsinya saat
+    context manager dibuat, jadi kelima thread hangatnya memang menyala dan
+    baris ``[warmup]`` sudah lama ada di ``_api.log``. Yang rusak adalah
+    pulangannya: CM dengan ``gen=None``, yang meledak begitu ada yang menulis
+    ``async with``. Dekoratornya jadi bom waktu, bukan penyebab matinya warm-up.
     """
     import threading
 
     def _run_events() -> None:
         try:
             analytics._event_study_bundle()
-            print("[warmup] event bundle siap")
+            _catat("[warmup] event bundle siap")
         except Exception as e:
-            print(f"[warmup] event bundle dilewati: {e}")
+            _catat(f"[warmup] event bundle dilewati: {e}")
 
     def _run_broker_snapshot() -> None:
-        # Snapshot skor broker (~15s saat dingin) dipakai Hold Check & Ruang
-        # Keputusan; hangatkan supaya request pertama tidak menanggung biaya.
+        # Snapshot skor broker (1,3 detik saat dingin, terukur 19 Okt 2026)
+        # dipakai Hold Check & Ruang Keputusan; hangatkan supaya permintaan
+        # pertama tidak menanggung biaya.
         try:
             analytics.broker_activity_snapshot()
-            print("[warmup] broker snapshot siap")
+            _catat("[warmup] broker snapshot siap")
         except Exception as e:
-            print(f"[warmup] broker snapshot dilewati: {e}")
+            _catat(f"[warmup] broker snapshot dilewati: {e}")
 
     def _run_screener() -> None:
-        # Baris screener (~15-20s saat dingin) dipakai halaman Screener sama
-        # sekali tanpa filter; hangatkan agar kunjungan pertama cepat.
+        # Baris screener (20,7 detik saat dingin, terukur 19 Okt 2026) dipakai
+        # halaman Screener sama sekali tanpa filter; hangatkan agar kunjungan
+        # pertama cepat.
         try:
             analytics._screener_rows()
-            print("[warmup] screener rows siap")
+            _catat("[warmup] screener rows siap")
         except Exception as e:
-            print(f"[warmup] screener rows dilewati: {e}")
+            _catat(f"[warmup] screener rows dilewati: {e}")
 
     def _run_valuation() -> None:
-        # Watchlist default (~10s saat dingin) dipakai halaman Valuasi dan
+        # Valuasi seluruh pasar (14,2 detik saat dingin, terukur 19 Okt 2026:
+        # satu query per emiten untuk 980 emiten) dipakai halaman Valuasi dan
         # gabungan verdict di Ruang Keputusan.
         try:
             analytics.get_valuation()
-            print("[warmup] valuation siap")
+            _catat("[warmup] valuation siap")
         except Exception as e:
-            print(f"[warmup] valuation dilewati: {e}")
+            _catat(f"[warmup] valuation dilewati: {e}")
 
     def _run_hold_check() -> None:
-        # Verdict watchlist default (~7s saat dingin) dipakai halaman Hold Check.
+        # Verdict watchlist default (12,8 detik saat dingin, terukur 19 Okt
+        # 2026) dipakai halaman Hold Check.
         try:
             services.get_hold_check(watchlist_store.read_watchlist())
-            print("[warmup] hold check siap")
+            _catat("[warmup] hold check siap")
         except Exception as e:
-            print(f"[warmup] hold check dilewati: {e}")
+            _catat(f"[warmup] hold check dilewati: {e}")
 
-    threading.Thread(target=_run_events, daemon=True, name="warmup-event-bundle").start()
-    threading.Thread(target=_run_broker_snapshot, daemon=True, name="warmup-broker-snapshot").start()
-    threading.Thread(target=_run_screener, daemon=True, name="warmup-screener").start()
-    threading.Thread(target=_run_valuation, daemon=True, name="warmup-valuation").start()
-    threading.Thread(target=_run_hold_check, daemon=True, name="warmup-hold-check").start()
+    def _run_board() -> None:
+        # Papan kandidat (44 detik saat dingin, terukur 19 Okt 2026) dipakai
+        # halaman /rekomendasi; angka itu juga yang bikin seluruh halaman
+        # tertahan antre koneksi browser kalau cache-nya kosong, jadi ia
+        # dihangatkan lebih dulu daripada yang lain.
+        try:
+            analytics.get_recommendations(limit=BOARD_WARM_LIMIT, min_grade=BOARD_WARM_GRADE)
+            _catat("[warmup] papan kandidat siap")
+        except Exception as e:
+            _catat(f"[warmup] papan kandidat dilewati: {e}")
+
+    def _jalan() -> None:
+        for tugas in (
+            _run_board,
+            _run_broker_snapshot,
+            _run_valuation,
+            _run_screener,
+            _run_hold_check,
+            _run_events,
+        ):
+            tugas()
+
+    threading.Thread(target=_jalan, daemon=True, name="warmup").start()
 
 
 async def lifespan(app: FastAPI):
