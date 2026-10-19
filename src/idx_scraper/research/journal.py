@@ -237,10 +237,13 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
     Rata-rata per klaim akan membuat satu sesi dengan banyak nama mendominasi
     seluruh rekaman, dan rekaman itu yang dibaca verdict. Sesi tanpa hasil
     terukur tidak dihitung nol: ia tidak dihitung sama sekali.
+
+    ``measured_claims`` adalah jumlah baris yang **punya angka**, dan itu yang
+    dipakai verdict sebagai ambang; ``claims`` hanyalah jumlah baris.
     """
     per_sesi: dict[str, list[float]] = {}
     klaim_per_sesi: dict[str, int] = {}
-    hit_target = hit_stop = expired = terbuka = mismatch = 0
+    hit_target = hit_stop = expired = terbuka = mismatch = terukur = 0
 
     for row in rows:
         tanggal = str(row.get("trade_date"))
@@ -250,6 +253,7 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
         hasil = _num(row.get("outcome_abn"))
         if hasil is not None:
             per_sesi[tanggal].append(hasil)
+            terukur += 1
 
         status = row.get("status")
         if status == STATUS_TARGET:
@@ -273,6 +277,7 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "claims": len(rows),
+        "measured_claims": terukur,
         "sessions": len(per_sesi),
         "hit_target": hit_target,
         "hit_stop": hit_stop,

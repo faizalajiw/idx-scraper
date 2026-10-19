@@ -155,6 +155,20 @@ def test_agregat_dirata_per_sesi_bukan_per_klaim() -> None:
     assert [s["trade_date"] for s in out["per_session"]] == ["2026-10-15", "2026-10-16"]
 
 
+def test_klaim_terbuka_bukan_klaim_terukur() -> None:
+    """Klaim yang belum selesai tidak boleh ikut dihitung sebagai bukti.
+
+    Verdict berdiri di atas `measured_claims`; kalau baris terbuka ikut dihitung,
+    ambang 30 klaim tercapai sebelum satu pun klaim sempat dinilai.
+    """
+    rows = [_row("2026-10-15", abn=None, status="terbuka")] + [
+        _row("2026-10-15", abn=0.02, status="kena_target")
+    ]
+    out = summarize_claims(rows)
+    assert out["claims"] == 2
+    assert out["measured_claims"] == 1
+
+
 def test_buku_kosong_bukan_nol() -> None:
     out = summarize_claims([])
     assert out["claims"] == 0
