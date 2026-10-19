@@ -577,6 +577,8 @@ idx journal summary
 ```
 Expected: **persis 4 baris masuk** untuk sesi 2026-10-16, aturan `papan-teratas`, yaitu CAKK (entry 143,55 / stop 136,49 / target 157,67), PEGE (113,42 / 106,33 / 127,60), TBIG (1185,00 / 1082,85 / 1389,30), MGRO (720,00 / 685,00 / 790,00), semuanya `horizon_days = 21` dan `status` awal `terbuka` (sesi entry belum bisa memicu level). `record_line` menyebut jumlah klaim dan hasilnya apa adanya, dan **angka baseline P1 sampai P5 tidak berubah** (kolam 191, kandidat 46, PEGE seperti lampiran P5 spec).
 
+> **Dibetulkan 19 Okt 2026 (Ruling Task 6):** gerbang rezim sedang menutup (`ADX 47.7`, "tahan posisi baru") dan spec D5 tidak memberi pengecualian backfill, jadi yang benar tercatat hari ini adalah **penolakan `regime` untuk sesi 2026-10-16**, bukan 4 baris klaim. Empat baris di atas tetap terbukti lewat jalur tulis nyata ke DB lalu di-rollback (keluarannya sama persis, termasuk `horizon_days = 21` dan `status = 'terbuka'`), dan baris permanennya menunggu gerbang terbuka tanpa perubahan kode. Bukti lengkapnya di ledger `progress.md` blok Task 6.
+
 - [ ] **Step 2: Tulis komponen + hook, lalu tempel di `/rekomendasi`**
 
 - Baris rekaman: ambil `record_line` dari API apa adanya (satu formatter, di Python); jangan menyusun kalimat rekaman di TypeScript.
@@ -602,7 +604,13 @@ Expected: keduanya bersih; lalu buka `http://localhost:3000/rekomendasi` dan pas
 
 ```bash
 cd ../idx-scraper; .venv\Scripts\python.exe -m pytest; .venv\Scripts\python.exe -m ruff check src tests scripts
-git add idx-web/lib/types.ts idx-web/lib/hooks.ts idx-web/components/ClaimRecord.tsx idx-web/app/rekomendasi/page.tsx
+# dua repo, dua commit (idx-web repo git sendiri; jalankan dari akarnya masing-masing)
+cd ../idx-web; git checkout -b feat/p6-pengikat-pengingat
+git add lib/types.ts lib/hooks.ts lib/api.ts components/ClaimRecord.tsx app/rekomendasi/page.tsx
 git commit -m "feat(p6): permukaan buku klaim di /rekomendasi + bukti sesi 2026-10-16"
+cd ../idx-scraper; git add src/idx_scraper/cli.py
+git commit -m "fix(p6): tutup pool API di akhir proses CLI supaya log job tanpa PythonFinalizationError"
 ```
 Expected: semua lulus; commit terakhir di branch `feat/p6-pengikat-pengingat`. (Dua repo punya commit masing-masing; jangan pakai `git add -A`, ada berkas lokal `idx-web/.playwright-cli/` yang tidak dilacak dan tidak boleh ikut.)
+
+> **Dibetulkan 19 Okt 2026 (Ruling Task 6):** perintah aslinya menulis `cd ../idx-scraper; git add idx-web/...` yang tidak bisa jalan (`idx-web` repo git sendiri, bukan subfolder). Diganti dengan dua blok commit, satu per repo, dan `lib/api.ts` masuk daftar karena pola repo menaruh pemanggil `fetch` di situ. Perbaikan `cli.py` (menutup pool API di akhir proses CLI) ditambahkan sebagai commit kedua di `idx-scraper` setelah temuan `PythonFinalizationError` di log job.
