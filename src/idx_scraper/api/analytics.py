@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -59,6 +61,57 @@ def clear_research_cache() -> int:
     n = len(_RESEARCH_CACHE)
     _RESEARCH_CACHE.clear()
     return n
+
+
+# Single-flight: key -> event yang dibuka begitu hitungannya selesai. Dipakai
+# supaya banyak permintaan yang datang bersamaan untuk cache yang sama tidak
+# menghitung ulang masing-masing.
+_INFLIGHT: dict[str, threading.Event] = {}
+_INFLIGHT_LOCK = threading.Lock()
+
+
+def research_cache_once(
+    key: str, compute: Callable[[], Any], ttl: float | None = None, wait: float = 180.0
+) -> Any:
+    """Hitung ``compute()`` sekali untuk satu key, walau banyak pemanggil bersamaan.
+
+    Permintaan yang menemukan key sedang dihitung menunggu hasilnya, bukan
+    menghitung ulang: papan dingin terukur 44-67 detik (tergantung beban saat
+    itu), dan enam koneksi browser yang menghitung ulang bersamaan menahan enam
+    koneksi pool (maks 10) sementara threadpool uvicorn 40, pool habis dan
+    seluruh API macet.
+
+    Gagal-terbuka: kalau yang menghitung mati atau lebih lambat dari ``wait``,
+    penunggu menghitung sendiri. Bentuk keluaran tidak berubah, hanya jumlah
+    hitungannya yang turun.
+    """
+    hit = _research_cache_get(key)
+    if hit is not None:
+        return hit
+
+    with _INFLIGHT_LOCK:
+        event = _INFLIGHT.get(key)
+        pemilik = event is None
+        if pemilik:
+            event = threading.Event()
+            _INFLIGHT[key] = event
+    assert event is not None
+
+    if not pemilik and event.wait(wait):
+        hit = _research_cache_get(key)
+        if hit is not None:
+            return hit
+        # kelamaan: hitung sendiri, sama seperti sebelum ada single-flight
+
+    try:
+        val = compute()
+        _research_cache_put(key, val, ttl=ttl)
+        return val
+    finally:
+        if pemilik:
+            with _INFLIGHT_LOCK:
+                _INFLIGHT.pop(key, None)
+            event.set()
 
 
 def get_market_regime() -> dict[str, Any]:
@@ -2620,14 +2673,22 @@ def _pattern_histories() -> dict[str, dict[str, Any]]:
 def _recommendation_context() -> dict[str, Any]:
     """Semua input skor kandidat + status tiap lapisan (cache 30 menit).
 
+    Dipakai bersama papan, halaman emiten, gerbang rezim, dan job rekaman, jadi
+    hitungannya dijaga ``research_cache_once``: satu hitungan dingin untuk semua
+    pemanggil yang datang bersamaan.
+    """
+    return research_cache_once(
+        "recommendation_context", _recommendation_context_uncached, ttl=1800.0
+    )
+
+
+def _recommendation_context_uncached() -> dict[str, Any]:
+    """Badan asli ``_recommendation_context``: hitung dari nol, tanpa cache.
+
     Lapisan faktor IC dan aliran broker dihitung di sini SEKALI untuk seluruh
     pasar, lalu di-injeksi per emiten. Bila gate IC belum terpenuhi, keduanya
     kosong dan tidak menggerakkan skor — transparan lewat ``layers``.
     """
-    cached = _research_cache_get("recommendation_context")
-    if cached is not None:
-        return cached
-
     metrics = _recommendation_metrics()
     histories = _pattern_histories()
 
@@ -2702,7 +2763,6 @@ def _recommendation_context() -> dict[str, Any]:
         "pool": pool,
         "quarantined": quarantined,
     }
-    _research_cache_put("recommendation_context", out, ttl=1800.0)
     return out
 
 
@@ -2913,10 +2973,16 @@ def get_recommendations(
         "exposure_pct": exposure_pct,
     }
     cache_key = f"recommendations:{limit}:{min_grade}"
-    cached = _research_cache_get(cache_key)
-    if cached is not None:
-        return _close_recommendation(cached, state)
+    out = research_cache_once(cache_key, lambda: _board_uncached(limit, min_grade), ttl=1800.0)
+    return _close_recommendation(out, state)
 
+
+def _board_uncached(limit: int, min_grade: str) -> dict[str, Any]:
+    """Badan asli ``get_recommendations``: hitung papan dari nol, tanpa cache.
+
+    Dipisah supaya ``research_cache_once`` bisa menjaga key-nya: satu hitungan dingin
+    (67 detik) untuk semua pemanggil yang datang bersamaan.
+    """
     from ..research.recommend import rank_candidates
     from ..research.recommendation_log import candidates_for_date
 
@@ -2941,8 +3007,7 @@ def get_recommendations(
         "rows": [],
     }
     if metrics.empty:
-        _research_cache_put(cache_key, out, ttl=1800.0)
-        return _close_recommendation(out, state)
+        return out
 
     last_date = metrics["date"].max()
     scanned = int((metrics["date"] == last_date).sum())
@@ -2973,8 +3038,7 @@ def get_recommendations(
     out["pool_size"] = len(ctx["pool"])
     out["total_candidates"] = len(candidates)
     out["rows"] = ranked
-    _research_cache_put(cache_key, out, ttl=1800.0)
-    return _close_recommendation(out, state)
+    return out
 
 
 def get_stock_recommendation(

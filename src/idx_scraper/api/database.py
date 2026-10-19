@@ -7,6 +7,7 @@ returned automatically. Rows come back as dicts via ``dict_row``.
 
 from __future__ import annotations
 
+import atexit
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -41,6 +42,12 @@ def init_pool() -> ConnectionPool:
         open=True,
         configure=_configure,
     )
+    # Tutup pool SEBELUM interpreter membongkar dirinya. Pool psycopg membawa
+    # thread pekerja non-daemon; tanpa penutupan ini proses pendek (CLI, skrip,
+    # job) berakhir dengan "PythonFinalizationError: cannot join thread at
+    # interpreter shutdown" dari ConnectionPool.__del__. close_pool() idempoten,
+    # jadi aman kalau jalur lain (lifespan API, main() CLI) menutupnya juga.
+    atexit.register(close_pool)
     return _pool
 
 
