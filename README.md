@@ -245,20 +245,25 @@ The scheduler (APScheduler, timezone WIB) starts with `serve`.
 | `refresh_s1_fri` | Fri 11:30 | EOD Sesi I + recompute. |
 | `refresh_s2` | Mon‑Fri **16:10** | EOD Sesi II + recompute (`_job_index_eod_close` 16:10, then `research.market_segment_daily`). Same pipeline as `idx refresh`. |
 | `eod_fallback` | Mon‑Fri **16:30, lalu tiap jam s/d 20:30** | Jaring kedua EOD (`_eod_catchup`): kalau EOD hari ini sudah lengkap, keluar dalam ~1 detik (satu query DB, tanpa request IDX); kalau belum, jalankan pipeline penuh. Diulang tiap jam karena dua hal yang tidak ditutup retry: penolakan IDX yang bertahan >4 menit, dan **laptop yang tidur** (proses `serve` ikut beku, bukan mati) — dengan `misfire_grace_time` 2 jam, cek terakhir masih menyala kalau mesin bangun sebelum ~22:30. Menggantikan task Windows `IDX-EOD` yang dihapus 15 Okt 2026. |
-| `health_eod` | Mon‑Fri **16:45** | Empat penjaga data, tiap jalur punya `try/except` sendiri: (1) EOD hari ini belum masuk (`IDX_EOD_DEADLINE_HOUR`), (2) cakupan kolom `foreign_*` timpang, (3) sesi yang barisnya di bawah 50% median ("sesi separuh"), (4) hari bursa tanpa baris di tengah rentang. Log + Telegram kalau ada yang gagal. Sengaja SETELAH `eod_fallback` supaya alarm menilai hasil jaring kedua, bukan percobaan pertama. Penjaga 3 melewati sesi hari ini (`in_progress`): pukul 16:45 ingest bisa masih jalan, dan sesi separuh yang sedang ditulis bukan kerusakan — kalau ternyata tetap kurang, cek sesi berikutnya yang mengadukan. `misfire_grace_time` 2 jam seperti `eod_fallback`: laptop yang tidur melewati 16:45 tetap mendapat alarmnya begitu bangun. |
+| `health_eod` | Mon‑Fri **17:45** | Empat penjaga data, tiap jalur punya `try/except` sendiri: (1) EOD hari ini belum masuk (tenggat `IDX_EOD_DEADLINE_HOUR`/`IDX_EOD_DEADLINE_MINUTE`, default 17:30), (2) cakupan kolom `foreign_*` timpang, (3) sesi yang barisnya di bawah 50% median ("sesi separuh"), (4) hari bursa tanpa baris di tengah rentang. Log + Telegram kalau ada yang gagal. Sengaja SETELAH `eod_fallback` (16:30, slot 17:30 adalah yang pertama di belakang jendela terbit IDX) supaya alarm menilai hasil jaring kedua, bukan percobaan pertama — dan supaya "telat" berarti data memang belum masuk, bukan baru mau terbit. Penjaga 3 melewati sesi hari ini (`in_progress`): sesi yang sedang ditulis bukan kerusakan — kalau ternyata tetap kurang, cek sesi berikutnya yang mengadukan. `misfire_grace_time` 2 jam seperti `eod_fallback`: laptop yang tidur melewati 17:45 tetap mendapat alarmnya begitu bangun. |
 | `daily_ic` | Mon‑Fri **16:50** | IC analysis → `research.factor_ic_history` (bobot composite). Murni DB, tidak menyentuh IDX. |
 | `ownership_weekly` | Monday **17:00** (weekly) | Snapshot pemegang saham watchlist → `research.ownership`. Dijarakkan lebar dari `refresh_s2` (50 menit) supaya tidak berebut profil Chrome bila transport jatuh ke browser. |
+| `journal_claims` | Mon‑Fri **17:55, lalu tiap jam s/d 21:55** | Buku klaim (P6): gerbang dulu (`manual`/`data`/`regime`/`verdict`), baru kandidat. Yang ditolak tetap bercatatan di `research.claim_refusal`; idempoten pada (kode, tanggal, aturan). Diulang tiap jam karena EOD sesi hari ini baru masuk lewat jaring kedua pukul 17:30 — jadwal 17:05 yang lama selalu menulis sesi *kemarin*. |
+| `journal_outcomes` | Mon‑Fri **18:10** | Isi hasil klaim yang horizonnya sudah berjalan (target/stop/kedaluwarsa). Perpindahan status tidak pernah dibatalkan, jadi aman diulang. |
+| `journal_reminder` | Mon‑Fri **19:20** | Pengingat sore: klaim yang levelnya tersentuh, atau alarm kalau sesi ini tidak melahirkan klaim DAN tidak mencatat penolakan apa pun. Sengaja setelah dua kesempatan tulis (17:55 dan 18:55), supaya sesi yang datanya baru masuk sore tidak divonis "bisu" terlalu cepat. |
 | `refresh_weekend_am` | Sat‑Sun 08:45 | Recompute + clear cache (market closed). |
 | `refresh_weekend_pm` | Sat‑Sun 16:00 | Recompute + clear cache (market closed). |
 | `alerts` | every `IDX_ALERT_INTERVAL` s (default 300) | Telegram alerts (signals + watch rules); only registered when the bot token is set. |
 
 Jadwal ini dikunci oleh `tests/test_serve_schedule.py` — mengubah jam tanpa
-memperbarui tes akan gagal. Tes itu menjaga lima invarian: `health_eod` tidak
-pernah sebelum `IDX_EOD_DEADLINE_HOUR`, jaring kedua (`eod_fallback`) selalu
->12 menit setelah rantai 16:10, alarm selalu setelah jaring kedua, jaring kedua
-& alarm sama-sama punya `misfire_grace_time` 2 jam (menyusul setelah mesin
-bangun), dan tidak ada dua job cron yang jatuh di menit yang sama pada hari yang
-sama. Jaring kedua itu sendiri diulang tiap jam sampai 20:30 dengan
+memperbarui tes akan gagal. Tes itu menjaga tujuh invarian: `health_eod` tidak
+pernah sebelum tenggat EOD (17:30, presisi menit), tenggat itu sendiri selalu di
+belakang jam terbit IDX yang terukur (17:13–17:16), jaring kedua (`eod_fallback`)
+selalu >12 menit setelah rantai 16:10, alarm selalu setelah jaring kedua, rantai
+buku klaim selalu setelah tenggat dan pengingatnya baru setelah ≥2 kesempatan
+tulis, jaring kedua & alarm sama-sama punya `misfire_grace_time` 2 jam (menyusul
+setelah mesin bangun), dan tidak ada dua job cron yang jatuh di menit yang sama
+pada hari yang sama. Jaring kedua itu sendiri diulang tiap jam sampai 20:30 dengan
 `misfire_grace_time` 2 jam: slot yang terlewat karena mesin tidur tetap
 dikerjakan begitu mesin bangun.
 
@@ -358,14 +363,19 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 
 ## Health‑Check & Monitoring
 * `cli health` memeriksa **empat** hal dan berhenti dengan exit 1 kalau salah satu
-  bermasalah (`idx health || kirim-alert` aman dipakai cron):
+  bermasalah (`idx health || kirim-alert` aman dipakai cron). Sesi hari ini yang
+  belum terbit bukan "bermasalah": labelnya `SESI BERJALAN — belum jatuh tenggat
+  17:30 WIB` dan exit code-nya 0, jadi cron tidak berbunyi tiap siang. Labelnya
+  dipilih dari sebabnya: `TELAT` (lewat tenggat), `TERTINGGAL` (sesi lampau yang
+  belum masuk, termasuk sesi Jumat yang hilang saat akhir pekan), `CEK KONFIGURASI`
+  (`DATABASE_URL` tidak diset).
   1. **kesegaran** — hari bursa yang diharapkan vs tanggal EOD terbaru
   2. **cakupan kolom** — `foreign_*` bolong di `sessions` sesi terakhir
   3. **sesi separuh** — baris per sesi di bawah 50% median jendela (ciri insert tersela)
   4. **lubang sesi** — hari bursa tanpa baris di antara sesi pertama & terakhir
 
-  Pemeriksa 3 melewati sesi hari ini: pukul 16:45 ingest bisa masih jalan, dan
-  sesi separuh yang sedang ditulis bukan kerusakan. Kalau sesi itu tetap kurang,
+  Pemeriksa 3 melewati sesi hari ini: sesi yang sedang ditulis (jaring kedua baru
+  menarik EOD sesi ini pukul 17:30) bukan kerusakan. Kalau sesi itu tetap kurang,
   cek sesi berikutnya yang mengadukan — kerusakan ketahuan dalam ≤1 sesi.
   (Pemeriksa 4 tidak butuh perlakuan itu: lubang hanya dihitung di dalam rentang
   sesi yang sudah ada, jadi sesi hari ini tak pernah bisa muncul di sana.)

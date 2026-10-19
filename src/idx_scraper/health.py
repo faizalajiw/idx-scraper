@@ -49,9 +49,20 @@ from datetime import date, datetime, timedelta, timezone
 WIB = timezone(timedelta(hours=7))
 
 # Lewat jam ini (WIB) di hari kerja, EOD hari ini dianggap telat kalau belum ada.
-# Default 16: harus konsisten dengan jadwal `refresh_s2` (16:10) dan `health_eod`
-# (16:45) — kalau dinaikkan ke 17, job health 16:45 tidak akan pernah berbunyi.
-EOD_DEADLINE_HOUR = int(os.getenv("IDX_EOD_DEADLINE_HOUR", "16"))
+# 17:30, bukan 16:00: ringkasan EOD per saham IDX diukur baru terbit 17:13:32
+# (16 Okt 2026) dan 17:16:16 (19 Okt 2026) — percobaan 16:10, 16:14, 16:30, 16:34
+# dan 17:15:00 di dua sesi itu semuanya dibalas 0 baris. Dengan tenggat 16:00,
+# job `health_eod` berbunyi "EOD TELAT" 6 dari 6 hari bursa di `_serve.log`
+# sementara datanya belum ada di mana pun: alarm yang selalu berbunyi berhenti
+# membawa informasi. Harus tetap <= jam job `health_eod` (17:45), kalau tidak
+# alarmnya tidak akan pernah berbunyi.
+EOD_DEADLINE_HOUR = int(os.getenv("IDX_EOD_DEADLINE_HOUR", "17"))
+EOD_DEADLINE_MINUTE = int(os.getenv("IDX_EOD_DEADLINE_MINUTE", "30"))
+
+# `EodHealth.missing` juga dipakai untuk masalah konfigurasi, bukan cuma data
+# pasar yang belum masuk. Labelnya berbeda ("CEK KONFIGURASI", bukan
+# "TELAT"/"SESI BERJALAN"), jadi daftar pesannya eksplisit.
+CONFIG_PROBLEMS: tuple[str, ...] = ("DATABASE_URL tidak di-set",)
 
 
 def parse_holidays(raw: str | None = None) -> set[date]:
@@ -93,10 +104,18 @@ class EodHealth:
     checked_at: datetime
     missing: list[str] = field(default_factory=list)
     overdue: bool = False
+    # Sesi yang diharapkan belum lewat tenggat DAN setiap sumber paling jauh
+    # tertinggal satu sesi bursa: IDX memang belum menerbitkan, bukan rusak.
+    in_window: bool = False
 
     @property
     def ok(self) -> bool:
         return not self.overdue
+
+    @property
+    def config_problem(self) -> bool:
+        """True kalau yang kurang itu konfigurasi, bukan data pasar."""
+        return any(m in CONFIG_PROBLEMS for m in self.missing)
 
 
 @dataclass
@@ -125,11 +144,17 @@ def evaluate_health(
     index_latest: date | None,
     now: datetime,
     deadline_hour: int = EOD_DEADLINE_HOUR,
+    deadline_minute: int = EOD_DEADLINE_MINUTE,
 ) -> EodHealth:
     """Bandingkan data terbaru vs hari bursa yang diharapkan (murni, tanpa DB).
 
-    ``overdue`` hanya True di hari kerja setelah ``deadline_hour`` — sebelum itu
-    data memang belum wajib ada, jadi jangan alarm.
+    ``overdue`` hanya True di hari kerja setelah tenggat (17:30 WIB) — sebelum
+    itu data memang belum wajib ada, jadi jangan alarm.
+
+    ``in_window`` memisahkan "sesi hari ini belum terbit" (normal, tidak perlu
+    tindakan) dari "tertinggal": sesi yang diharapkan memang HARI INI dan setiap
+    sumber paling jauh tertinggal satu sesi bursa. Tanpa syarat tanggal itu,
+    sesi Jumat yang hilang akan terbaca "menunggu terbit" sepanjang akhir pekan.
     """
     missing: list[str] = []
     if stocks_latest is None or stocks_latest < expected:
@@ -137,7 +162,20 @@ def evaluate_health(
     if index_latest is None or index_latest < expected:
         missing.append(f"close IHSG (terbaru {index_latest or '-'})")
 
-    overdue = bool(missing) and now.weekday() < 5 and now.hour >= deadline_hour
+    overdue = bool(missing) and now.weekday() < 5 and (now.hour, now.minute) >= (
+        deadline_hour,
+        deadline_minute,
+    )
+    sesi_sebelumnya = expected_trading_date(now - timedelta(days=1))
+    in_window = (
+        bool(missing)
+        and not overdue
+        and now.date() == expected
+        and all(
+            x is not None and x >= sesi_sebelumnya
+            for x in (stocks_latest, index_latest)
+        )
+    )
     return EodHealth(
         expected=expected,
         stocks_latest=stocks_latest,
@@ -145,6 +183,7 @@ def evaluate_health(
         checked_at=now,
         missing=missing,
         overdue=overdue,
+        in_window=in_window,
     )
 
 
@@ -165,8 +204,9 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
             stocks_latest=None,
             index_latest=None,
             checked_at=now,
-            missing=["DATABASE_URL tidak di-set"],
-            overdue=now.weekday() < 5 and now.hour >= EOD_DEADLINE_HOUR,
+            missing=list(CONFIG_PROBLEMS),
+            overdue=now.weekday() < 5
+            and (now.hour, now.minute) >= (EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE),
         )
 
     with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:

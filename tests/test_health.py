@@ -93,10 +93,40 @@ def test_missing_after_deadline_is_overdue():
         expected=date(2026, 10, 5),
         stocks_latest=date(2026, 10, 2),
         index_latest=date(2026, 10, 5),
-        now=_wib(2026, 10, 5, 17, 0),
+        now=_wib(2026, 10, 5, 17, 35),
     )
     assert h.overdue and not h.ok
     assert len(h.missing) == 1 and "saham" in h.missing[0]
+    assert not h.in_window
+
+
+def test_missing_di_jendela_terbit_belum_dianggap_telat():
+    """17:20: IDX baru menerbitkan ringkasan EOD per saham sekitar 17:13-17:16.
+
+    Sebelum ini tenggatnya 16:00, jadi alarm ``health_eod`` berbunyi TELAT tiap
+    hari bursa (6 dari 6 sesi di ``_serve.log``) sementara ringkasan per sahamnya
+    memang belum terbit di mana pun. Alarm yang selalu berbunyi adalah alarm yang
+    diabaikan.
+    """
+    h = evaluate_health(
+        expected=date(2026, 10, 5),
+        stocks_latest=date(2026, 10, 2),
+        index_latest=date(2026, 10, 2),
+        now=_wib(2026, 10, 5, 17, 20),
+    )
+    assert not h.overdue and h.ok
+    assert len(h.missing) == 2  # tetap dilaporkan, cuma belum "telat"
+    assert h.in_window
+
+
+def test_missing_tepat_di_menit_tenggat_dianggap_telat():
+    h = evaluate_health(
+        expected=date(2026, 10, 5),
+        stocks_latest=date(2026, 10, 2),
+        index_latest=date(2026, 10, 5),
+        now=_wib(2026, 10, 5, 17, 30),
+    )
+    assert h.overdue and not h.in_window
 
 
 def test_missing_before_deadline_is_not_overdue():
@@ -120,6 +150,22 @@ def test_missing_on_weekend_not_overdue():
     assert not h.overdue
 
 
+def test_sesi_jumat_yang_hilang_di_akhir_pekan_bukan_in_window():
+    """Sabtu: sesi Jumat yang belum masuk bukan "sedang berjalan" - itu tertinggal.
+
+    ``in_window`` hanya untuk sesi yang tanggalnya HARI INI dan jamnya belum
+    lewat tenggat; tanpa syarat tanggal itu, sesi Jumat yang hilang akan terbaca
+    "menunggu terbit" sepanjang akhir pekan.
+    """
+    h = evaluate_health(
+        expected=date(2026, 10, 9),
+        stocks_latest=date(2026, 10, 8),
+        index_latest=date(2026, 10, 8),
+        now=_wib(2026, 10, 10, 10, 0),  # Sabtu pagi
+    )
+    assert not h.overdue and not h.in_window
+
+
 def test_index_only_missing_is_overdue():
     h = evaluate_health(
         expected=date(2026, 10, 5),
@@ -140,6 +186,45 @@ def test_custom_deadline_hour():
         deadline_hour=16,
     )
     assert h.overdue
+
+
+def test_custom_deadline_minute():
+    """Tenggat presisi menit: 17:44 belum, 17:45 sudah (jadwal alarm di :45)."""
+    belum = evaluate_health(
+        expected=date(2026, 10, 5),
+        stocks_latest=date(2026, 10, 2),
+        index_latest=date(2026, 10, 5),
+        now=_wib(2026, 10, 5, 17, 44),
+        deadline_hour=17,
+        deadline_minute=45,
+    )
+    assert not belum.overdue
+
+    lewat = evaluate_health(
+        expected=date(2026, 10, 5),
+        stocks_latest=date(2026, 10, 2),
+        index_latest=date(2026, 10, 5),
+        now=_wib(2026, 10, 5, 17, 45),
+        deadline_hour=17,
+        deadline_minute=45,
+    )
+    assert lewat.overdue
+
+
+def test_tertinggal_beberapa_sesi_bukan_in_window():
+    """Senin pagi dengan data terbaru sepuluh hari lalu: tertinggal, bukan menunggu.
+
+    "Belum jatuh tenggat" hanya memaafkan sesi yang tertinggal SATU sesi - kalau
+    data terbarunya lebih tua dari sesi sebelumnya, itu kerusakan sejak berhari
+    hari, bukan tengah hari yang normal.
+    """
+    h = evaluate_health(
+        expected=date(2026, 10, 19),
+        stocks_latest=date(2026, 10, 9),
+        index_latest=date(2026, 10, 9),
+        now=_wib(2026, 10, 19, 9, 0),
+    )
+    assert not h.overdue and not h.in_window
 
 
 # --------------------------------------------------------------------------- #

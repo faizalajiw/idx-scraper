@@ -274,7 +274,7 @@ menunjuk ke situ; `cli.py` memanggil `load_dotenv()` sendiri).
 | `IDX_ALERT_INTERVAL` | `300` | detik antar-evaluasi alert |
 | `IDX_LIVE_TOP` / `IDX_LIVE_DELAY_MS` | `60` / `2000` | jumlah emiten & jeda sapuan live capture |
 | `IDX_HOLIDAYS` | (kosong) | daftar hari libur bursa, mis. `2026-12-25,2027-01-01` |
-| `IDX_EOD_DEADLINE_HOUR` | `16` | jam (WIB) sejak kapan EOD hari ini dianggap "telat". **Harus ≤ jam job `health_eod` (16:45)**, kalau tidak alarmnya tidak pernah berbunyi |
+| `IDX_EOD_DEADLINE_HOUR` / `IDX_EOD_DEADLINE_MINUTE` | `17` / `30` | tenggat (WIB) sejak kapan EOD hari ini dianggap "telat". Default 17:30 karena ringkasan EOD per saham IDX terukur baru terbit 17:13-17:16. **Harus ≤ jam job `health_eod` (17:45)**, kalau tidak alarmnya tidak pernah berbunyi |
 | `IDX_BACKFILL_DAYS` | `21` | berapa hari bursa ke belakang yang dicek ulang saat `serve` start & tiap tick jaring sore (menambal lubang mesin yang tidur/off). `0` = matikan |
 
 ### API & integrasi

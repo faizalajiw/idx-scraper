@@ -129,12 +129,15 @@ def _cron(jobs: list[dict]) -> dict[str, tuple]:
 def test_jadwal_cron_lengkap(jobs):
     """Peta id -> (hari, jam, menit) harus persis seperti yang disepakati.
 
-    Urutan sore 16:10 -> 16:30 -> 16:45 -> 16:50 -> 17:00 -> 17:30 -> 17:45
-    sengaja satu arah: rantai EOD, jaring kedua, alarm, IC, snapshot ownership,
-    lalu buku klaim (tulis klaim SEBELUM hasilnya diketahui, isi hasil, ingatkan).
+    Urutan sore 16:10 -> 16:30 -> 16:50 -> 17:00 -> 17:30 -> 17:45 -> 17:55 ->
+    18:10 -> 19:20 sengaja satu arah: rantai EOD, jaring kedua (diulang), IC,
+    snapshot ownership, alarm EOD SESUDAH tenggat, lalu buku klaim (tulis klaim
+    SEBELUM hasilnya diketahui, isi hasil, ingatkan). Tenggat EOD 17:30 ada di
+    belakang jendela terbit IDX - lihat
+    ``test_tenggat_eod_di_belakang_jam_terbit_terukur``.
     Jaring kedua diulang tiap jam 16:30-20:30 (lihat
     ``test_jaring_eod_diulang_sampai_malam``), dan penulisan klaim diulang tiap
-    jam 17:00-21:00 sampai datanya masuk.
+    jam 17:55-21:55 sampai datanya masuk.
     """
     assert _cron(jobs) == {
         "refresh_preopen": ("mon-fri", 8, 50),
@@ -142,11 +145,11 @@ def test_jadwal_cron_lengkap(jobs):
         "refresh_s1_fri": ("fri", 11, 30),
         "refresh_s2": ("mon-fri", 16, 10),
         "eod_fallback": ("mon-fri", "16-20", 30),
-        "health_eod": ("mon-fri", 16, 45),
+        "health_eod": ("mon-fri", 17, 45),
         "daily_ic": ("mon-fri", 16, 50),
-        "journal_claims": ("mon-fri", "17-21", 5),
-        "journal_outcomes": ("mon-fri", 17, 35),
-        "journal_reminder": ("mon-fri", 17, 50),
+        "journal_claims": ("mon-fri", "17-21", 55),
+        "journal_outcomes": ("mon-fri", 18, 10),
+        "journal_reminder": ("mon-fri", 19, 20),
         "refresh_weekend_am": ("sat,sun", 8, 45),
         "refresh_weekend_pm": ("sat,sun", 16, 0),
     }
@@ -165,22 +168,41 @@ def test_job_susulan_tanpa_syarat_tetap_dihapus(jobs):
 
 
 def test_health_eod_tidak_sebelum_deadline(jobs):
-    """Alarm hanya berbunyi setelah ``IDX_EOD_DEADLINE_HOUR``.
+    """Alarm hanya berbunyi setelah tenggat, bukan cuma setelah jamnya.
 
-    Kalau job ini dijadwalkan lebih awal dari deadline, ``evaluate_health``
-    selalu mengembalikan ``overdue=False`` -> cek EOD jadi no-op tanpa suara.
+    Kalau job ini dijadwalkan lebih awal dari tenggat, ``evaluate_health``
+    mengembalikan ``overdue=False`` -> cek EOD jadi no-op tanpa suara. Tenggatnya
+    presisi menit (17:30), jadi perbandingannya menit-dalam-hari - cek jam saja
+    akan meloloskan alarm 17:00 yang tidak pernah bisa berbunyi.
     """
-    hour = _cron(jobs)["health_eod"][1]
-    assert hour >= health.EOD_DEADLINE_HOUR
+    jam, menit = _cron(jobs)["health_eod"][1:]
+    tenggat = health.EOD_DEADLINE_HOUR * 60 + health.EOD_DEADLINE_MINUTE
+    assert jam * 60 + menit >= tenggat
+
+
+def test_tenggat_eod_di_belakang_jam_terbit_terukur(jobs):
+    """Tenggat harus di belakang jam terbit IDX, bukan di depannya.
+
+    Terukur di ``_serve.log`` (dua sesi dengan bukti detik): ringkasan EOD per
+    saham IDX baru terbit 17:13:32 (16 Okt) dan 17:16:16 (19 Okt); percobaan
+    16:10, 16:14, 16:30, 16:34 - dan 17:15:00 tepat - semuanya dibalas 0 baris.
+    Dengan tenggat 16:00, alarm 16:45 berbunyi "EOD TELAT" 6 dari 6 hari bursa
+    sementara datanya belum ada di mana pun. Alarm yang selalu berbunyi tidak
+    lagi membawa informasi apa pun.
+    """
+    tenggat = health.EOD_DEADLINE_HOUR * 60 + health.EOD_DEADLINE_MINUTE
+    assert tenggat > 17 * 60 + 16  # di belakang terbit terukur terakhir
+    jam, menit = _cron(jobs)["health_eod"][1:]
+    assert jam * 60 + menit >= tenggat  # alarm menyusul setelah tenggat
 
 
 def test_jaring_eod_setelah_rantai_dan_sebelum_alarm(jobs):
-    """Fallback (16:30) sesudah rantai, alarm (16:45) sesudah fallback.
+    """Fallback (16:30) sesudah rantai, alarm (17:45) sesudah fallback.
 
     Rantai 16:10 terpanjang ~12 menit (retry 60+180 detik di dua langkah), jadi
     fallback butuh jarak >12 menit supaya tidak bertemu rantai. Alarm harus
     sesudah fallback: kalau tidak, hari yang berhasil diselamatkan jaring kedua
-    tetap memicu Telegram "EOD TELAT" — alarm palsu yang lama-lama diabaikan.
+    tetap memicu Telegram "EOD TELAT" - alarm palsu yang lama-lama diabaikan.
     """
     cron = _cron(jobs)
     rantai = _menit(cron["refresh_s2"][1], cron["refresh_s2"][2])
@@ -207,9 +229,9 @@ def test_jaring_eod_diulang_sampai_malam(jobs):
 
 
 def test_alarm_health_menyusul_setelah_mesin_bangun(jobs):
-    """Alarm 16:45 juga harus menyusul, bukan dibuang diam-diam saat mesin tidur.
+    """Alarm 17:45 juga harus menyusul, bukan dibuang diam-diam saat mesin tidur.
 
-    Tanpa `misfire_grace_time`, laptop yang tidur melewati 16:45 melewatkan
+    Tanpa `misfire_grace_time`, laptop yang tidur melewati 17:45 melewatkan
     alarm hari itu sepenuhnya — padahal sesi yang telat masih bisa terlihat
     sebelum jendela tutup, dan inilah satu-satunya jalur yang berbicara ke
     Telegram.
@@ -217,6 +239,29 @@ def test_alarm_health_menyusul_setelah_mesin_bangun(jobs):
     j = next(x for x in jobs if x["id"] == "health_eod")
     assert j["misfire_grace_time"] >= 7200
     assert j["coalesce"] is True
+
+
+def test_buku_klaim_sesudah_jendela_terbit(jobs):
+    """Tulis klaim bergerak ke belakang jendela terbit, bukan lagi 17:05.
+
+    Job 17:05 (jadwal lama) selalu menulis sesi *kemarin* - EOD sesi hari ini
+    baru masuk lewat jaring kedua 17:30 - lalu pengingat 17:50 menemukan sesi
+    hari ini bisu dan mengirim "ada job yang gagal tanpa bersuara" tiap hari
+    bursa. Ketiganya digeser: tulis setelah tenggat, isi hasil setelah tulis,
+    dan pengingat hanya setelah dua kesempatan tulis.
+    """
+    cron = _cron(jobs)
+    tenggat = health.EOD_DEADLINE_HOUR * 60 + health.EOD_DEADLINE_MINUTE
+    tulis = _menit(cron["journal_claims"][1], cron["journal_claims"][2])
+    hasil = _menit(cron["journal_outcomes"][1], cron["journal_outcomes"][2])
+    ingat = _menit(cron["journal_reminder"][1], cron["journal_reminder"][2])
+    assert tulis > tenggat
+    assert hasil > tulis
+    slot_tulis = sorted(
+        jam * 60 + cron["journal_claims"][2]
+        for jam in _jam_aktif(cron["journal_claims"][1])
+    )
+    assert len([s for s in slot_tulis if s < ingat]) >= 2
 
 
 def test_tidak_ada_job_cron_bertabrakan(jobs):

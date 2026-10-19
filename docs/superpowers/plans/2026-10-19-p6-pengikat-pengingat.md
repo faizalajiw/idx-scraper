@@ -432,6 +432,15 @@ git commit -m "feat(p6): skema buku klaim + penyimpan (tulis sekali, tolak, isi 
   Menitnya :05/:35/:50, bukan :00/:30/:45 seperti rencana awal: `eod_fallback`
   menempati tiap :30, dan `tests/test_serve_schedule.py::test_tidak_ada_job_cron_bertabrakan`
   melarang dua job cron di menit yang sama pada hari yang sama.
+
+  > **Digeser 19 Okt 2026 (malam)** sesudah alarm Telegram hari itu ditelusuri:
+  > ketiganya bergerak ke **17:55 / 18:10 / 19:20**, karena EOD sesi hari ini baru
+  > masuk lewat jaring kedua 17:30 (ringkasan per saham IDX terukur terbit
+  > 17:13-17:16). Jadwal 17:05 selalu menulis sesi *kemarin*, lalu pengingat 17:50
+  > memvonis sesi hari ini "bisu" — alarm palsu tiap hari bursa. Tenggat EOD juga
+  > pindah 16:00 -> 17:30 (`IDX_EOD_DEADLINE_MINUTE` baru) dan alarm `health_eod`
+  > 16:45 -> 17:45. Rinciannya di
+  > [`RENCANA-P0-P7.md`](../../../../RENCANA-P0-P7.md) §"Sudah ditutup" nomor 9.
   - `_last_session_date(dsn) -> str` (hari bursa terakhir yang ada di `research.raw_eod`)
 
 - [ ] **Step 1: Tulis tes yang gagal**

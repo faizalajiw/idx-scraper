@@ -47,6 +47,30 @@ def _eod_telat() -> health.EodHealth:
     )
 
 
+def _eod_sesi_berjalan() -> health.EodHealth:
+    """Senin 15:16 di `evaluate_health` sungguhan: sesi hari ini belum terbit.
+
+    Keadaan ini normal (pasar belum tutup), bukan kerusakan - tapi sebelum
+    perbaikan, `idx health` mencetak "CEK KONFIGURASI" dan keluar 1.
+    """
+    return health.evaluate_health(
+        expected=date(2026, 10, 19),
+        stocks_latest=date(2026, 10, 16),
+        index_latest=date(2026, 10, 16),
+        now=datetime(2026, 10, 19, 15, 16, tzinfo=WIB),
+    )
+
+
+def _eod_tertinggal() -> health.EodHealth:
+    """Sabtu: sesi Jumat belum masuk dan memang sudah lewat - tertinggal, bukan menunggu."""
+    return health.evaluate_health(
+        expected=date(2026, 10, 9),
+        stocks_latest=date(2026, 10, 8),
+        index_latest=date(2026, 10, 8),
+        now=datetime(2026, 10, 10, 10, 0, tzinfo=WIB),
+    )
+
+
 def test_penjaga_cakupan_melempar_alarm_eod_lama_tetap_terkirim(monkeypatch):
     """I2: exception dari penjaga cakupan tidak boleh mematikan alarm lama."""
     notifier = _Notifier()
@@ -434,3 +458,35 @@ def test_cmd_health_dsn_hilang_bukan_ok(monkeypatch, capsys):
     keluaran = capsys.readouterr().out
     assert "CEK KONFIGURASI — DATABASE_URL tidak di-set" in keluaran
     assert "OK — data EOD terbaru lengkap" not in keluaran
+
+
+def test_cmd_health_sesi_berjalan_exit_0(monkeypatch, capsys):
+    """Sesi hari ini yang belum terbit bukan kegagalan: keluar 0, label "sedang berjalan".
+
+    Sebelum ini keadaan tengah hari dicetak "CEK KONFIGURASI" dengan exit code 1
+    - `idx health || kirim-alert` di cron berbunyi tiap siang tanpa ada yang
+    rusak, dan labelnya menuduh konfigurasi yang sehat.
+    """
+    _semua_bersih(monkeypatch)
+    monkeypatch.setattr(health, "check_eod_health", _eod_sesi_berjalan)
+
+    cli.cmd_health(None)
+
+    keluaran = capsys.readouterr().out
+    assert "SESI BERJALAN" in keluaran
+    assert "17:30" in keluaran  # tenggat disebut supaya jelas kapan harus peduli
+    assert "CEK KONFIGURASI" not in keluaran
+    assert "TELAT" not in keluaran
+
+
+def test_cmd_health_tertinggal_sebelum_tenggat_exit_1(monkeypatch, capsys):
+    """Sesi Jumat yang hilang terbaca "tertinggal" walau belum lewat tenggat hari ini."""
+    _semua_bersih(monkeypatch)
+    monkeypatch.setattr(health, "check_eod_health", _eod_tertinggal)
+
+    with pytest.raises(SystemExit) as keluar:
+        cli.cmd_health(None)
+
+    assert keluar.value.code == 1
+    keluaran = capsys.readouterr().out
+    assert "TERTINGGAL — belum masuk: saham EOD (terbaru 2026-10-08)" in keluaran

@@ -330,8 +330,8 @@ def _job_health_eod() -> None:
 
     Empat jalur semuanya begini sekarang: kesegaran, cakupan kolom, jumlah baris
     per sesi, dan lubang sesi. Jalur baris melewati sesi hari ini
-    (``in_progress``) karena pada 16:45 ingest bisa masih jalan dan sesi separuh
-    yang sedang ditulis bukan kerusakan.
+    (``in_progress``) karena sesi yang sedang ditulis (jaring kedua baru menarik
+    EOD sesi ini pukul 17:30) bukan kerusakan.
 
     "Tidak ada yang diperiksa" dihitung masalah, bukan diam: kalau
     ``research.raw_eod`` kosong atau ``DATABASE_URL`` tidak diset, cakupan kolom
@@ -610,7 +610,7 @@ def _journal_write(dsn: str, *, trade_date: str | None = None, cetak: bool = Tru
 
 
 def _job_journal_claims() -> None:
-    """Tulis klaim sesi bursa terakhir; diulang tiap jam 17:00-21:00.
+    """Tulis klaim sesi bursa terakhir; diulang tiap jam 17:55-21:55.
 
     Kalau klaim sesi itu sudah ada, `write_session` tidak menulis apa-apa (kunci
     code+tanggal+aturan); kalau datanya belum masuk, ia mencatat penolakannya dan
@@ -650,7 +650,7 @@ def _job_journal_outcomes() -> None:
 
 
 def _job_journal_reminder() -> int:
-    """Pengingat 17:50: klaim yang tersentuh hari ini + penjaga sesi yang bisu."""
+    """Pengingat 19:20: klaim yang tersentuh hari ini + penjaga sesi yang bisu."""
     notifier = TelegramNotifier()
     dsn = _journal_dsn()
     if not notifier.enabled or not dsn:
@@ -1709,15 +1709,17 @@ def cmd_health(args) -> None:
     Exit code 1 kalau ada yang tidak beres — biar bisa dipakai cron:
     ``idx health || kirim-alert``. Empat pemeriksa:
 
-    - **kesegaran**: lewat deadline (``IDX_EOD_DEADLINE_HOUR``, default 16:00 WIB)
-      dan data hari bursa belum masuk
+    - **kesegaran**: lewat tenggat (default 17:30 WIB — ``IDX_EOD_DEADLINE_HOUR``
+      dan ``IDX_EOD_DEADLINE_MINUTE``, di belakang jendela terbit IDX) dan data
+      hari bursa belum masuk. Sesi hari ini yang belum terbit bukan kegagalan:
+      labelnya "SESI BERJALAN" dan exit code-nya 0
     - **cakupan kolom** ``foreign_*`` di ``sessions`` sesi terakhir (timpang)
     - **baris per sesi**: sesi yang isinya di bawah 50% median ("sesi separuh")
     - **lubang sesi**: hari bursa tanpa baris di antara sesi pertama & terakhir
 
     Pemeriksa **baris per sesi** melewati sesi hari ini, sama seperti di job
-    ``health_eod``: pukul 16:45 ingest bisa masih jalan, dan sesi separuh yang
-    masih ditulis bukan kerusakan. (Pemeriksa lubang sesi tidak terpengaruh —
+    ``health_eod``: sesi yang sedang ditulis (jaring kedua baru menarik EOD
+    sesi ini pukul 17:30) bukan kerusakan. (Pemeriksa lubang sesi tidak terpengaruh —
     lubang hanya dihitung di dalam rentang sesi yang sudah ada.)
 
     Pemeriksa yang **tidak memeriksa apa pun** (``checked == 0``, mis. DB kosong
@@ -1726,6 +1728,8 @@ def cmd_health(args) -> None:
     sendiri, jadi satu yang melempar tidak menghapus laporan yang lain.
     """
     from .health import (
+        EOD_DEADLINE_HOUR,
+        EOD_DEADLINE_MINUTE,
         check_eod_health,
         check_field_coverage,
         check_row_counts,
@@ -1776,19 +1780,37 @@ def cmd_health(args) -> None:
             _cetak_aman(format_session_gaps_message(g))
             masalah.append(f"lubang sesi: {len(g.missing)} hari")
 
+    # `EodHealth.missing` juga dipakai untuk masalah konfigurasi dan untuk sesi
+    # hari ini yang memang belum terbit. Labelnya dipilih dari SEBABNYA, bukan
+    # dari `h.ok`: dulu sesi tengah hari dicetak "CEK KONFIGURASI" lalu keluar 1,
+    # jadi `idx health || kirim-alert` di cron berbunyi tiap siang tanpa ada yang
+    # rusak. `h.in_window` = sesi hari ini belum lewat tenggat dan setiap sumber
+    # paling jauh tertinggal satu sesi bursa — satu-satunya keadaan yang keluar 0
+    # tanpa mencetak OK.
+    gagal = bool(masalah) or (
+        h is not None and (h.config_problem or (bool(h.missing) and not h.in_window))
+    )
     if h is not None and h.missing:
-        # `EodHealth.missing` juga dipakai untuk masalah konfigurasi
-        # ("DATABASE_URL tidak di-set"); itu bukan "telat", tapi tetap alasan
-        # untuk tidak mengucapkan OK dan keluar 0.
-        label = "TELAT — belum masuk: " if not h.ok else "CEK KONFIGURASI — "
+        if h.config_problem:
+            label = "CEK KONFIGURASI — "
+        elif h.in_window:
+            label = (
+                "SESI BERJALAN — belum jatuh tenggat "
+                f"{EOD_DEADLINE_HOUR:02d}:{EOD_DEADLINE_MINUTE:02d} WIB: "
+            )
+        elif h.overdue:
+            label = "TELAT — belum masuk: "
+        else:
+            label = "TERTINGGAL — belum masuk: "
         print(label + ", ".join(h.missing))
 
-    if h is not None and h.ok and not h.missing and not masalah:
+    if h is not None and not h.missing and not masalah:
         print("OK — data EOD terbaru lengkap")
         return
     if masalah:
         print("TIMPANG — " + "; ".join(masalah))
-    sys.exit(1)
+    if gagal:
+        sys.exit(1)
 
 
 def run_rule_alerts() -> int:
@@ -2033,11 +2055,14 @@ def cmd_serve(args) -> None:
     #
     # URUTAN SORE — satu arah, tidak ada dua job yang hidup bersamaan:
     #   16:10 refresh_s2    rantai EOD (terukur 4,6 menit; retry maks +4 menit)
-    #   16:30 eod_fallback  jaring kedua EOD; keluar ~1 detik kalau 16:10 berhasil
-    #   16:45 health_eod    alarm — SELALU setelah fallback, supaya tidak berbunyi
-    #                       di hari yang sebenarnya terselamatkan (DB murni)
+    #   16:30 eod_fallback  jaring kedua EOD; keluar ~1 detik kalau 16:10 berhasil;
+    #                       slot 17:30 adalah yang pertama di belakang jendela
+    #                       terbit IDX (ringkasan per saham terukur 17:13-17:16)
     #   16:50 daily_ic      evaluasi IC (DB murni)
     #   17:00 ownership     buka klien IDX sendiri (Senin) — 50 menit dari 16:10
+    #   17:45 health_eod    alarm — SELALU setelah fallback DAN setelah tenggat 17:30
+    #   17:55 journal       tulis klaim (diulang tiap jam), isi hasil 18:10,
+    #                       pengingat 19:20
     # Pipeline yang saling menimpa dilewati lewat kunci `_PIPELINE_BUSY`, jadi
     # rantai yang molor tidak bisa bertemu job berikutnya secara bersamaan.
     # ------------------------------------------------------------------
@@ -2103,18 +2128,22 @@ def cmd_serve(args) -> None:
         args=[client, storage], id="eod_fallback",
         misfire_grace_time=7200, coalesce=True,
     )
-    # Health-check EOD — Sen-Jum 16:45 WIB. SENGAJA setelah eod_fallback (16:30):
+    # Health-check EOD — Sen-Jum 17:45 WIB. SENGAJA setelah eod_fallback (17:30):
     # alarm harus menilai hasil jaring kedua, bukan hasil percobaan pertama.
     # Kalau ditaruh sebelum fallback, hari yang berhasil diselamatkan tetap
     # memicu Telegram "EOD TELAT" — alarm palsu yang lama-lama diabaikan.
-    # PENTING: alarm hanya berbunyi setelah `IDX_EOD_DEADLINE_HOUR` (default 16).
-    # Jangan memindahkan job ini ke jam sebelum itu — cek akan lolos tanpa suara.
+    # 17:45, bukan lagi 16:45: ringkasan EOD per saham IDX terukur baru terbit
+    # 17:13-17:16, jadi alarm 16:45 berbunyi "TELAT" 6 dari 6 hari bursa padahal
+    # datanya belum ada di mana pun.
+    # PENTING: alarm hanya berbunyi setelah tenggat 17:30
+    # (`IDX_EOD_DEADLINE_HOUR`/`IDX_EOD_DEADLINE_MINUTE`). Jangan memindahkan job
+    # ini ke jam sebelum itu — cek akan lolos tanpa suara.
     # `misfire_grace_time` 2 jam + `coalesce` seperti `eod_fallback`: laptop yang
-    # tidur melewati 16:45 membuat alarm hari itu terlewat, dan tanpa grace job-nya
+    # tidur melewati 17:45 membuat alarm hari itu terlewat, dan tanpa grace job-nya
     # dibuang begitu saja — padahal ceknya masih relevan begitu mesin bangun
-    # (mis. 18:00, sebelum jendela tutup).
+    # (mis. 18:30, sebelum jendela tutup).
     scheduler.add_job(
-        _job_health_eod, "cron", day_of_week="mon-fri", hour=16, minute=45,
+        _job_health_eod, "cron", day_of_week="mon-fri", hour=17, minute=45,
         id="health_eod", misfire_grace_time=7200, coalesce=True,
     )
     # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
@@ -2137,27 +2166,32 @@ def cmd_serve(args) -> None:
         id="daily_ic",
     )
     # Buku klaim (P6) — ditulis SESUDAH sinyal/IC selesai dan SEBELUM hasilnya
-    # diketahui; itu seluruh gunanya. Diulang tiap jam 17:05-21:05 seperti
+    # diketahui; itu seluruh gunanya. Diulang tiap jam 17:55-21:55 seperti
     # `eod_fallback`: kalau data sesi belum masuk ia mencatat penolakannya dan
     # mencoba lagi jam berikutnya, dan kalau klaimnya sudah ada ia tidak menulis
     # apa-apa (kunci code+tanggal+aturan). Tidak ada jalur yang menimpa.
+    # 17:55, bukan lagi 17:05: EOD sesi hari ini baru masuk lewat jaring kedua
+    # 17:30, jadi tulisan 17:05 selalu menganggap sesi kemarin — lalu pengingat
+    # 17:50 menemukan sesi hari ini bisu dan mengirim alarm palsu tiap hari bursa.
     scheduler.add_job(
-        _job_journal_claims, "cron", day_of_week="mon-fri", hour="17-21", minute=5,
+        _job_journal_claims, "cron", day_of_week="mon-fri", hour="17-21", minute=55,
         id="journal_claims", misfire_grace_time=7200, coalesce=True,
     )
-    # Isi hasil 17:35: mengukur klaim yang horizonnya sudah berjalan. Perpindahan
+    # Isi hasil 18:10: mengukur klaim yang horizonnya sudah berjalan. Perpindahan
     # status tidak pernah dibatalkan, jadi job ini boleh jalan berkali-kali.
-    # Menit :35 dan :50, bukan :30/:45 — tiap :30 sudah ditempati `eod_fallback`,
-    # dan dua job cron di menit yang sama adalah pola yang dilarang di jadwal ini.
+    # Menit :55, :10, dan :20 — tiap :30 ditempati `eod_fallback` dan :45 alarm
+    # EOD; dua job cron di menit yang sama adalah pola yang dilarang di jadwal ini.
     scheduler.add_job(
-        _job_journal_outcomes, "cron", day_of_week="mon-fri", hour=17, minute=35,
+        _job_journal_outcomes, "cron", day_of_week="mon-fri", hour=18, minute=10,
         id="journal_outcomes", misfire_grace_time=7200, coalesce=True,
     )
-    # Pengingat 17:50: klaim yang levelnya tersentuh, ATAU alarm kalau sesi ini
+    # Pengingat 19:20: klaim yang levelnya tersentuh, ATAU alarm kalau sesi ini
     # tidak melahirkan klaim DAN tidak mencatat penolakan apa pun (job yang gagal
-    # tanpa bersuara justru yang paling perlu terdengar).
+    # tanpa bersuara justru yang paling perlu terdengar). Setelah DUA kesempatan
+    # tulis (17:55 dan 18:55), bukan setelah satu: sesi yang datanya baru masuk
+    # sore tetap sempat direkam sebelum pengingat ini memvonisnya "bisu".
     scheduler.add_job(
-        _job_journal_reminder, "cron", day_of_week="mon-fri", hour=17, minute=50,
+        _job_journal_reminder, "cron", day_of_week="mon-fri", hour=19, minute=20,
         id="journal_reminder", misfire_grace_time=7200, coalesce=True,
     )
     # Snapshot pemegang saham — Senin 17:00 WIB. Job ini membuka klien IDX
@@ -2214,9 +2248,9 @@ def cmd_serve(args) -> None:
           "Sen-Jum 16:10; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
     print("jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
           "kalau EOD hari ini sudah lengkap); "
-          "health EOD 16:45; IC 16:50; ownership Senin 17:00")
-    print("buku klaim lapis 4 — tulis 17:05 lalu tiap jam sampai 21:05 (idempoten), "
-          "isi hasil 17:35, pengingat 17:50; gerbang penahan punya sebab sendiri")
+          "health EOD 17:45; IC 16:50; ownership Senin 17:00")
+    print("buku klaim lapis 4 — tulis 17:55 lalu tiap jam sampai 21:55 (idempoten), "
+          "isi hasil 18:10, pengingat 19:20; gerbang penahan punya sebab sendiri")
     print(f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
           "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
           "tidak bisa ditarik otomatis");
