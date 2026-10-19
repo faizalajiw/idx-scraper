@@ -62,7 +62,7 @@ Lima masukan yang spec minta tapi belum tentu diuji tes mana pun. Masing-masing 
   - `claim_gate(*, manual_halt: bool = False, halt_reason: str | None = None, freshness_status: str | None = None, gate_blocked: bool = False, gate_reason: str | None = None, verdict: str | None = None) -> dict[str, Any]` mengembalikan `{"allowed": bool, "reason": str | None, "message": str}`
   - `claim_reject_reason(*, entry: float | None, stop: float | None, target: float | None, size_pct: float | None = None, size_lots: int | None = None, horizon_days: int | None = None) -> str | None`
   - `claim_from_candidate(candidate: dict[str, Any], *, trade_date: str, rule: str = RULE_PAPAN, ref_adj: float | None = None, regime: str | None = None, vol_state: str | None = None, freshness_status: str | None = None) -> dict[str, Any] | None` dengan kunci keluaran sama seperti kolom `research.claim_journal` (Task 3)
-  - `summarize_claims(rows: list[dict[str, Any]], *, verdict: str | None = None) -> dict[str, Any]` mengembalikan kunci yang diminta `claim_eval.format_record_line` (`claims`, `hit_target`, `hit_stop`, `mean_abnormal`) ditambah `sessions`, `expired`, `open`, `horizon_mismatch`, `per_session`
+  - `summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]` mengembalikan kunci yang diminta `claim_eval.format_record_line` (`claims`, `hit_target`, `hit_stop`, `mean_abnormal`) ditambah `measured_claims` (baris yang **punya angka**; inilah yang dipakai verdict sebagai ambang, bukan `claims`), `sessions`, `expired`, `open`, `horizon_mismatch`, `per_session`. Verdict tidak dihitung di sini: ambangnya milik `claim_eval.claim_verdict`
 
 - [ ] **Step 1: Tulis tes yang gagal**
 
@@ -158,7 +158,7 @@ Aturan yang dikunci (spec 5.1, 5.2, 5.5):
 - `claim_gate` memeriksa berurutan `manual` (dari `manual_halt`), `data` (`freshness_status` ada dan bukan `"segar"`), `regime` (`gate_blocked`), `verdict` (`verdict == "tidak terbukti"`). Sebab pertama yang menolak itulah `reason`, dan `message` menyebut sebabnya dalam satu kalimat bahasa Indonesia. Tidak ada sebab berarti `allowed=True, reason=None`. Kesegaran `None` **bukan** basi.
 - `claim_reject_reason` memeriksa urutan: stop, target, ukuran (`size_pct` atau `size_lots` wajib salah satu `> 0`), geometri (`entry > 0`, `stop < entry`, `target > entry`), horizon (`horizon_days >= 1`). Mengembalikan kode pertama yang gagal, atau `None`.
 - `claim_from_candidate` membaca kandidat apa adanya (`code`, `entry_ref`, `stop`, `target`, `horizon_days`, `grade`) plus `size_pct`/`size_lots` yang sudah dihitung pemanggil; memulangkan `None` kalau `claim_reject_reason` berbunyi. Tidak ada angka yang dikarang: kolom yang tidak ada di kandidat ditulis `None` apa adanya.
-- `summarize_claims` mengelompokkan per `trade_date`, menghitung rata-rata `outcome_abn` **per sesi dulu** (hanya klaim yang `outcome_abn` tidak `None`), lalu merata-ratakan antar sesi. `hit_target`/`hit_stop` dari status. `horizon_mismatch` = jumlah klaim yang `horizon_days != VERDICT_HORIZON` (spec D9).
+- `summarize_claims` mengelompokkan per `trade_date`, menghitung rata-rata `outcome_abn` **per sesi dulu** (hanya klaim yang `outcome_abn` tidak `None`), lalu merata-ratakan antar sesi. `hit_target`/`hit_stop` dari status. `horizon_mismatch` = jumlah klaim yang `horizon_days != VERDICT_HORIZON` (spec D9). `measured_claims` = jumlah baris yang `outcome_abn`-nya bukan `None`: klaim yang belum selesai bukan bukti, jadi ambang verdict memakai angka itu.
 - `CLAIM_COLUMNS` adalah daftar kolom tabel Task 3 dikurangi kolom yang diisi DB (`recorded_at`), dipakai tes bentuk klaim dan `record_claims`.
 - Modul tanpa DB, tanpa I/O.
 
@@ -267,12 +267,12 @@ git commit -m "feat(p6): penyimpan halt manual (tulis atomik, fail-open saat ber
 - Consumes: `research.journal` (Task 1), `research.claim_eval.claim_outcomes`, `research.recommendation_log` (tabel), `research.prices_adjusted` (view, `adj_close`), `research.raw_eod`.
 - Produces (dipakai Task 4, 5):
   - `_DDL: str`, `ensure_table(cur) -> None`
-  - `candidates_for(dsn: str, trade_date: str, *, limit: int = SHORTLIST_SIZE) -> list[dict[str, Any]]` (baris `recommendation_log` sesi itu **dengan `grade = 'A'`**, urut skor menurun, dipotong `limit`; ditambah `size_pct` dari `position.position_plan` memakai `entry_ref`/`stop`/`target` baris itu dan keadaan portofolio kosong)
+  - `candidates_for(dsn: str, trade_date: str, *, limit: int = SHORTLIST_SIZE) -> list[dict[str, Any]]` (baris `recommendation_log` sesi itu **dengan `grade = 'A'`**, urut skor menurun, dipotong `limit`; ditambah `size_pct` dari `position.position_plan` memakai `entry_ref`/`stop`/`target` baris itu dan keadaan portofolio kosong, serta `ref_adj` dari `research.prices_adjusted` pada `knowledge_date` terbaru per (code, trade_date); tanpa bar terkoreksi: `None` apa adanya)
   - `record_claims(cur, claims: list[dict[str, Any]]) -> int` (jumlah baris yang benar-benar masuk)
   - `record_refusal(cur, *, trade_date: str, reason: str, detail: str | None = None) -> None`
   - `panel(conn, *, codes: list[str], start: str, end: str) -> tuple[pd.DataFrame, pd.DataFrame]` (frame `raw` dan `adj` dengan kolom yang diminta `claim_eval`, yaitu `code, date, high, low, close` dan `code, date, close`)
   - `fill_outcomes(cur, *, trade_date: str | None = None) -> dict[str, int]` mengembalikan `{"diperiksa", "kena_target", "kena_stop", "kedaluwarsa", "terbuka"}`
-  - `journal_summary(cur, *, rule: str | None = None, code: str | None = None) -> dict[str, Any]` (hasil `summarize_claims` + `record_line` dari `claim_eval.format_record_line`)
+  - `journal_summary(cur, *, rule: str | None = None, code: str | None = None) -> dict[str, Any]` (hasil `summarize_claims` + `record_line` dari `claim_eval.format_record_line` + `verdict` dari `claim_eval.claim_verdict`; pemanggil yang butuh gerbang verdict memakai `verdict["status"]`)
   - `gaps(cur, *, sessions: int = 10) -> list[dict[str, Any]]` (sesi tanpa klaim **dan** tanpa penolakan)
 
 **DDL (salin persis; mirror di `_DDL`)**
@@ -332,14 +332,14 @@ def test_kolam_kosong_dicatat_sebagai_penolakan(monkeypatch):
     """recommendation_log kosong: tidak ada klaim, tapi sesinya dijelaskan."""
     cur = _FakeCursor()
     monkeypatch.setattr(journal_store, "candidates_for", lambda *a, **k: [])
-    out = write_session(cur, trade_date="2026-10-16")      # fungsi tipis di modul ini
+    out = write_session("dsn", cur, trade_date="2026-10-16")      # fungsi tipis di modul ini
     assert out["written"] == 0
     assert cur.rows("claim_refusal")[0]["reason"] == "kolam_kosong"
 
 def test_gerbang_menolak_maka_tidak_ada_klaim_dan_sebabnya_tercatat(monkeypatch):
     cur = _FakeCursor()
     monkeypatch.setattr(journal_store, "candidates_for", lambda *a, **k: [_claim()])
-    out = write_session(cur, trade_date="2026-10-16", gate=claim_gate(freshness_status="basi"))
+    out = write_session("dsn", cur, trade_date="2026-10-16", gate=claim_gate(freshness_status="basi"))
     assert out["written"] == 0
     assert cur.rows("claim_refusal")[0]["reason"] == "data"
 
@@ -377,9 +377,9 @@ Aturan yang dikunci:
 
 - `ensure_table` menjalankan `_DDL` dengan `create ... if not exists`, dipanggil sebelum menulis (pola `recommendation_log.ensure_table`).
 - `record_claims` memakai `insert ... on conflict (code, trade_date, rule) do nothing` **satu per baris** (bukan `executemany`) supaya jumlah baris masuk bisa dihitung; kolom yang tidak ada di klaim diisi `None`, bukan 0.
-- `write_session(cur, *, trade_date, gate=None)` (fungsi tipis di modul ini, dipakai CLI Task 4): ambil `candidates_for`; daftar kosong berarti `record_refusal(reason="kolam_kosong", detail="N kandidat, M grade A")` (N dan M dihitung apa adanya, jadi "tidak ada klaim" selalu punya sebab yang bisa dibaca); kalau `gate` menolak, `record_refusal(reason=gate["reason"], detail=gate["message"])`; kalau lolos, bangun klaim via `claim_from_candidate` untuk setiap kandidat, tulis yang lengkap, dan catat `record_refusal(reason=...)` per kandidat yang ditolak pre-commit. Mengembalikan `{"written": n, "refused": n}`.
+- `write_session(dsn, cur, *, trade_date, gate=None, konteks=None)` (fungsi tipis di modul ini, dipakai CLI Task 4): `konteks` berisi `regime`/`vol_state`/`freshness_status` yang sudah dibaca pemanggil untuk gerbang dan diteruskan apa adanya ke baris klaim; ambil `candidates_for`; daftar kosong berarti `record_refusal(reason="kolam_kosong", detail="N kandidat, M grade A")` (N dan M dihitung apa adanya, jadi "tidak ada klaim" selalu punya sebab yang bisa dibaca); kalau `gate` menolak, `record_refusal(reason=gate["reason"], detail=gate["message"])`; kalau lolos, bangun klaim via `claim_from_candidate` untuk setiap kandidat, tulis yang lengkap, dan catat `record_refusal(reason=...)` per kandidat yang ditolak pre-commit. Mengembalikan `{"written": n, "refused": n, "reason": None}` (sebabnya kalau gerbang atau kolam yang menolak).
 - `panel` mengembalikan frame dengan **nama kolom yang diminta `claim_eval`**: `raw` = `code, date, high, low, close` dari `research.raw_eod`; `adj` = `code, date, close` dari `research.prices_adjusted.adj_close` **via `research.latest_pit`** (PIT, bukan `raw_eod`).
-- `fill_outcomes` membangun frame klaim dari `claim_journal` (kolom `code, trade_date AS date, direction, stop_raw AS stop, target_raw AS target, horizon_days`), memanggil `claim_eval.claim_outcomes(claims, raw=..., adj=..., horizons=(VERDICT_HORIZON,))`, lalu memetakan hasil apa adanya: `stop` → `kena_stop`, `target` → `kena_target`, `timeout` → `kedaluwarsa`, `unresolved` → tetap `terbuka`. `outcome_abn` diambil dari kolom `abn_{VERDICT_HORIZON}` pada satuan aslinya (fraksi). Perpindahan status **tidak dibatalkan**: klaim yang statusnya bukan `terbuka` tidak diperiksa ulang.
+- `fill_outcomes` membangun frame klaim dari `claim_journal` (kolom `code, trade_date AS date, direction, stop_raw AS stop, target_raw AS target, horizon_days`), memanggil `claim_eval.claim_outcomes(claims, raw=..., adj=..., horizons=...)` dengan horizons = horizon klaim yang diperiksa **digabung** `VERDICT_HORIZON` (klaim 3 sesi selesai dalam 3 sesi, dan angka h21 tetap ada untuk verdict), lalu memetakan hasil apa adanya: `stop` → `kena_stop`, `target` → `kena_target`, `timeout` → `kedaluwarsa`, `unresolved` → tetap `terbuka`. `outcome_abn` diambil dari kolom `abn_{horizon_days}` klaim itu (satuan aslinya: fraksi) **dan hanya ditulis kalau klaimnya sudah selesai**; klaim terbuka dibiarkan `NULL` walau angkanya sudah bisa dihitung. Perpindahan status **tidak dibatalkan**: klaim yang statusnya bukan `terbuka` tidak diperiksa ulang.
 - `journal_summary` merakit baris dengan kunci yang diminta `summarize_claims`, memanggilnya, lalu menambahkan `record_line = claim_eval.format_record_line(...)` memakai `claims`, `hit_target`, `hit_stop`, `mean_abnormal` (satu formatter, tidak ada yang kedua).
 - `gaps` mencari sesi di dalam `sessions` terakhir yang **tidak** punya baris di `claim_journal` **dan tidak** punya baris di `claim_refusal`.
 - Berkas `sql/journal.sql` menyalin DDL di atas apa adanya, dengan komentar gaya `sql/signal_log.sql` yang menyebut mirror Python-nya.
