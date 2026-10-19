@@ -119,3 +119,101 @@ def test_pesan_sesi_bisu_menyebut_tanggal_dan_keanehannya() -> None:
     pesan = notify.format_claim_silence("2026-10-16")
     assert "2026-10-16" in pesan
     assert "tidak" in pesan.lower()
+
+
+class _CurPengingat:
+    """Cursor palsu untuk job pengingat: hasil berurutan, SQL dicatat."""
+
+    def __init__(self, hasil: list) -> None:
+        self.hasil = list(hasil)
+        self.sql: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None) -> None:
+        self.sql.append(" ".join(str(sql).split()))
+
+    def fetchall(self) -> list:
+        return self.hasil.pop(0) if self.hasil else []
+
+    def fetchone(self):
+        baris = self.hasil.pop(0) if self.hasil else []
+        return baris[0] if baris else None
+
+
+class _ConnPengingat:
+    def __init__(self, cur) -> None:
+        self._cur = cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return self._cur
+
+
+def _pasang_pengingat(monkeypatch, cur, *, enabled: bool = True) -> list[str]:
+    """Telegram palsu + psycopg palsu; memulangkan daftar pesan yang terkirim."""
+    terkirim: list[str] = []
+
+    class _Notifier:
+        def __init__(self) -> None:
+            self.enabled = enabled
+
+        def send_message(self, teks: str) -> bool:
+            terkirim.append(teks)
+            return True
+
+    monkeypatch.setattr(cli, "TelegramNotifier", _Notifier)
+    monkeypatch.setattr(cli, "_journal_dsn", lambda: "dsn")
+    monkeypatch.setattr(cli, "_journal_session", lambda dsn=None, trade_date=None: "2026-10-16")
+    monkeypatch.setattr("psycopg.connect", lambda *a, **k: _ConnPengingat(cur))
+    return terkirim
+
+
+def test_pengingat_mengirim_level_yang_tersentuh(monkeypatch) -> None:
+    """Ada yang kena target/stop: pesannya menyebut kode dan statusnya, apa adanya."""
+    cur = _CurPengingat([[{"code": "PEGE", "status": "kena_target", "outcome_abn": 0.034}]])
+    terkirim = _pasang_pengingat(monkeypatch, cur)
+
+    assert cli._job_journal_reminder() == 1
+    assert len(terkirim) == 1
+    assert "PEGE" in terkirim[0]
+    assert "kena_target" in terkirim[0]
+    assert "kena_target" in cur.sql[0]
+
+
+def test_pengingat_tenang_kalau_sesi_punya_catatan(monkeypatch) -> None:
+    """Sesi yang menulis klaim tapi tidak ada yang tersentuh: bukan sesi bisu."""
+    cur = _CurPengingat([[], [{"klaim": 2, "penolakan": 0}]])
+    terkirim = _pasang_pengingat(monkeypatch, cur)
+
+    assert cli._job_journal_reminder() == 0
+    assert "tidak ada level yang tersentuh" in terkirim[0]
+    assert "claim_refusal" in cur.sql[1]
+
+
+def test_pengingat_menuduh_bisu_kalau_nol_nol(monkeypatch) -> None:
+    """Tanpa klaim DAN tanpa penolakan: ada job yang gagal tanpa bersuara."""
+    cur = _CurPengingat([[], [{"klaim": 0, "penolakan": 0}]])
+    terkirim = _pasang_pengingat(monkeypatch, cur)
+
+    assert cli._job_journal_reminder() == 0
+    assert "2026-10-16" in terkirim[0]
+    assert "melahirkan klaim" in terkirim[0]
+
+
+def test_pengingat_dilewati_kalau_telegram_mati(monkeypatch) -> None:
+    """Notifier yang tidak aktif tidak pernah menyentuh DB."""
+    cur = _CurPengingat([])
+    _pasang_pengingat(monkeypatch, cur, enabled=False)
+
+    assert cli._job_journal_reminder() == 0
+    assert cur.sql == []

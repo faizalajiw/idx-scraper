@@ -199,3 +199,39 @@ def test_rute_halt_tanpa_sebab_menghasilkan_422(monkeypatch, tmp_path) -> None:
         app_mod.journal_halt(app_mod.JournalHaltRequest(reason="  ", by="pemilik"))
     assert e.value.status_code == 422
     assert "reason" in str(e.value.detail)
+
+
+def test_claims_menyerialkan_decimal_dan_tanggal_dari_db(monkeypatch) -> None:
+    """Nilai asli psycopg (Decimal, date) harus sampai ke JSON tanpa melempar.
+
+    Lapisan ini menyerahkan angka apa adanya (konversi ke float/teks dikerjakan
+    model balasan), jadi yang dikunci di sini adalah bentuk yang benar-benar
+    datang dari DB: tanggal jadi teks ISO, dan Decimal tetap bisa di-encode.
+    """
+    from datetime import date
+    from decimal import Decimal
+
+    from idx_scraper.api.schemas import JournalClaim
+
+    baris = {
+        **_klaim(),
+        "ref_raw": Decimal("113.42"),
+        "stop_raw": Decimal("106.33"),
+        "target_raw": Decimal("127.60"),
+        "size_pct": Decimal("4.5"),
+        "size_rupiah": Decimal("5000000.00"),
+        "trade_date": date(2026, 10, 16),
+        "touch_date": date(2026, 10, 20),
+    }
+    pasang(monkeypatch, [[{"tanggal": "2026-10-16"}], [baris]])
+
+    out = journal_api.claims()
+
+    assert out[0]["trade_date"] == "2026-10-16"
+    assert out[0]["touch_date"] == "2026-10-20"
+    assert out[0]["size_pct"] == Decimal("4.5")  # angka tidak diubah di lapisan ini
+
+    teks = JournalClaim.model_validate(out[0]).model_dump_json()
+    assert '"ref_raw":113.42' in teks
+    assert '"trade_date":"2026-10-16"' in teks
+    assert '"size_rupiah":5000000.0' in teks
