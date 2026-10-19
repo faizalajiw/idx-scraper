@@ -203,6 +203,43 @@ def format_recommendation_message(events: list[RecommendationEvent]) -> str:
     return "\n".join(lines)
 
 
+def _persen_abn(value: object) -> str:
+    """``0.014`` -> ``+1,4%``; None -> ``-``. Gaya sama dengan rekaman klaim."""
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value) * 100:+.1f}%".replace(".", ",")
+    except (TypeError, ValueError):
+        return "-"
+
+
+def format_claim_hits(rows: list[dict]) -> str:
+    """Pesan Telegram: klaim yang levelnya tersentuh di sesi terakhir.
+
+    ``rows`` adalah baris ``claim_journal`` yang sudah selesai (``code``,
+    ``status``, ``outcome_abn``). Angkanya apa adanya; klaim yang belum matang
+    tidak pernah muncul di sini karena hasilnya memang belum ada.
+    """
+    if not rows:
+        return "📌 Buku klaim: tidak ada level yang tersentuh di sesi terakhir."
+    lines = ["<b>📌 Market Labs · Buku Klaim</b>", ""]
+    for r in rows:
+        tanda = "🟢" if str(r.get("status")) == "kena_target" else "🔴"
+        lines.append(
+            f"{tanda} <b>{r.get('code')}</b> {r.get('status')} · abnormal "
+            f"{_persen_abn(r.get('outcome_abn'))}"
+        )
+    return "\n".join(lines)
+
+
+def format_claim_silence(session: str) -> str:
+    """Penjaga bisu: sesi tanpa klaim DAN tanpa penolakan berarti ada yang gagal senyap."""
+    return (
+        f"⚠️ Buku klaim: sesi {session} tidak melahirkan klaim DAN tidak mencatat "
+        "penolakan apa pun. Ada job yang gagal tanpa bersuara; cek log `serve`."
+    )
+
+
 def scan_signals(storage, codes: list[str], min_days: int = 25) -> list[dict]:
     """Hitung sinyal non-HOLD terbaru untuk daftar kode."""
     out: list[dict] = []

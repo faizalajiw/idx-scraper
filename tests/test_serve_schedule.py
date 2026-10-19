@@ -129,9 +129,12 @@ def _cron(jobs: list[dict]) -> dict[str, tuple]:
 def test_jadwal_cron_lengkap(jobs):
     """Peta id -> (hari, jam, menit) harus persis seperti yang disepakati.
 
-    Urutan sore 16:10 -> 16:30 -> 16:45 -> 16:50 -> 17:00 sengaja satu arah:
-    rantai EOD, jaring kedua, alarm, IC, lalu snapshot ownership. Jaring kedua
-    diulang tiap jam 16:30-20:30 (lihat ``test_jaring_eod_diulang_sampai_malam``).
+    Urutan sore 16:10 -> 16:30 -> 16:45 -> 16:50 -> 17:00 -> 17:30 -> 17:45
+    sengaja satu arah: rantai EOD, jaring kedua, alarm, IC, snapshot ownership,
+    lalu buku klaim (tulis klaim SEBELUM hasilnya diketahui, isi hasil, ingatkan).
+    Jaring kedua diulang tiap jam 16:30-20:30 (lihat
+    ``test_jaring_eod_diulang_sampai_malam``), dan penulisan klaim diulang tiap
+    jam 17:00-21:00 sampai datanya masuk.
     """
     assert _cron(jobs) == {
         "refresh_preopen": ("mon-fri", 8, 50),
@@ -141,6 +144,9 @@ def test_jadwal_cron_lengkap(jobs):
         "eod_fallback": ("mon-fri", "16-20", 30),
         "health_eod": ("mon-fri", 16, 45),
         "daily_ic": ("mon-fri", 16, 50),
+        "journal_claims": ("mon-fri", "17-21", 5),
+        "journal_outcomes": ("mon-fri", 17, 35),
+        "journal_reminder": ("mon-fri", 17, 50),
         "refresh_weekend_am": ("sat,sun", 8, 45),
         "refresh_weekend_pm": ("sat,sun", 16, 0),
     }

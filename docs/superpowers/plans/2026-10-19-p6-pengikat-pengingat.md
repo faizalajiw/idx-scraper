@@ -425,9 +425,13 @@ git commit -m "feat(p6): skema buku klaim + penyimpan (tulis sekali, tolak, isi 
   - `idx journal state`
   - `idx journal halt --reason "..." [--by NAMA]`
   - `idx journal resume`
-  - job `journal_claims` (mon-fri, `hour="17-21"`, `minute=0`, `coalesce=True`, `misfire_grace_time=7200`)
-  - job `journal_outcomes` (mon-fri, 17:30)
-  - job `journal_reminder` (mon-fri, 17:45)
+  - job `journal_claims` (mon-fri, `hour="17-21"`, `minute=5`, `coalesce=True`, `misfire_grace_time=7200`)
+  - job `journal_outcomes` (mon-fri, 17:35)
+  - job `journal_reminder` (mon-fri, 17:50)
+
+  Menitnya :05/:35/:50, bukan :00/:30/:45 seperti rencana awal: `eod_fallback`
+  menempati tiap :30, dan `tests/test_serve_schedule.py::test_tidak_ada_job_cron_bertabrakan`
+  melarang dua job cron di menit yang sama pada hari yang sama.
   - `_last_session_date(dsn) -> str` (hari bursa terakhir yang ada di `research.raw_eod`)
 
 - [ ] **Step 1: Tulis tes yang gagal**
@@ -446,9 +450,9 @@ def test_perintah_halt_tanpa_sebab_keluar_dengan_pesan(args_halt_tanpa_sebab, ca
     assert "sebab" in capsys.readouterr().err.lower()
 
 def test_jadwal_cron_lengkap(jobs):
-    assert _cron(jobs)["journal_claims"] == ("mon-fri", "17-21", 0)
-    assert _cron(jobs)["journal_outcomes"] == ("mon-fri", 17, 30)
-    assert _cron(jobs)["journal_reminder"] == ("mon-fri", 17, 45)
+    assert _cron(jobs)["journal_claims"] == ("mon-fri", "17-21", 5)
+    assert _cron(jobs)["journal_outcomes"] == ("mon-fri", 17, 35)
+    assert _cron(jobs)["journal_reminder"] == ("mon-fri", 17, 50)
 ```
 
 - [ ] **Step 2: Jalankan tes, pastikan gagal**
