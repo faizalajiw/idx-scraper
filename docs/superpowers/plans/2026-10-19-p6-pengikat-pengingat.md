@@ -15,7 +15,7 @@
 - Branch kerja: `feat/p6-pengikat-pengingat` di `idx-scraper` (sudah dibuat, memuat commit spec `f918b91`) dan branch yang sama di `idx-web`. Kerja di tempat, bukan worktree (`next dev` :3000 dan task `IDX-API`/`IDX-Serve`/`IDX-Web` berjalan dari direktori ini).
 - Mode eksekutor: inline (skill `executing-plans`), reviewer akhir dari konteks segar.
 - Ledger kerja: `.superpowers/sdd/2026-10-19-p6-pengikat-pengingat/` (`plan-path` berisi path plan ini, `progress.md` memuat Setup, pre-flight scan antar task, baseline, dan bukti tiap task). Direktori itu di-`.gitignore`, jadi ledger tidak ikut commit.
-- Perintah tes memakai venv repo: `.venv\Scripts\python.exe -m pytest -q` dan `.venv\Scripts\python.exe -m ruff check` (`pytest`/`ruff` tidak ada di PATH).
+- Perintah tes memakai venv repo: `.venv\Scripts\python.exe -m pytest` dan `.venv\Scripts\python.exe -m ruff check` (`pytest`/`ruff` tidak ada di PATH). **Tanpa `-q`:** `pytest.ini` sudah menambah `addopts = -q`, jadi `-q` kedua menjadi `-qq` dan baris "N passed" hilang.
 
 ## Global Constraints
 
@@ -597,7 +597,7 @@ Expected: keduanya bersih; lalu buka `http://localhost:3000/rekomendasi` dan pas
 - [ ] **Step 5: Suite penuh + commit**
 
 ```bash
-cd ../idx-scraper; .venv\Scripts\python.exe -m pytest -q; .venv\Scripts\python.exe -m ruff check src tests scripts
+cd ../idx-scraper; .venv\Scripts\python.exe -m pytest; .venv\Scripts\python.exe -m ruff check src tests scripts
 git add idx-web/lib/types.ts idx-web/lib/hooks.ts idx-web/components/ClaimRecord.tsx idx-web/app/rekomendasi/page.tsx
 git commit -m "feat(p6): permukaan buku klaim di /rekomendasi + bukti sesi 2026-10-16"
 ```
