@@ -2215,6 +2215,8 @@ def cmd_serve(args) -> None:
     print("jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
           "kalau EOD hari ini sudah lengkap); "
           "health EOD 16:45; IC 16:50; ownership Senin 17:00")
+    print("buku klaim lapis 4 — tulis 17:05 lalu tiap jam sampai 21:05 (idempoten), "
+          "isi hasil 17:35, pengingat 17:50; gerbang penahan punya sebab sendiri")
     print(f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
           "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
           "tidak bisa ditarik otomatis");
