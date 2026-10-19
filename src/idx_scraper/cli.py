@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
 import sys
 import threading
@@ -2245,7 +2246,23 @@ def cmd_serve(args) -> None:
         storage.close()
 
 
+def _tutup_pool_api() -> None:
+    """Tutup pool koneksi API kalau jalur CLI ini sempat memakainya.
+
+    Helper pembacaan di ``api/`` membuka pool sendiri saat pertama dipakai
+    (``api/database.init_pool``). Di proses panjang (API, ``serve``) pool itu memang
+    hidup terus; di proses CLI pendek ia masih hidup saat interpreter bubar, dan
+    Python menutup job dengan ``PythonFinalizationError`` di log. Menutupnya di sini
+    menghilangkan noise itu tanpa mengubah perilaku: pool berikutnya dibuat ulang
+    saat dibutuhkan.
+    """
+    from .api.database import close_pool
+
+    close_pool()
+
+
 def main() -> None:
+    atexit.register(_tutup_pool_api)
     parser = argparse.ArgumentParser(prog="idx")
     sub = parser.add_subparsers(dest="command")
 
