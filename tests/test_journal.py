@@ -81,6 +81,16 @@ def test_gerbang_mengizinkan_saat_tidak_ada_sebab() -> None:
     assert out["reason"] is None
 
 
+def test_sebab_rezim_tidak_diulang_di_pesan_gerbang() -> None:
+    """`regime.reason` sudah diawali "rezim menolak" - pesan gerbang tidak mengulanginya."""
+    sebab = "rezim menolak: tren turun terkonfirmasi (ADX 49.0) - tahan posisi baru"
+    out = claim_gate(gate_blocked=True, gate_reason=sebab)
+    assert out["message"] == (
+        "Gerbang rezim menolak klaim baru: tren turun terkonfirmasi (ADX 49.0) - tahan posisi baru."
+    )
+    assert "rezim menolak: rezim menolak" not in out["message"]
+
+
 def test_gerbang_mengizinkan_saat_kesegaran_tak_diketahui() -> None:
     """Kesegaran None bukan basi: penahanan P4 yang memutuskan, bukan gerbang ini."""
     assert claim_gate()["allowed"] is True

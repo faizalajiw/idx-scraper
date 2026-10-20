@@ -28,6 +28,10 @@ SHORTLIST_SIZE = 5
 #: urutannya sengaja tetap: halt manual pemilik di atas segalanya.
 GATE_REASONS = ("manual", "data", "regime", "verdict")
 
+# Awal kalimat `research.regime.gate()["reason"]`. Dipakai untuk tidak mengulang
+# "rezim menolak: rezim menolak: ..." saat sebab itu ditempel ke kalimat gerbang.
+AWALAN_REZIM = "rezim menolak: "
+
 #: Sebab penolakan pre-commit (spec 6.2): klaim tidak lengkap tidak masuk buku.
 REJECT_MISSING_STOP = "tanpa_stop"
 REJECT_MISSING_TARGET = "tanpa_target"
@@ -116,6 +120,10 @@ def claim_gate(
         }
     if gate_blocked:
         sebab = gate_reason or "gerbang rezim menutup"
+        # `regime.reason` sudah diawali "rezim menolak" - kalimat ini tampil di UI
+        # lewat /api/journal/*, jadi awalannya tidak boleh diulang di sini.
+        if sebab[: len(AWALAN_REZIM)].lower() == AWALAN_REZIM:
+            sebab = sebab[len(AWALAN_REZIM) :]
         return {
             "allowed": False,
             "reason": "regime",
