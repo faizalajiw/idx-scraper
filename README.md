@@ -47,12 +47,12 @@ Backend terdiri dari dua proses yang harus jalan bersamaan, di folder `idx-scrap
 
 | Proses | Perintah | Fungsi |
 | --- | --- | --- |
-| API (FastAPI) | `python -m uvicorn idx_scraper.api.app:app --port 8000` | Melayani endpoint `/api/*` untuk frontend (`idx-web`, `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`) |
+| API (FastAPI) | `python -m idx_scraper.api.serve --port 8000` | Melayani endpoint `/api/*` untuk frontend (`idx-web`, `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`) |
 | Scheduler | `python -m idx_scraper.cli serve` | Menarik dan menyimpan data IDX (harga, broker, foreign flow) ke database |
 
 ```powershell
 # Terminal 1: API
-python -m uvicorn idx_scraper.api.app:app --port 8000
+python -m idx_scraper.api.serve --port 8000
 
 # Terminal 2: Scheduler (wajib jalan agar data terisi)
 python -m idx_scraper.cli serve

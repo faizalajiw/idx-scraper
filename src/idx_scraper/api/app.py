@@ -1,7 +1,13 @@
 """FastAPI application entrypoint.
 
-Run locally:
+Run locally (dev, dengan reload):
     uvicorn idx_scraper.api.app:app --reload --port 8000
+
+Untuk layanan yang harus hidup terus (task harian `IDX-API`), jangan pakai
+perintah di atas: accept-loop proactor Windows mematikan pendengar pada
+`WinError 64` dan menyisakan zombie tanpa port. Gunakan
+`python -m idx_scraper.api.serve --port 8000` (loop Selector + pengawas; lihat
+`api/serve.py`).
 
 This API is READ-ONLY. It does not ingest or mutate data — the APScheduler CLI
 worker remains the sole writer. There is currently NO authentication on these
