@@ -797,9 +797,9 @@ def main() -> int:
     ap.add_argument("--frozen", action="store_true", help="tambahan evaluasi deskriptif bobot beku")
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return 1
 
     with psycopg.connect(dsn, autocommit=True) as conn:

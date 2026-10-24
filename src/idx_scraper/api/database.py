@@ -28,7 +28,7 @@ def init_pool() -> ConnectionPool:
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError(
-            "DATABASE_URL/SUPABASE_DB_URL is not set; the API requires Postgres."
+            "DATABASE_URL is not set; the API requires Postgres."
         )
     def _configure(conn: Any) -> None:
         # Read-only API: autocommit avoids leaving pooled connections INTRANS.

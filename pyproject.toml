@@ -14,9 +14,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-supabase = [
-    "psycopg[binary]>=3.1",
-]
 postgres = [
     "psycopg[binary]>=3.1",
 ]

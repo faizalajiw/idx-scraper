@@ -541,13 +541,15 @@ class PostgresStorage(Storage):
 def get_storage_from_env() -> Storage:
     """Factory: pick backend from env vars."""
     backend = os.getenv("IDX_STORAGE", "sqlite").lower()
-    if backend in ("supabase", "postgres"):
-        # "supabase" = nilai lama yang sudah terpasang di .env tertentu; backend-nya
-        # Postgres biasa, jadi tetap diterima supaya tidak mematahkan konfigurasi itu.
-        dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    if backend == "postgres":
+        dsn = os.getenv("DATABASE_URL")
         if not dsn:
-            raise RuntimeError(f"IDX_STORAGE={backend} but DATABASE_URL/SUPABASE_DB_URL not set")
+            raise RuntimeError(f"IDX_STORAGE={backend} but DATABASE_URL not set")
         return PostgresStorage(dsn)
+    if backend != "sqlite":
+        # Tanpa gerbang ini nilai tak dikenal (mis. nama backend lama di .env)
+        # diam-diam jatuh ke SQLite dan data masuk ke file, bukan ke Postgres.
+        raise RuntimeError(f"Unknown IDX_STORAGE={backend}; use 'sqlite' or 'postgres'")
     # default sqlite
     sqlite_path = os.getenv("IDX_SQLITE_PATH", "./data/idx.db")
     return SQLiteStorage(sqlite_path)

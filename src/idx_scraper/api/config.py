@@ -27,9 +27,7 @@ class Settings:
         # Auto-load the project .env so `uvicorn idx_scraper.api.app:app` works
         # without manual sourcing (same behavior as the CLI entrypoint).
         load_dotenv()
-        self.database_url: str | None = (
-            os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
-        )
+        self.database_url: str | None = os.getenv("DATABASE_URL")
         # Env var wins; otherwise read the .env file directly so watchlist
         # edits made through the API survive restarts (and are seen fresh).
         self.watchlist: list[str] = _parse_watchlist(

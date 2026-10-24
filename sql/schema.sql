@@ -1,5 +1,5 @@
--- IDX Scraper Schema for Supabase / PostgreSQL
--- Run in Supabase SQL Editor
+-- IDX Scraper Schema for PostgreSQL
+-- Jalankan lewat psql, atau tempel ke SQL editor mana pun
 
 -- Enable UUID extension (optional, but good practice)
 create extension if not exists "uuid-ossp";

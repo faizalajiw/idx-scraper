@@ -412,9 +412,9 @@ def main() -> int:
     ap.add_argument("--min-names", type=int, default=10, help="nama minimum per hari IC")
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=__import__("sys").stderr)
+        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
 
     report = run_ic_analysis(

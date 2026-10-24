@@ -162,9 +162,9 @@ def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
 
 
 def main() -> None:
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return
     backfill_index_eod_idx(dsn)
 

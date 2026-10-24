@@ -168,9 +168,9 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=90, help="rentang hari historis (default 90)")
     args = parser.parse_args()
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi di .env", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi di .env", file=sys.stderr)
         return 1
 
     backfill_index_eod(dsn, args.days)

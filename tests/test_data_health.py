@@ -379,7 +379,6 @@ def test_hitung_sesi_tanpa_kalender_dan_tanpa_titik_awal_mengembalikan_nol() -> 
 
 def _tanpa_dsn(monkeypatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
 
 
 def test_check_row_counts_tanpa_dsn_tidak_melempar(monkeypatch) -> None:

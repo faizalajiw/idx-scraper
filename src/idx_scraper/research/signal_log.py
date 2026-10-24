@@ -527,9 +527,9 @@ def main() -> int:
     ap.add_argument("--k", type=int, nargs="+", default=list(DEFAULT_HORIZONS))
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=__import__("sys").stderr)
+        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
     written = backfill(dsn, months=args.months)
     print(f"[ok] {written} baris sinyal ditulis")

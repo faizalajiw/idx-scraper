@@ -57,9 +57,9 @@ def main() -> int:
     parser.add_argument("--date", help="YYYYMMDD (default: hari ini WIB)")
     args = parser.parse_args()
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi di .env", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi di .env", file=sys.stderr)
         return 1
 
     n, d = backfill_broker_eod(dsn, args.date)

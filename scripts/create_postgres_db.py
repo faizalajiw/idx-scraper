@@ -27,7 +27,7 @@ def _maintenance_dsn(dsn: str) -> str:
 
 
 def main() -> None:
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL not set (put it in .env)")
 

@@ -95,9 +95,9 @@ def fetch_snips(url: str = BASE_URL, timeout: int = 20) -> list[dict[str, Any]]:
 
 
 def _dsn() -> str:
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL belum diset")
+        raise RuntimeError("DATABASE_URL belum diset")
     return dsn
 
 

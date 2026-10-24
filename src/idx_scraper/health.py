@@ -195,7 +195,7 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
     """
     import psycopg
 
-    dsn = dsn or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = dsn or os.getenv("DATABASE_URL")
     now = now or datetime.now(WIB)
     expected = expected_trading_date(now)
     if not dsn:
@@ -258,7 +258,7 @@ def check_field_coverage(dsn: str | None = None, sessions: int = 30) -> FieldCov
     """
     import psycopg
 
-    dsn = dsn or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = dsn or os.getenv("DATABASE_URL")
     if not dsn:
         return FieldCoverage(checked=0, troublemakers=[], worst_pct=100.0)
 
@@ -471,7 +471,7 @@ def check_row_counts(
     """
     import psycopg
 
-    dsn = dsn or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = dsn or os.getenv("DATABASE_URL")
     if not dsn:
         return RowCountCoverage(checked=0, threshold_pct=threshold_pct)
 
@@ -527,7 +527,7 @@ def check_session_gaps(dsn: str | None = None, in_progress: date | None = None) 
     """
     import psycopg
 
-    dsn = dsn or os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = dsn or os.getenv("DATABASE_URL")
     if not dsn:
         return SessionGaps(first=None, last=None, sessions=0)
 

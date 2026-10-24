@@ -1718,7 +1718,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
     if cached is not None:
         return cached
     out: dict[str, dict[str, float | None]] = {}
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if dsn:
         try:
             from ..research.orderbook import compute_daily, load_snapshots
@@ -1749,9 +1749,9 @@ def _event_study_bundle() -> dict[str, Any]:
 
     from ..research import events as ev
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+        raise RuntimeError("DATABASE_URL is not set")
 
     # Panel adjusted utk return emiten; market_daily (raw close rata-rata
     # pasar) utk konteks kurva event-time.
@@ -1911,9 +1911,9 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
     """Histori regime harian + agregat jangka panjang dari research.regime_daily."""
     import psycopg
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+        raise RuntimeError("DATABASE_URL is not set")
 
     from ..research.regime import backfill, summary
 
@@ -1967,9 +1967,9 @@ def get_sentiment(limit: int = 15) -> dict[str, Any]:
 
     from ..research import sentiment
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+        raise RuntimeError("DATABASE_URL is not set")
 
     with get_cursor() as cur:
         idx = _latest_index(cur)
@@ -2003,9 +2003,9 @@ def get_signal_track() -> dict[str, Any]:
 
     from ..research import signal_log as sl
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        raise RuntimeError("DATABASE_URL/SUPABASE_DB_URL is not set")
+        raise RuntimeError("DATABASE_URL is not set")
 
     try:
         if sl.load_log(dsn).empty:
@@ -2206,9 +2206,9 @@ def broker_activity_snapshot() -> dict[str, Any]:
         "panel": pd.DataFrame(),
     }
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        snap["reason"] = "DATABASE_URL/SUPABASE_DB_URL belum diisi"
+        snap["reason"] = "DATABASE_URL belum diisi"
         _research_cache_put("broker_activity_snapshot", snap)
         return snap
 
@@ -3162,10 +3162,10 @@ def get_recommendation_track() -> dict[str, Any]:
 
     from ..research.recommendation_log import evaluate
 
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
-               "reason": "DATABASE_URL/SUPABASE_DB_URL belum diisi."}
+               "reason": "DATABASE_URL belum diisi."}
         _research_cache_put(cache_key, out, ttl=600.0)
         return out
     try:

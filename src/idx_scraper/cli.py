@@ -207,7 +207,7 @@ def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
 
 def _job_regime_daily() -> None:
     """Rekam klasifikasi regime hari bursa terakhir ke research.regime_daily."""
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     try:
@@ -225,7 +225,7 @@ def _job_regime_daily() -> None:
 
 def _job_monthly_ic() -> None:
     """IC analysis bulanan -> research.factor_ic_history (bobot composite)."""
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     try:
@@ -284,7 +284,7 @@ def _job_broker_eod() -> int:
     ~20 menit setelah close resmi supaya endpoint IDX sudah memuat data final
     hari itu. Idempoten per tanggal — aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return 0
     try:
@@ -417,7 +417,7 @@ def _job_signal_log() -> None:
     16:25 WIB — setelah close resmi IHSG + regime harian, supaya kolom regime
     ikut terisi. Idempoten per (code, trade_date); aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     try:
@@ -444,7 +444,7 @@ def _job_recommendations() -> None:
     supaya baris yang diukur track record-nya persis yang tampil di dashboard.
     Idempoten per (code, trade_date); aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     try:
@@ -460,9 +460,9 @@ def _job_recommendations() -> None:
 
 def cmd_recommendations(args) -> None:
     """Backfill + tampilkan track record kandidat beli (halaman Rekomendasi)."""
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return
     from .research.recommendation_log import evaluate, print_report, record
 
@@ -489,7 +489,7 @@ def cmd_recommendations(args) -> None:
 
 def _journal_dsn() -> str | None:
     """DSN DB untuk job buku klaim, atau None kalau belum diatur."""
-    return os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    return os.getenv("DATABASE_URL")
 
 
 def _now_wib() -> datetime:
@@ -702,7 +702,7 @@ def cmd_journal(args) -> None:
 
     dsn = _journal_dsn()
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return
 
     from . import journal_halt
@@ -809,9 +809,9 @@ def cmd_journal_resume(args) -> None:
 def cmd_signal_log(args) -> None:
     """Backfill + tampilkan track record sinyal (jejak sinyal).
     """
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return
     from .research.signal_log import backfill, evaluate, print_report
 
@@ -822,9 +822,9 @@ def cmd_signal_log(args) -> None:
 
 def cmd_ic(args) -> None:
     """Run IC analysis manual + simpan histori bobot faktor."""
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=sys.stderr)
+        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return
     from .research.monthly_ic import run_and_store
 
@@ -869,7 +869,7 @@ def _job_index_eod_close() -> None:
         return  # belum lewat close — lihat alasannya di `_boleh_tulis_close_index`
     if not _is_market_hours() and datetime.now(WIB).weekday() >= 5:
         return  # weekend guard (cron sudah bursa-only, ini double safety)
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
         return
     try:

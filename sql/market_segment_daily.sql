@@ -6,7 +6,7 @@
 --
 -- DDL dijalankan otomatis oleh idx_scraper.market_segment.ensure_table() (dipakai
 -- job EOD `idx serve` maupun scripts.backfill_market_segment). File ini mirror
--- untuk dijalankan manual di SQL editor (Supabase) kalau perlu.
+-- untuk dijalankan manual lewat psql kalau perlu.
 --
 -- Upsert idempoten per trade_date, jadi aman dijalankan ulang.
 

@@ -77,9 +77,9 @@ def main() -> int:  # pragma: no cover - CLI kecil untuk debugging
     ap = argparse.ArgumentParser(prog="monthly_ic")
     ap.add_argument("--k", type=int, nargs="+", default=[5, 10])
     args = ap.parse_args()
-    dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
+    dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL/SUPABASE_DB_URL belum diisi", file=__import__("sys").stderr)
+        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
     out = run_and_store(dsn, horizons=args.k)
     print(out)

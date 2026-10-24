@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from idx_scraper.models import EodStockRow
-from idx_scraper.storage import SQLiteStorage, StockDaily
+from idx_scraper.storage import SQLiteStorage, StockDaily, get_storage_from_env
 
 WIB = timezone(timedelta(hours=7))
 NOW = datetime(2026, 9, 21, 10, 0, 0, tzinfo=WIB)
@@ -129,6 +131,20 @@ def test_history_prefers_idx_eod_over_yahoo(tmp_path):
         assert rows[0]["close"] == 8800
     finally:
         storage.close()
+
+
+def test_factory_unknown_backend_raises(monkeypatch) -> None:
+    """Nilai lama 'supabase' kini tak dikenal; harus gagal keras, bukan jatuh ke SQLite."""
+    monkeypatch.setenv("IDX_STORAGE", "supabase")
+    with pytest.raises(RuntimeError, match="Unknown IDX_STORAGE=supabase"):
+        get_storage_from_env()
+
+
+def test_factory_postgres_without_dsn_raises(monkeypatch) -> None:
+    monkeypatch.setenv("IDX_STORAGE", "postgres")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL not set"):
+        get_storage_from_env()
 
 
 def test_history_fills_gaps_with_yahoo(tmp_path):
