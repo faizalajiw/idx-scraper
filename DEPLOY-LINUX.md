@@ -31,7 +31,7 @@ Tiga proses, satu database:
 | --- | --- | --- |
 | **Scheduler** | `python -m idx_scraper.cli serve` | Menarik data IDX (harga, broker, foreign flow, berita), menjalankan job EOD/refresh, mengirim alert Telegram |
 | **API** | `uvicorn idx_scraper.api.app:app` | Melayani `/api/*` untuk frontend |
-| **Web** | `next start` | UI Next.js; browser memanggil API dari sisi klien |
+| **Web** | `node deploy/serve.mjs 3000 build` | SPA SvelteKit (statis); browser memanggil API dari sisi klien |
 
 Scheduler harus **selalu hidup**. Di Windows jadwal EOD 16:10 hidup di dalam
 prosesnya (APScheduler), jadi kalau prosesnya mati atau mesinnya tidur, jadwalnya
@@ -104,7 +104,7 @@ Angka di bawah berasal dari pengukuran langsung di mesin pengembangan
 | Disk | 20 GB SSD | **40–60 GB SSD** (DB 3 thn ≈ 9 GB + backup + build Node + headroom) |
 | OS | Debian 12 / Ubuntu 22.04+ | Debian 12 |
 | Python | 3.11+ | 3.12 |
-| Node.js | **20.9+** (syarat minimum resmi Next 16) | 20 LTS atau 22 LTS |
+| Node.js | **20.19+** (syarat Vite 8) | 22 LTS (dipakai CI) |
 | PostgreSQL | 14+ | **16 atau 18** (dev memakai 18.6) |
 
 > **Catatan jujur:** ini beban kerja satu pengguna. VPS 2 vCPU / 4 GB sudah lapang.
@@ -292,11 +292,11 @@ Satu catatan untuk `IDX_SERVE_LOCK`: kalau tidak diisi, lokasinya
 (hindari dua proses berebut data). Di Linux dengan systemd praktis tidak akan
 pernah bertabrakan, tapi biarkan aktif — ia murah dan menjaga dari salah ketik.
 
-### Frontend (`idx-web/.env.local`)
+### Frontend (`idx-web/web/.env`)
 
 | Variabel | Keterangan |
 | --- | --- |
-| `NEXT_PUBLIC_API_BASE_URL` | **Di-inline saat `npm run build`, bukan saat runtime.** Lihat peringatan di §8 |
+| `PUBLIC_API_BASE_URL` | **Di-inline saat `npm run build`, bukan saat runtime.** Kosongkan (`""`) bila API diproksi nginx di origin yang sama. Lihat peringatan di §8 |
 
 ---
 
@@ -329,11 +329,11 @@ chmod 600 .env
 .venv/bin/python -m idx_scraper.cli refresh --skip-if-fresh
 .venv/bin/python -m idx_scraper.cli eod 20261014     # tarik satu hari sebagai uji
 
-# 6) Web
-cd /srv/market-labs/idx-web
-nano .env.local        # NEXT_PUBLIC_API_BASE_URL
+# 6) Web (app produksi ada di subfolder web/)
+cd /srv/market-labs/idx-web/web
+printf 'PUBLIC_API_BASE_URL=\n' > .env   # kosong = relatif, lihat §8
 npm ci
-npm run build          # WAJIB sebelum start; env NEXT_PUBLIC_* dibaca di sini
+npm run build          # WAJIB sebelum start; env PUBLIC_* dibaca di sini -> build/
 
 # 7) Unit systemd (§7), nginx (§8), firewall (§13)
 ```
@@ -405,9 +405,20 @@ WantedBy=multi-user.target
 
 ### `/etc/systemd/system/idx-web.service`
 
+App produksi adalah **SPA statis** hasil `npm run build` di `idx-web/web/build`.
+Ada dua cara menyajikannya; pilih satu.
+
+**A. nginx menyajikan `build/` langsung (disarankan).** Tidak ada proses Node di
+produksi, tidak ada unit tambahan. Salin `idx-web/web/build` ke `/var/www/idx-web`
+dan pakai konfigurasi §8 — ingat aturan cache di `web/deploy/nginx.conf`.
+
+**B. Penyaji bawaan `deploy/serve.mjs`** (kalau server tidak memakai nginx/Caddy).
+Unit di bawah; proses ini mendengarkan di semua antarmuka, jadi port 3000 **wajib**
+tetap tertutup firewall (§13).
+
 ```ini
 [Unit]
-Description=IDX web (Next.js)
+Description=IDX web (static SPA)
 After=network-online.target idx-api.service
 Wants=network-online.target
 
@@ -415,21 +426,19 @@ Wants=network-online.target
 Type=simple
 User=idx
 Group=idx
-WorkingDirectory=/srv/market-labs/idx-web
+WorkingDirectory=/srv/market-labs/idx-web/web
 Environment=NODE_ENV=production
-Environment=PORT=3000
-Environment=HOSTNAME=127.0.0.1
-ExecStart=/usr/bin/npm run start
+ExecStart=/usr/bin/node deploy/serve.mjs 3000 build
 Restart=always
 RestartSec=5
-# Next.js membutuhkan drain 10-30s untuk menyelesaikan request & callback `after()`
 KillSignal=SIGTERM
-TimeoutStopSec=30
-MemoryMax=1G
+TimeoutStopSec=15
+MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target
 ```
+
 
 ### `/etc/systemd/system/idx-eod.service` + `idx-eod.timer` (opsional)
 
@@ -511,7 +520,7 @@ journalctl -u idx-serve -f          # log langsung
 
 **Peringatan penting sebelum menyalin contoh konfigurasi apa pun:**
 
-`NEXT_PUBLIC_API_BASE_URL` di-**inline ke bundel JavaScript saat `npm run build`**.
+`PUBLIC_API_BASE_URL` di-**inline ke bundel JavaScript saat `npm run build`**.
 Artinya nilai itu dibaca oleh **browser pengguna**, bukan oleh server. Jadi:
 
 - `http://localhost:8000` hanya benar kalau Anda mengakses web dari mesin server itu sendiri.
@@ -520,15 +529,22 @@ Artinya nilai itu dibaca oleh **browser pengguna**, bukan oleh server. Jadi:
 Dua pola yang benar:
 
 **A. Satu domain, API diproksi (paling sederhana, tanpa urusan CORS).**
-Set `NEXT_PUBLIC_API_BASE_URL=""` (string kosong) saat build. Kode di
-`lib/api.ts` memakai `?? "http://localhost:8000"`, dan karena string kosong bukan
-*nullish*, hasilnya `""` → semua panggilan jadi **relatif** ke origin yang sama,
-lalu nginx meneruskannya ke API.
+Build dengan `PUBLIC_API_BASE_URL=""` (string kosong). `web/src/lib/api.ts` memakai
+`?? "http://localhost:8000"`, dan karena string kosong bukan *nullish*, hasilnya
+`""` → semua panggilan jadi **relatif** ke origin yang sama, lalu nginx
+meneruskannya ke API. Sajikan `idx-web/web/build` langsung dari nginx:
 
 ```nginx
 server {
     listen 80;
     server_name market.example.com;
+
+    root /var/www/idx-web;   # isi idx-web/web/build
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
 
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
@@ -537,20 +553,26 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Aset ber-hash: cache selamanya
+    location /_app/immutable/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html tidak boleh di-cache: deploy baru harus langsung terlihat
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    # SPA fallback: rute dinamis (/stock/BBCA, /keputusan/BBCA, ...) tetap 200
     location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        # Next.js streaming: jangan buffer
-        proxy_buffering off;
+        try_files $uri $uri/ /index.html;
     }
 }
 ```
 
 **B. Dua domain, API terpisah.** Build dengan
-`NEXT_PUBLIC_API_BASE_URL=https://api.example.com`, dan isi
+`PUBLIC_API_BASE_URL=https://api.example.com`, lalu isi
 `IDX_API_CORS_ORIGINS=https://market.example.com` agar CORS mengizinkan origin web.
 
 TLS:
@@ -558,9 +580,6 @@ TLS:
 ```bash
 sudo certbot --nginx -d market.example.com
 ```
-
-> Untuk pemakaian pribadi, API publik sebaiknya dilindungi (Basic Auth di nginx atau
-> batasi IP). Data dan endpoint ini tidak dirancang untuk dibuka bebas.
 
 ---
 
@@ -664,7 +683,7 @@ Aturan penting: **cetak commit yang sedang dipakai produksi** setiap kali deploy
 | `idx health` bilang EOD tertinggal | `select max(trade_date) from research.latest_pit` | Hari libur bursa? isi `IDX_HOLIDAYS`. Bukan? jalankan `idx refresh --skip-if-fresh` |
 | Serve mati berulang | `systemctl status idx-serve`, `NRestarts` | Lihat `journalctl -u idx-serve -n 100`. Sering OOM → naikkan RAM atau `MemoryMax` |
 | `serve` menolak start: "instance lain sedang berjalan" | `ls -l ~/.local/state/idx-scraper/serve.lock` | Kunci aktif. Cari proses `idx_scraper.cli serve` lain, atau (bila yakin tak ada) hentikan unit lalu start ulang |
-| Web 502 | `systemctl status idx-web`, `journalctl -u idx-web` | `npm run build` belum dijalankan, atau `NEXT_PUBLIC_API_BASE_URL` salah saat build |
+| Web 502 | `systemctl status idx-web`, `journalctl -u idx-web` | `npm run build` belum dijalankan di `idx-web/web`, atau `PUBLIC_API_BASE_URL` salah saat build / root nginx belum menunjuk `build/` |
 | API 500 di banyak endpoint | `curl 127.0.0.1:8000/health`, cek Postgres | DB mati → `systemctl restart postgresql` |
 | Timer tidak menyala | `systemctl list-timers \| grep idx` | Zona waktu salah (`timedatectl`), mesin tidur, atau `Persistent=true` menjalankan terlewat saat boot |
 | Disk penuh | `df -h`, `select pg_size_pretty(pg_database_size(current_database()))` | Jalankan [retensi](#retensi-opsional) untuk tabel intraday |
@@ -737,7 +756,7 @@ Linux ini bisa benar-benar tanpa Chrome, tanpa Xvfb, tanpa profil persisten.
 [ ] .env mode 600, IDX_STORAGE=postgres, DATABASE_URL, IDX_WATCHLIST, IDX_TRANSPORT=http
 [ ] idx health -> tidak ada keluhan
 [ ] idx refresh --skip-if-fresh -> EOD hari bursa terakhir masuk, 963 emiten
-[ ] npm ci && npm run build di idx-web (NEXT_PUBLIC_API_BASE_URL sudah benar)
+[ ] npm ci && npm run build di idx-web/web (PUBLIC_API_BASE_URL sudah benar), build/ tersalin ke root nginx
 [ ] 4 unit terpasang & enabled (timer EOD opsional)
 [ ] systemctl status idx-serve idx-api idx-web -> active (running)
 [ ] journalctl -u idx-serve | grep eod_fallback -> job jaring kedua terdaftar (16:30-20:30)
@@ -753,5 +772,6 @@ Linux ini bisa benar-benar tanpa Chrome, tanpa Xvfb, tanpa profil persisten.
 
 ---
 
-*Dokumen ini ditulis 15 Okt 2026. Angka DB (§2) hasil pengukuran langsung pada
-PostgreSQL 18.6; spesifikasi Next.js 16 (§8) mengikuti `node_modules/next/dist/docs/`.*
+*Dokumen ini ditulis 15 Okt 2026, bagian web diperbarui 25 Okt 2026 setelah app
+produksi pindah ke SvelteKit (`idx-web/web`, `adapter-static`). Angka DB (§2) hasil
+pengukuran langsung pada PostgreSQL 18.6.*

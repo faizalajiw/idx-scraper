@@ -39,7 +39,14 @@ IDX_TRANSPORT=auto
 ```powershell
 python -m idx_scraper.cli serve
 ```
-The scheduler starts automatically and runs only on weekdays between 09:00‑16:00 WIB.
+`serve` menjalankan dua hal sekaligus di dalam satu proses:
+
+- **loop polling** — hanya pada hari bursa di dalam `IDX_MARKET_OPEN`–`IDX_MARKET_CLOSE` (default 09:00–16:00 WIB).
+- **scheduler cron (APScheduler)** — job 08:50, 16:10, 17:45, 19:20, dan job akhir pekan, jadi tetap bekerja di luar jam polling.
+
+Scheduler hidup di proses `idx serve`, **bukan** di proses API. Kalau hanya
+`python -m idx_scraper.api.serve` yang jalan, API tetap melayani data terakhir
+tetapi tidak ada data baru yang masuk.
 
 #### Cara menjalankan backend (agar data selalu update)
 
@@ -47,7 +54,7 @@ Backend terdiri dari dua proses yang harus jalan bersamaan, di folder `idx-scrap
 
 | Proses | Perintah | Fungsi |
 | --- | --- | --- |
-| API (FastAPI) | `python -m idx_scraper.api.serve --port 8000` | Melayani endpoint `/api/*` untuk frontend (`idx-web`, `NEXT_PUBLIC_API_BASE_URL=http://localhost:8000`) |
+| API (FastAPI) | `python -m idx_scraper.api.serve --port 8000` | Melayani endpoint `/api/*` untuk frontend (`idx-web/web`, `PUBLIC_API_BASE_URL=http://localhost:8000`) |
 | Scheduler | `python -m idx_scraper.cli serve` | Menarik dan menyimpan data IDX (harga, broker, foreign flow) ke database |
 
 ```powershell
@@ -59,7 +66,7 @@ python -m idx_scraper.cli serve
 ```
 
 - Jika hanya API yang jalan, dashboard tetap tampil tetapi data tidak bertambah.
-- Scheduler hanya bekerja Senin–Jumat 09:00–16:00 WIB. Di luar jam itu, API melayani data EOD terakhir dari `research.latest_pit`.
+- Loop polling hanya bekerja Senin–Jumat 09:00–16:00 WIB; job cron tetap jalan di luar jam itu (mis. `refresh_preopen` 08:50, `refresh_s2` 16:10, `health_eod` 17:45). Di luar jam pasar, API melayani data EOD terakhir dari `research.latest_pit`.
 - Data broker mengikuti hari bursa. Pada Sabtu/Minggu atau hari libur, log `broker summary ...: 0 baris` adalah perilaku normal, bukan error.
 - Cek API: `curl http://localhost:8000/health`.
 
@@ -93,7 +100,7 @@ supaya tidak diandalkan.
 | **Evaluasi / track record** | `research/signal_log.py`, `research/recommendation_log.py`, track record `smart_money` | `research.signal_log`, `research.recommendation_log` + hit‑rate/abnormal per horizon |
 | **Simulator (bukan eksekusi)** | `backtest.py`, `api/simulation.py` | equity curve, cost model, ledger rebalance — **tanpa persistensi & tanpa kirim order** |
 | **API (read‑only)** | `api/` (`analytics.py`, `services.py`, `app.py`) | JSON lewat connection pool; **nol kalkulasi baru**, hanya membaca DB |
-| **Frontend** | `idx-web/` (Next.js + Recharts + SWR) | presentasi saja; semua hitungan di backend |
+| **Frontend** | `idx-web/web/` (SvelteKit 3 + Tailwind 4, `adapter-static`) | presentasi saja; semua hitungan di backend |
 
 ### Belum ada (jangan diandalkan)
 
@@ -213,26 +220,83 @@ Copy-Item "$src\Local State" "$dst\Local State"
 
 ---
 
-## API Reference (FastAPI – `/api/v1`)
+## API Reference (FastAPI – `/api`)
+
+Base URL lokal: `http://localhost:8000`. Sumber kebenaran selalu
+`GET /openapi.json`; tabel di bawah adalah ringkasan endpoint yang dipakai
+`idx-web`.
+
+**Tidak ada autentikasi.** API ini dirancang untuk jaringan lokal/tepercaya
+(lihat docstring `src/idx_scraper/api/app.py`): jangan diekspos ke internet tanpa
+menambah autentikasi dan rate limit.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/index` | GET | Current IHSG composite quote. |
-| `/watchlist` | GET | Live quotes for symbols in `IDX_WATCHLIST`. |
-| `/eod/{date}` | GET | End‑of‑day snapshot for all emiten (raw). |
-| `/market-segment/{date}` | GET | Regular vs non‑regular market aggregation. |
-| `/health` | GET | Simple health check (0 = OK). |
-| `/signal-log` | GET | Latest BUY/SELL signals. |
-| `/ownership/{code}` | GET | Top‑10 shareholders for a given emiten. |
-| `/recommendations` | GET | **Rekomendasi Beli** — market‑wide ranked buy candidates (score, grade, entry/stop/target, R/R, sizing). |
-| `/stocks/{code}/recommendation` | GET | Buy‑candidate verdict + execution levels for one emiten. |
-| `/recommendations/track` | GET | Candidate track record (hit rate, forward & abnormal return per grade/horizon). |
+| `/health` | GET | Simple health check (exit 0 = OK). |
+| `/api/data-health` | GET | Empat pemeriksa data yang sama dengan `idx health`. |
+| `/api/freshness` | GET | Kesegaran data per sumber. |
+| `/api/market/overview` | GET | IHSG: quote terbaru, breadth, nilai transaksi. |
+| `/api/market/regime` | GET | Rezim pasar + base rate historis. |
+| `/api/market/regime/history` | GET | Riwayat rezim per sesi. |
+| `/api/market/trade-summary` | GET | Ringkasan transaksi sesi (regular vs non-regular). |
+| `/api/market/session-movers` | GET | Pergerakan terbesar sesi berjalan. |
+| `/api/market/leaders` | GET | Papan pemimpin (gainers/losers/value). |
+| `/api/market/top-brokers` | GET | Broker teratas se-pasar. |
+| `/api/broker-flow` | GET | Komposisi aliran broker. |
+| `/api/broker-activity` | GET | Skor aktivitas broker. |
+| `/api/search` | GET | Cari emiten berdasarkan kode/nama. |
+| `/api/watchlist` | GET | Daftar watchlist + quote terakhir. |
+| `/api/watchlist` | PUT | Ganti seluruh isi watchlist. |
+| `/api/watchlist` | POST | Tambah kode ke watchlist. |
+| `/api/watchlist/{code}` | DELETE | Hapus kode dari watchlist. |
+| `/api/hold-check` | GET | Verdict tahan/jual untuk satu emiten. |
+| `/api/signals` | GET | Sinyal BUY/SELL terbaru. |
+| `/api/signals/track` | GET | Track record sinyal per horizon. |
+| `/api/stocks/{code}/history` | GET | Riwayat OHLCV point-in-time. |
+| `/api/stocks/{code}/technical` | GET | Seri indikator teknikal untuk chart. |
+| `/api/stocks/{code}/brokers` | GET | Ringkasan broker per emiten. |
+| `/api/stocks/{code}/broker-activity` | GET | Aktivitas broker per emiten. |
+| `/api/stocks/{code}/recommendation` | GET | Verdict kandidat beli + level eksekusi. |
+| `/api/stocks/{code}/decision` | GET | Ruang Keputusan (verdict + gauge). |
+| `/api/stocks/{code}/dossier` | GET | Dossier lengkap satu emiten. |
+| `/api/stocks/{code}/dossier.pdf` | GET | Dossier dalam bentuk PDF. |
+| `/api/stocks/{code}/ownership` | GET | Top-10 pemegang saham. |
+| `/api/stocks/{code}/foreign-flow` | GET | Arus asing per emiten. |
+| `/api/stocks/{code}/smart-money` | GET | Jejak smart money per emiten. |
+| `/api/stocks/{code}/events` | GET | Event study per emiten. |
+| `/api/recommendations` | GET | Rekomendasi Beli se-pasar (skor, grade, level). |
+| `/api/recommendations/track` | GET | Track record kandidat per grade/horizon. |
+| `/api/foreign-flow` | GET | Arus asing se-pasar. |
+| `/api/smart-money/radar` | GET | Radar aliran asing terkuat. |
+| `/api/smart-money/patterns` | GET | Papan pola jejak smart money. |
+| `/api/smart-money/verdicts` | GET | Watchlist verdict smart money. |
+| `/api/smart-money/track-record` | GET | Track record jejak smart money. |
+| `/api/sectors` | GET | Analisis sektor. |
+| `/api/sectors/rotation` | GET | Rotasi sektor. |
+| `/api/news/latest` | GET | Judul berita terbaru (`limit`, default 7). |
+| `/api/sentiment` | GET | Gauge sentimen pasar + skor emiten. |
+| `/api/factors/overview` | GET | Ringkasan faktor + bobot IC. |
+| `/api/valuation` | GET | z-score harga terhadap band-nya sendiri. |
+| `/api/screener` | GET | Screener dengan filter. |
+| `/api/alerts` | GET | Status alert + aturan tersimpan. |
+| `/api/alerts` | POST | Tambah aturan alert. |
+| `/api/alerts/{rule_id}` | DELETE | Hapus aturan alert. |
+| `/api/alerts/test` | POST | Kirim pesan uji Telegram. |
+| `/api/cache/clear` | POST | Bersihkan cache API. |
+| `/api/journal/summary` | GET | Ringkasan buku klaim. |
+| `/api/journal/claims` | GET | Daftar klaim. |
+| `/api/journal/state` | GET | Status gerbang klaim. |
+| `/api/journal/halt` | POST | Hentikan penulisan klaim baru. |
+| `/api/journal/resume` | POST | Buka lagi penulisan klaim. |
+| `/api/backtest/config` | GET | Konfigurasi default backtest. |
+| `/api/backtest/run` | POST | Jalankan simulasi backtest (tanpa persistensi). |
 
-All endpoints accept an optional API key (`X‑API‑KEY`) read from `.env` (`IDX_API_KEY`).
+Catatan: `/api/market/narration` sudah dihapus (404).
 
 ---
 
 ## Scheduler & Jobs
-The scheduler (APScheduler, timezone WIB) starts with `serve`.
+The scheduler (APScheduler, timezone WIB) starts with `python -m idx_scraper.cli serve`.
 
 | Job ID | Schedule (WIB) | Action |
 |--------|----------|--------|
@@ -337,7 +401,8 @@ python -m idx_scraper.cli snapshot                # one‑off fetch
 python -m idx_scraper.cli serve                   # start scheduler
 python -m idx_scraper.cli eod [YYYYMMDD]           # fetch specific EOD
 python -m idx_scraper.cli seed [--days N]        # seed historic OHLCV from Yahoo
-python -m idx_scraper.cli signals                # list BUY/SELL signalspython -m idx_scraper.cli signal-log            # view signal history
+python -m idx_scraper.cli signals                 # list BUY/SELL signals
+python -m idx_scraper.cli signal-log              # view signal history
 python -m idx_scraper.cli recommendations [--months N]  # backfill + track record kandidat beli
 python -m idx_scraper.cli health                # health‑check (exit 0 = OK)
 python -m idx_scraper.cli ic [--days N]         # compute IC and store in factor table
@@ -407,7 +472,7 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 * Script: `scripts/fetch_tradingview_logos.py` mengambil logo dari halaman `tradingview.com/symbols/IDX-{KODE}/` untuk setiap kode di `stock_summary_daily`.
 * Output: `idx-web/public/logos/{KODE}.png|svg` dan `idx-web/public/logos/manifest.json` (status `ok` / `fallback` / `failed`).
 * Jalankan (dari `idx-scraper/`): `.\.venv\Scripts\python.exe scripts\fetch_tradingview_logos.py`. Kode yang sudah `ok` dilewati; `--only BBCA,TLKM` untuk kode tertentu, `--force` untuk unduh ulang.
-* UI (`idx-web/components/TickerLogo.tsx`) memakai logo lokal bila `ok`, selain itu monogram.
+* UI (`idx-web/web/src/lib/components/TickerLogo.svelte`) memakai logo lokal bila `ok`, selain itu monogram.
 * **Hak cipta: [BELUM TERVERIFIKASI].** Logo milik masing-masing emiten dan TradingView. Gunakan hanya untuk tampilan internal; cek lisensi sebelum dipublikasikan.
 
 ---
@@ -422,4 +487,4 @@ python -m idx_scraper.cli source [YAHOO|IDX]      # view/set live data source
 
 ---
 
-*Last updated: 2026‑10‑06*
+*Last updated: 2026‑10‑25*
