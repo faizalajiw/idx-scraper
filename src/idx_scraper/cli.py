@@ -1299,9 +1299,13 @@ def cmd_eod(args) -> None:
 def _eod_fresh_for(day) -> tuple[bool, bool]:
     """Cek kesegaran EOD untuk ``day`` (tanggal WIB).
 
-    Mengembalikan ``(ada EOD saham, ada close indeks resmi >= 16:00)``.
-    Dipakai startup catchup ``serve`` dan jaring EOD sore ``_eod_catchup``: satu
-    definisi "sudah lengkap" supaya keduanya tidak saling meniarakan pekerjaan.
+    Mengembalikan ``(ada EOD saham, ada close indeks resmi)``. Close dianggap
+    resmi kalau ada snapshot ``index_quotes`` pukul >= 16:00 **atau** baris close
+    harian di ``index_summary_daily``: sesi yang snapshot-nya terlewat (mesin
+    mati) tetap lengkap asal close hariannya ada, dan justru itu yang dibaca
+    ``regime_daily``. Dipakai startup catchup ``serve`` dan jaring EOD sore
+    ``_eod_catchup``: satu definisi "sudah lengkap" supaya keduanya tidak saling
+    meniarakan pekerjaan.
     """
     import psycopg
 
@@ -1324,6 +1328,13 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
             (day,),
         )
         has_index = cur.fetchone() is not None
+        if not has_index:
+            cur.execute(
+                "select 1 from index_summary_daily "
+                "where code = 'COMPOSITE' and date = %s limit 1",
+                (day,),
+            )
+            has_index = cur.fetchone() is not None
     return (has_stocks, has_index)
 
 
