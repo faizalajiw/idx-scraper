@@ -24,15 +24,14 @@ Run (bash):
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-import psycopg
 import yfinance as yf
 
+from idx_scraper import db
 from idx_scraper.api.sector_map import BUCKETS, SECTOR_MAP
 
 SLEEP_SECONDS = 0.05  # Yahoo tolerates this easily; keeps the job ~2-4 min
@@ -237,8 +236,7 @@ def universe(conn) -> list[str]:
 
 
 def refresh() -> int:
-    dsn = os.environ["DATABASE_URL"]
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         codes = universe(conn)
     print(f"[sector] universe: {len(codes)} emiten")
 

@@ -18,12 +18,12 @@ Run (bash):
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 
-import psycopg
 import yfinance as yf
+
+from idx_scraper import db
 
 SLEEP_SECONDS = 0.4  # light pacing between yfinance ticker fetches
 
@@ -35,8 +35,7 @@ def universe(conn) -> list[str]:
 
 
 def ingest() -> None:
-    dsn = os.environ["DATABASE_URL"]
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         codes = universe(conn)
         print(f"[corp] universe: {len(codes)} emiten")
 

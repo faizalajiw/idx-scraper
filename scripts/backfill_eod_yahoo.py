@@ -10,16 +10,17 @@ Idempotent: kalau 25 Sep sudah ada dari IDX, script berhenti (tidak menimpa).
 
 from __future__ import annotations
 
-import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 import yfinance as yf
 
+from idx_scraper import db
+
 WIB = timezone(timedelta(hours=7))
 TARGET = date(2026, 9, 25)
-DSN = os.environ["DATABASE_URL"]
+DSN = db.dsn()
 
 
 def _to_jk(code: str) -> str:
@@ -28,7 +29,7 @@ def _to_jk(code: str) -> str:
 
 
 def main() -> int:
-    with psycopg.connect(DSN, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect(url=DSN) as conn, conn.cursor() as cur:
         # 0) guard: jangan timpa kalau 25 Sep sudah ada
         cur.execute("select count(*) from research.raw_eod where trade_date=%s", (TARGET,))
         if cur.fetchone()[0] > 0:

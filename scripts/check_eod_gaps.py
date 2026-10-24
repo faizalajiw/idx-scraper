@@ -48,13 +48,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 import time
 from datetime import date, datetime, timedelta
 
 import psycopg
+
+from idx_scraper import db
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -218,8 +219,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="hanya daftar lubang, tanpa fetch")
     args = ap.parse_args()
 
-    dsn = os.environ["DATABASE_URL"]
-    conn = psycopg.connect(dsn, autocommit=True)
+    dsn = db.dsn() if db.tersedia() else None
+    conn = db.connect()
     cur = conn.cursor()
     cur.execute("select min(trade_date), max(trade_date) from research.raw_eod")
     lo, hi = cur.fetchone()

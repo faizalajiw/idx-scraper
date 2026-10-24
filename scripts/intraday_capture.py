@@ -17,11 +17,9 @@ Run once (manual test):
 from __future__ import annotations
 
 import argparse
-import os
 from datetime import datetime, timedelta, timezone
 
-import psycopg
-
+from idx_scraper import db
 from idx_scraper.client import IDXClient
 
 WIB = timezone(timedelta(hours=7))
@@ -63,7 +61,7 @@ def main() -> None:
 
     client = IDXClient()
     client.warmup()
-    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+    with db.connect() as conn:
         n = capture_once(conn, client, args.top)
         print(f"[intraday] captured {n} ticks at {datetime.now(WIB).isoformat()}")
     client.close()

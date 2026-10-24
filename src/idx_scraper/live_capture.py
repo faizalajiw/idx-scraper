@@ -19,6 +19,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import db
 from .logging_setup import say
 
 logger = logging.getLogger(__name__)
@@ -111,12 +112,7 @@ class LiveCapture:
         return getattr(self._client.session, "last_status", None)
 
     def sweep_once(self) -> int:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        with psycopg.connect(
-            os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row
-        ) as conn:
+        with db.connect(dict_rows=True) as conn:
             with conn.cursor() as cur:
                 codes = load_universe(cur, self._top_n)
             if not codes:

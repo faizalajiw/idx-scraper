@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .. import db
+
 WIB = timezone(timedelta(hours=7))
 
 # --- bobot komponen emiten (jumlah 1; dinormalisasi ulang bila ada yang kosong)
@@ -394,11 +396,10 @@ def load_latest(dsn: str) -> list[dict[str, Any]]:
     Bukan sekadar ``max(trade_date)``: EOD yang baru masuk sering parsial, dan
     rasio arus asing mustahil dihitung dari hari seperti itu.
     """
-    import psycopg
     from psycopg.rows import dict_row
 
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn,
+        db.connect(timeout=10) as conn,
         conn.cursor(row_factory=dict_row) as cur,
     ):
         cur.execute(_LATEST_SQL, (MIN_COMPLETE_SHARE,))

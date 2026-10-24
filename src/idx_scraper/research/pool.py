@@ -30,9 +30,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import psycopg
-from psycopg.rows import dict_row
 
+from .. import db
 from .recommend import MIN_DAY_VALUE, MIN_MARKET_HISTORY
 
 #: Persentil lintas saham yang memisahkan "tebal" dari "tipis" pada satu sesi.
@@ -214,7 +213,7 @@ def load_quarantined_codes(dsn: str, sessions: int = QUARANTINE_SESSIONS) -> set
     tahu konteksnya (job harian / analytics), bukan modul ini.
     """
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         return quarantined_codes(cur, sessions=sessions)

@@ -18,8 +18,8 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
-import psycopg
 
+from .. import db
 from ..analysis import ADX_TREND, IDX_TRADING_DAYS, calculate_adx, classify_regime
 
 _DDL = """
@@ -83,7 +83,7 @@ def compute_daily(df: pd.DataFrame, upto_date: str) -> dict[str, Any] | None:
 
 def backfill(dsn: str) -> int:
     """Isi research.regime_daily untuk seluruh histori index_summary_daily."""
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         df = _load_index_frame(cur)
         # kolom numerik psycopg menerima float; date sebagai string ISO
@@ -111,7 +111,7 @@ def backfill(dsn: str) -> int:
 
 def record_today(dsn: str) -> dict[str, Any] | None:
     """Upsert klasifikasi untuk tanggal bursa terakhir (job harian scheduler)."""
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         df = _load_index_frame(cur)
         if df.empty:
@@ -138,7 +138,7 @@ def record_today(dsn: str) -> dict[str, Any] | None:
 
 def summary(dsn: str) -> dict[str, Any]:
     """% hari per regime, rata-rata ADX, dan jumlah transisi antar regime."""
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         cur.execute(
             """select trade_date, regime, adx, realized_vol from research.regime_daily

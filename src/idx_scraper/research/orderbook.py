@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .. import db
+
 # Batas kualitas: hari dengan snapshot buku lebih sedikit dari ini -> NaN.
 MIN_SNAPS_DEFAULT = 8
 # Absorption butuh minimal gerakan naik & turun; tanpa itu sign-nya tak bermakna.
@@ -47,7 +49,6 @@ def load_snapshots(
     Filter tanggal memakai tanggal WIB dari captured_at. ``dsn`` dipakai
     apa-adanya (mis. DATABASE_URL) — pola yang sama dengan ic.load_panel.
     """
-    import psycopg
 
     query = """
         select code, captured_at as ts, board,
@@ -65,7 +66,7 @@ def load_snapshots(
         params.append(end)
     query += " order by code, captured_at"
 
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
 

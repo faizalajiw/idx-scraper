@@ -6,12 +6,10 @@ Terpisah dari ``research.ic`` agar modul engine tetap murni analitik.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import psycopg
-
+from .. import db
 from ..logging_setup import say
 from .composite import invalidate_caches
 from .ic import run_ic_analysis
@@ -37,7 +35,7 @@ def run_and_store(dsn: str, horizons: list[int] | None = None) -> dict[str, Any]
 
     stored_rows = 0
     weights: dict[str, float] = {}
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
         # pastikan tabel ada (idempoten) walau DDL belum dijalankan manual
         cur.execute(
@@ -78,7 +76,7 @@ def main() -> int:  # pragma: no cover - CLI kecil untuk debugging
     ap = argparse.ArgumentParser(prog="monthly_ic")
     ap.add_argument("--k", type=int, nargs="+", default=[5, 10])
     args = ap.parse_args()
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1

@@ -26,13 +26,12 @@ from __future__ import annotations
 import argparse
 import logging
 import math
-import os
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import psycopg
 
+from .. import db
 from ..logging_setup import say
 from .factors import FACTOR_DEFINITIONS, compute_factors
 
@@ -84,7 +83,7 @@ def load_panel(
         left join research.latest_pit e
           on e.code = px.code and e.trade_date = px.trade_date
     """
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
     if not rows:
@@ -409,7 +408,7 @@ def main() -> int:
     ap.add_argument("--min-names", type=int, default=10, help="nama minimum per hari IC")
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1

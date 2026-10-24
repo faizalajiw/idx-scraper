@@ -58,13 +58,12 @@ import argparse
 import json
 import logging
 import math
-import os
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import psycopg
 
+from .. import db
 from ..logging_setup import say
 from .events import _nw_tstat
 from .recommend import (
@@ -855,12 +854,12 @@ def main() -> int:
     ap.add_argument("--frozen", action="store_true", help="tambahan evaluasi deskriptif bobot beku")
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         logger.error("[err] DATABASE_URL belum diisi")
         return 1
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         conn.execute("select 1")  # gagal cepat kalau DSN salah
 
     feats = load_features(dsn, sessions=args.sessions)

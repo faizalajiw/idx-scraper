@@ -15,15 +15,13 @@ Jalankan manual (Windows bash, dari idx-scraper/):
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
-import psycopg
-
+from idx_scraper import db
 from idx_scraper.market_segment import aggregate_day, ensure_table, upsert_day
 
 WIB = timezone(timedelta(hours=7))
@@ -67,7 +65,7 @@ def backfill_from_idx(dsn: str, date_strs: list[str]) -> tuple[int, int]:
                 continue
             trade_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
             with (
-                psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn,
+                db.connect(timeout=10) as conn,
                 conn.cursor() as cur,
             ):
                 upsert_day(cur, trade_date, aggregate_day(rows))
@@ -82,7 +80,7 @@ def backfill_from_idx(dsn: str, date_strs: list[str]) -> tuple[int, int]:
 
 def rebuild_from_raw(dsn: str) -> int:
     """Hitung ulang agregat dari research.raw_eod yang tersimpan (tanpa IDX)."""
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         ensure_table(cur)
         cur.execute(
             """select trade_date, code, volume, value, frequency,
@@ -132,7 +130,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         print("[err] DATABASE_URL belum diisi di .env", file=sys.stderr)
         return 1

@@ -31,6 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from . import db
 from .analysis import calculate_indicators, generate_signal
 from .client import (
     IDXClient,
@@ -207,7 +208,7 @@ def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
 
 def _job_regime_daily() -> None:
     """Rekam klasifikasi regime hari bursa terakhir ke research.regime_daily."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     try:
@@ -225,7 +226,7 @@ def _job_regime_daily() -> None:
 
 def _job_monthly_ic() -> None:
     """IC analysis bulanan -> research.factor_ic_history (bobot composite)."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     try:
@@ -284,7 +285,7 @@ def _job_broker_eod() -> int:
     ~20 menit setelah close resmi supaya endpoint IDX sudah memuat data final
     hari itu. Idempoten per tanggal — aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return 0
     try:
@@ -414,7 +415,7 @@ def _job_signal_log() -> None:
     16:25 WIB — setelah close resmi IHSG + regime harian, supaya kolom regime
     ikut terisi. Idempoten per (code, trade_date); aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     try:
@@ -441,7 +442,7 @@ def _job_recommendations() -> None:
     supaya baris yang diukur track record-nya persis yang tampil di dashboard.
     Idempoten per (code, trade_date); aman dijalankan ulang.
     """
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     try:
@@ -457,7 +458,7 @@ def _job_recommendations() -> None:
 
 def cmd_recommendations(args) -> None:
     """Backfill + tampilkan track record kandidat beli (halaman Rekomendasi)."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         say("[err] DATABASE_URL belum diisi", err=True)
         return
@@ -486,7 +487,7 @@ def cmd_recommendations(args) -> None:
 
 def _journal_dsn() -> str | None:
     """DSN DB untuk job buku klaim, atau None kalau belum diatur."""
-    return os.getenv("DATABASE_URL")
+    return db.dsn()
 
 
 def _now_wib() -> datetime:
@@ -496,11 +497,8 @@ def _now_wib() -> datetime:
 
 def _last_session_date(dsn: str) -> str | None:
     """Tanggal bursa terakhir yang datanya sudah masuk (``research.raw_eod``)."""
-    import psycopg
-    from psycopg.rows import dict_row
-
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         cur.execute("select max(trade_date) as tanggal from research.raw_eod")
@@ -529,9 +527,6 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
     buku klaim aturan ini sendiri. Yang tidak terbaca ditulis sebagai peringatan
     dan gerbangnya dibiarkan seperti apa adanya - bukan ditebak.
     """
-    import psycopg
-    from psycopg.rows import dict_row
-
     from . import journal_halt
     from .freshness import current as freshness_current
     from .research import journal_store
@@ -547,7 +542,7 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
 
     try:
         with (
-            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            db.connect(dict_rows=True) as conn,
             conn.cursor() as cur,
         ):
             kesegaran = str(freshness_current(cur).get("status") or "") or None
@@ -586,15 +581,12 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
 
 def _journal_write(dsn: str, *, trade_date: str | None = None, cetak: bool = True) -> dict:
     """Tulis satu sesi: gerbang dulu, baru kandidat; yang ditolak tetap bercatatan."""
-    import psycopg
-    from psycopg.rows import dict_row
-
     from .research import journal_store
 
     sesi = _journal_session(dsn, trade_date)
     gerbang, konteks = _journal_gate_parts(dsn)
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         hasil = journal_store.write_session(
@@ -631,13 +623,10 @@ def _job_journal_outcomes() -> None:
     if not dsn:
         return
     try:
-        import psycopg
-        from psycopg.rows import dict_row
-
         from .research import journal_store
 
         with (
-            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            db.connect(dict_rows=True) as conn,
             conn.cursor() as cur,
         ):
             hitung = journal_store.fill_outcomes(cur)
@@ -657,13 +646,10 @@ def _job_journal_reminder() -> int:
     if not notifier.enabled or not dsn:
         return 0
     try:
-        import psycopg
-        from psycopg.rows import dict_row
-
         sesi = _journal_session(dsn)
         hits: list[dict] = []
         with (
-            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            db.connect(dict_rows=True) as conn,
             conn.cursor() as cur,
         ):
             cur.execute(
@@ -716,12 +702,9 @@ def cmd_journal(args) -> None:
         return
 
     if aksi in ("outcomes", "summary", "state"):
-        import psycopg
-        from psycopg.rows import dict_row
-
         sesi = _journal_session(dsn, getattr(args, "trade_date", None))
         with (
-            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            db.connect(dict_rows=True) as conn,
             conn.cursor() as cur,
         ):
             if aksi == "outcomes":
@@ -812,7 +795,7 @@ def cmd_journal_resume(args) -> None:
 
 def cmd_signal_log(args) -> None:
     """Backfill + tampilkan track record sinyal (jejak sinyal)."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         say("[err] DATABASE_URL belum diisi", err=True)
         return
@@ -825,7 +808,7 @@ def cmd_signal_log(args) -> None:
 
 def cmd_ic(args) -> None:
     """Run IC analysis manual + simpan histori bobot faktor."""
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         say("[err] DATABASE_URL belum diisi", err=True)
         return
@@ -872,7 +855,7 @@ def _job_index_eod_close() -> None:
         return  # belum lewat close — lihat alasannya di `_boleh_tulis_close_index`
     if not _is_market_hours() and datetime.now(WIB).weekday() >= 5:
         return  # weekend guard (cron sudah bursa-only, ini double safety)
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     try:
@@ -1093,15 +1076,13 @@ def _ingest_eod_research(rows) -> None:
     """
     import json
 
-    import psycopg
-
     from .market_segment import ensure_table
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     inserted = quarantined = 0
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         # Kolom nr_* (pasar non-reguler) harus ada sebelum insert bawah; DDL
         # idempoten + no-op kalau sudah ada, jadi aman dijalankan tiap EOD.
         ensure_table(cur)
@@ -1190,11 +1171,9 @@ def _upsert_segment_day(rows) -> None:
     volume/value pasar non-reguler, bukan cuma pasar reguler. Gagal di sini
     tak boleh menjatuhkan pipeline EOD — dibungkus pemanggil.
     """
-    import psycopg
-
     from .market_segment import aggregate_day, upsert_day
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return
     by_date: dict[str, list] = {}
@@ -1205,23 +1184,21 @@ def _upsert_segment_day(rows) -> None:
             continue
         by_date.setdefault(trade_date, []).append(r)
 
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         for trade_date, day_rows in by_date.items():
             upsert_day(cur, trade_date, aggregate_day(day_rows))
 
 
 def cmd_trade_summary(args) -> None:
     """Tampilkan (dan opsional isi ulang) agregat pasar reguler/non-reguler."""
-    import psycopg
-
     from .market_segment import _int, _num
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         say("DATABASE_URL belum di-set — tidak bisa baca/menulis agregat.")
         return
 
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         if getattr(args, "rebuild", False):
             from types import SimpleNamespace
 
@@ -1326,12 +1303,10 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
     ``_eod_catchup``: satu definisi "sudah lengkap" supaya keduanya tidak saling
     meniarakan pekerjaan.
     """
-    import psycopg
-
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         return (False, False)
-    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+    with db.connect(autocommit=False) as conn, conn.cursor() as cur:
         cur.execute(
             "select 1 from research.latest_pit where trade_date = %s limit 1",
             (day,),
@@ -1610,11 +1585,9 @@ def snapshot_ownership(
     code, holder_name, category), jadi menjalankan ulang di hari yang sama aman
     dan emiten tanpa data tidak menimpa snapshot lama.
     """
-    import psycopg
-
     from .ownership_store import snapshot_from_profile
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn()
     if not dsn:
         say("[err] DATABASE_URL belum diisi", err=True)
         return 0, 0
@@ -1625,7 +1598,7 @@ def snapshot_ownership(
     client = client or IDXClient()
     ok = total = 0
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with db.connect() as conn, conn.cursor() as cur:
             for i, code in enumerate(codes, 1):
                 try:
                     prof = client.fetch_company_profile(code)
@@ -2361,7 +2334,7 @@ def cmd_serve(args) -> None:
     # sekaligus melaporkan lubang close indeks hari lampau (tidak bisa ditarik
     # otomatis) — di jalur sore laporan itu sengaja dimatikan supaya log bersih.
     try:
-        if os.getenv("DATABASE_URL"):
+        if db.tersedia():
             _eod_catchup(
                 client,
                 storage,

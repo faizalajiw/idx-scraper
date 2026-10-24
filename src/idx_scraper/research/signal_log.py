@@ -30,14 +30,13 @@ Contoh pakai:
 from __future__ import annotations
 
 import argparse
-import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import psycopg
 
+from .. import db
 from ..analysis import calculate_indicators, is_mechanical_sell, signal_series
 from ..logging_setup import say
 from .events import _nw_tstat
@@ -220,7 +219,7 @@ def load_dividends(dsn: str) -> dict[str, list[tuple[date, float]]]:
 
     Hanya dipakai untuk filter SELL-palsu-ex-dividend; kosong bukan error.
     """
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 """select code, ex_date, cash_amount
@@ -240,7 +239,7 @@ def load_dividends(dsn: str) -> dict[str, list[tuple[date, float]]]:
 
 def load_regimes(dsn: str) -> dict[str, str]:
     """Peta ``{'YYYY-MM-DD': regime}`` dari research.regime_daily (kosong OK)."""
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         try:
             cur.execute(
                 "select trade_date, regime from research.regime_daily where regime is not null"
@@ -253,7 +252,7 @@ def load_regimes(dsn: str) -> dict[str, str]:
 
 def load_log(dsn: str) -> pd.DataFrame:
     """Baca tabel log sebagai DataFrame dengan tipe siap-merge (date datetime64)."""
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute(_DDL)  # idempoten: tabel selalu ada
         cur.execute(_SELECT_LOG)
         rows = cur.fetchall()
@@ -305,7 +304,7 @@ def backfill(
     written = 0
     # Satu transaksi: delete rentang + insert ulang, supaya gagal di tengah
     # tidak meninggalkan log bolong.
-    with psycopg.connect(dsn, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(autocommit=False, timeout=10) as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         cur.execute("delete from research.signal_log where trade_date >= %s", (start.date(),))
         for r in rows.itertuples():
@@ -543,7 +542,7 @@ def main() -> int:
     ap.add_argument("--k", type=int, nargs="+", default=list(DEFAULT_HORIZONS))
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1

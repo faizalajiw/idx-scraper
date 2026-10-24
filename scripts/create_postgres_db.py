@@ -8,10 +8,9 @@ Safe to re-run: skips creation if the database already exists.
 
 from __future__ import annotations
 
-import os
 from urllib.parse import urlsplit, urlunsplit
 
-import psycopg
+from idx_scraper import db
 
 
 def _target_db(dsn: str) -> str:
@@ -27,12 +26,12 @@ def _maintenance_dsn(dsn: str) -> str:
 
 
 def main() -> None:
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         raise SystemExit("DATABASE_URL not set (put it in .env)")
 
     dbname = _target_db(dsn)
-    with psycopg.connect(_maintenance_dsn(dsn), autocommit=True, connect_timeout=10) as conn:
+    with db.connect(url=_maintenance_dsn(dsn), timeout=10) as conn:
         exists = conn.execute("select 1 from pg_database where datname = %s", (dbname,)).fetchone()
         if exists:
             print(f"database '{dbname}' already exists")

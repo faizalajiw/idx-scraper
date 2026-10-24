@@ -15,6 +15,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from .. import db
 from .config import get_settings
 
 _pool: ConnectionPool | None = None
@@ -26,8 +27,7 @@ def init_pool() -> ConnectionPool:
     if _pool is not None:
         return _pool
     settings = get_settings()
-    if not settings.database_url:
-        raise RuntimeError("DATABASE_URL is not set; the API requires Postgres.")
+    db_url = db.dsn()
 
     def _configure(conn: Any) -> None:
         # Read-only API: autocommit avoids leaving pooled connections INTRANS.
@@ -35,7 +35,7 @@ def init_pool() -> ConnectionPool:
         conn.execute("set time zone 'Asia/Jakarta'")  # keep dates/times in WIB
 
     _pool = ConnectionPool(
-        conninfo=settings.database_url,
+        conninfo=db_url,
         min_size=settings.pool_min,
         max_size=settings.pool_max,
         open=True,

@@ -282,6 +282,7 @@ menunjuk ke situ; `cli.py` memanggil `load_dotenv()` sendiri).
 | `IDX_SQLITE_PATH` | `./data/idx.db` | hanya dipakai bila `IDX_STORAGE=sqlite` |
 | `IDX_LOG_LEVEL` | `INFO` | level logging untuk semua perintah `idx` (job terjadwal termasuk). Naikkan ke `DEBUG` saat menyelidiki |
 | `IDX_LOG_DIR` | (kosong) | direktori berkas log harian (`idx-YYYYMMDD.log`, rotasi 5 MB × 5). Kosong = hanya stderr, seperti dulu. Disarankan diisi di VPS supaya output job terjadwal tersimpan dengan stempel waktu & nama job |
+| `IDX_DB_APP_NAME` | `idx-scraper` | `application_name` tiap koneksi — dipakai `pg_stat_activity` untuk memisahkan klien kita dari alat lain saat ada koneksi menggantung |
 
 ### Berkas status (opsional, default di CWD — biarkan saja kecuali perlu)
 

@@ -8,6 +8,8 @@ Supports:
 
 from __future__ import annotations
 
+# Optional imports (only loaded if backend selected)
+import contextlib
 import os
 import sqlite3
 from abc import ABC, abstractmethod
@@ -16,14 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Optional imports (only loaded if backend selected)
-try:
-    import psycopg
-except ImportError:
-    psycopg = None
-
-import contextlib
-
+from . import db
 from .models import EodStockRow, IndexQuote, StockQuote
 
 
@@ -374,16 +369,12 @@ class SQLiteStorage(Storage):
 
 
 class PostgresStorage(Storage):
-    """PostgreSQL storage via psycopg. One long-lived connection, autocommit."""
+    """PostgreSQL storage. One long-lived connection via db.connect, autocommit."""
 
     def __init__(self, dsn: str) -> None:
-        if psycopg is None:
-            raise RuntimeError(
-                "psycopg[binary] not installed. Run: pip install 'idx-scraper[postgres]'"
-            )
         self._dsn = dsn
         # Use autocommit for simple inserts; any external pooler is set by the DSN.
-        self._conn = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
+        self._conn = db.connect(url=dsn, timeout=10)
         self._conn.execute("set time zone 'Asia/Jakarta'")  # keep session dates/times in WIB
         self._init_schema()
 
@@ -400,7 +391,7 @@ class PostgresStorage(Storage):
         except Exception:
             with contextlib.suppress(Exception):
                 self._conn.close()
-        self._conn = psycopg.connect(self._dsn, autocommit=True, connect_timeout=10)
+        self._conn = db.connect(url=self._dsn, timeout=10)
         self._conn.execute("set time zone 'Asia/Jakarta'")
 
     def _init_schema(self) -> None:
@@ -693,10 +684,9 @@ def get_storage_from_env() -> Storage:
     """Factory: pick backend from env vars."""
     backend = os.getenv("IDX_STORAGE", "sqlite").lower()
     if backend == "postgres":
-        dsn = os.getenv("DATABASE_URL")
-        if not dsn:
+        if not db.tersedia():
             raise RuntimeError(f"IDX_STORAGE={backend} but DATABASE_URL not set")
-        return PostgresStorage(dsn)
+        return PostgresStorage(db.dsn())
     if backend != "sqlite":
         # Tanpa gerbang ini nilai tak dikenal (mis. nama backend lama di .env)
         # diam-diam jatuh ke SQLite dan data masuk ke file, bukan ke Postgres.

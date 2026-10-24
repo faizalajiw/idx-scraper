@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import psycopg
+from idx_scraper import db
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGO_DIR = ROOT / "idx-web" / "public" / "logos" / "brokers"
@@ -61,7 +61,7 @@ def load_env() -> None:
 
 
 def broker_codes() -> list[str]:
-    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    with db.connect() as conn:
         rows = conn.execute(
             "SELECT DISTINCT broker_code FROM research.broker_daily ORDER BY broker_code"
         ).fetchall()

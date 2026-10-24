@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import sys
 from datetime import datetime, time, timedelta, timezone
 
-import psycopg
 import yfinance as yf
+
+from idx_scraper import db
 
 WIB = timezone(timedelta(hours=7))
 # Setelah 15:59:59.999 WIB dianggap "close resmi" hari itu (pasca closing auction).
@@ -58,7 +58,7 @@ def backfill_index_eod(dsn: str, days: int) -> tuple[int, int]:
 
     upserted = 0
     snapshots = 0
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
 
         # 0) Pastikan upsert idempotent: unique index (code, date) + dedupe lama.
@@ -166,7 +166,7 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=90, help="rentang hari historis (default 90)")
     args = parser.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         print("[err] DATABASE_URL belum diisi di .env", file=sys.stderr)
         return 1

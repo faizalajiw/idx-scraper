@@ -42,13 +42,11 @@ Pemakaian:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from datetime import date
 
-import psycopg
-
+from idx_scraper import db
 from idx_scraper.client import IDXClient
 from scripts.backfill_raw_eod import (
     _num,
@@ -91,7 +89,7 @@ def tambal(
     limit: int = 0,
 ) -> None:
     load_env()
-    dsn = os.environ.get("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         print("[repair] ERROR: DATABASE_URL tidak ditemukan di environment", file=sys.stderr)
         sys.exit(1)
@@ -107,7 +105,7 @@ def tambal(
     total_sebelum = 0
     total_terisi = 0
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         for i, d in enumerate(days, 1):
             sebelum = conn.execute(_HITUNG_NULL, (d,)).fetchone()[0]
             total_sebelum += sebelum

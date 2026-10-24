@@ -23,10 +23,12 @@ import sys
 from decimal import Decimal
 
 try:
-    import psycopg
+    import psycopg  # noqa: F401 - impor sendiri adalah pemeriksaan
 except ImportError:
     print("psycopg not installed. Run: pip install 'idx-scraper[postgres]'", file=sys.stderr)
     raise
+
+from idx_scraper import db
 
 TABLES = [
     "index_quotes",
@@ -66,7 +68,7 @@ class Report:
 
 def validate(sqlite_path: str, dsn: str) -> bool:
     sconn = sqlite3.connect(sqlite_path)
-    pconn = psycopg.connect(dsn, connect_timeout=10)
+    pconn = db.connect(autocommit=False, timeout=15)
     rep = Report()
     try:
         print("== Row counts ==")

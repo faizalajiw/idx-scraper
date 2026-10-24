@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 from dataclasses import (
     dataclass,
     field,
@@ -31,6 +30,7 @@ from dataclasses import (
 import numpy as np
 import pandas as pd
 
+from .. import db
 from ..logging_setup import say
 
 # Konteks harga pasar utk kurva event-time (diset API/CLI via set_market_daily).
@@ -400,7 +400,7 @@ def main() -> int:
     ap.add_argument("--months", type=int, default=18)
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1

@@ -29,15 +29,13 @@ Quick check:
 from __future__ import annotations
 
 import math
-import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Self
 
-import psycopg
-
+from . import db
 from .logging_setup import say
 
 WIB = timezone(timedelta(hours=7))
@@ -133,8 +131,8 @@ class PITReader:
     """Read-only, look-ahead-free access to the research price layer."""
 
     def __init__(self, dsn: str | None = None):
-        self.dsn = dsn or os.environ["DATABASE_URL"]
-        self._conn = psycopg.connect(self.dsn, autocommit=True)
+        self.dsn = dsn or db.dsn()
+        self._conn = db.connect(url=self.dsn)
 
     def close(self) -> None:
         self._conn.close()

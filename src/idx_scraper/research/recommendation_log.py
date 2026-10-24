@@ -36,15 +36,13 @@ from __future__ import annotations
 import argparse
 import logging
 import math
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import psycopg
-from psycopg.rows import dict_row
 
+from .. import db
 from ..analysis import calculate_indicators, signal_series
 from ..logging_setup import say
 from ..smart_money import PRICE_WINDOW, pattern_flags
@@ -139,7 +137,7 @@ def load_candidate_panel(dsn: str, sessions: int = SESSION_LOOKBACK) -> dict[str
     ``foreign_net * close``), urut tanggal menaik per emiten.
     """
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         cur.execute(
@@ -470,7 +468,7 @@ def _to_log_row(candidate: dict[str, Any], when: pd.Timestamp) -> dict[str, Any]
 
 def load_log(dsn: str) -> pd.DataFrame:
     """Baca tabel log sebagai DataFrame (date datetime64 siap-merge)."""
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute(_DDL)  # idempoten: tabel selalu ada
         cur.execute(_SELECT_LOG)
         rows = cur.fetchall()
@@ -522,7 +520,7 @@ def record(
         quarantined=quarantined,
     )
     cutoff = datetime.now(WIB).date() - timedelta(days=int(months * 31))
-    with psycopg.connect(dsn, connect_timeout=15) as conn, conn.cursor() as cur:
+    with db.connect(autocommit=False, timeout=15) as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         cur.execute("delete from research.recommendation_log where trade_date >= %s", (cutoff,))
         for r in records:
@@ -735,7 +733,7 @@ def main() -> int:
     ap.add_argument("--k", type=int, nargs="+", default=list(DEFAULT_HORIZONS))
     args = ap.parse_args()
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         logger.error("[err] DATABASE_URL belum diisi")
         return 1

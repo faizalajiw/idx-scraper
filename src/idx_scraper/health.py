@@ -46,6 +46,8 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
+from . import db
+
 WIB = timezone(timedelta(hours=7))
 
 # Lewat jam ini (WIB) di hari kerja, EOD hari ini dianggap telat kalau belum ada.
@@ -195,9 +197,7 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
     Read-only. Kalau ``DATABASE_URL`` tidak ada, hasilnya ditandai ``missing``
     supaya pemanggil tetap tahu ada masalah konfigurasi.
     """
-    import psycopg
-
-    dsn = dsn or os.getenv("DATABASE_URL")
+    dsn = dsn or (db.dsn() if db.tersedia() else None)
     now = now or datetime.now(WIB)
     expected = expected_trading_date(now)
     if not dsn:
@@ -211,7 +211,7 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
             and (now.hour, now.minute) >= (EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE),
         )
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:
+    with db.connect(url=dsn, timeout=8) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
         cur.execute("select max(trade_date) from research.prices_pit")
         stocks_latest = cur.fetchone()[0]
@@ -256,13 +256,11 @@ def check_field_coverage(dsn: str | None = None, sessions: int = 30) -> FieldCov
     ``ok`` (tanpa DB tidak ada yang bisa dinilai) — pemanggil tetap dapat
     laporannya lewat ``checked == 0``.
     """
-    import psycopg
-
-    dsn = dsn or os.getenv("DATABASE_URL")
+    dsn = dsn or (db.dsn() if db.tersedia() else None)
     if not dsn:
         return FieldCoverage(checked=0, troublemakers=[], worst_pct=100.0)
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:
+    with db.connect(url=dsn, timeout=8) as conn, conn.cursor() as cur:
         cur.execute(
             "select trade_date, count(*) total, count(foreign_net) terisi "
             "from research.raw_eod group by 1 order by 1"
@@ -467,13 +465,11 @@ def check_row_counts(
     ``in_progress`` = sesi yang mungkin masih ditulis (biasanya hari ini);
     sesi itu tidak dinilai — lihat ``evaluate_row_counts``.
     """
-    import psycopg
-
-    dsn = dsn or os.getenv("DATABASE_URL")
+    dsn = dsn or (db.dsn() if db.tersedia() else None)
     if not dsn:
         return RowCountCoverage(checked=0, threshold_pct=threshold_pct)
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:
+    with db.connect(url=dsn, timeout=8) as conn, conn.cursor() as cur:
         cur.execute("select trade_date, count(*) from research.raw_eod group by 1 order by 1")
         rows = cur.fetchall()
 
@@ -523,13 +519,11 @@ def check_session_gaps(dsn: str | None = None, in_progress: date | None = None) 
     itu tidak diadukan sebagai lubang. Sifatnya sabuk pengaman — lihat
     ``evaluate_session_gaps``.
     """
-    import psycopg
-
-    dsn = dsn or os.getenv("DATABASE_URL")
+    dsn = dsn or (db.dsn() if db.tersedia() else None)
     if not dsn:
         return SessionGaps(first=None, last=None, sessions=0)
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=8) as conn, conn.cursor() as cur:
+    with db.connect(url=dsn, timeout=8) as conn, conn.cursor() as cur:
         cur.execute("select distinct trade_date from research.raw_eod order by 1")
         eod_days = [r[0] for r in cur.fetchall()]
         cur.execute(

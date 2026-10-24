@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 
 from idx_scraper.watchlist_store import read_watchlist
 
+from .. import db
+
 
 def _parse_watchlist(raw: str | None) -> list[str]:
     if not raw:
@@ -27,7 +29,7 @@ class Settings:
         # Auto-load the project .env so `uvicorn idx_scraper.api.app:app` works
         # without manual sourcing (same behavior as the CLI entrypoint).
         load_dotenv()
-        self.database_url: str | None = os.getenv("DATABASE_URL")
+        self.database_url: str | None = db.dsn() if db.tersedia() else None
         # Env var wins; otherwise read the .env file directly so watchlist
         # edits made through the API survive restarts (and are seen fresh).
         self.watchlist: list[str] = _parse_watchlist(os.getenv("IDX_WATCHLIST")) or read_watchlist()

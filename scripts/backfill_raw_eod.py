@@ -34,8 +34,7 @@ import time
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 
-import psycopg
-
+from idx_scraper import db
 from idx_scraper.client import IDXClient
 
 WIB = timezone(timedelta(hours=7))  # IDX business timezone
@@ -188,7 +187,7 @@ def backfill(
     ulang: bool = False,
 ) -> None:
     load_env()
-    dsn = os.environ.get("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         print("[backfill] ERROR: DATABASE_URL not found in environment", file=sys.stderr)
         sys.exit(1)
@@ -226,7 +225,7 @@ def backfill(
 
     on_conflict = " on conflict (code, trade_date) " + (_UPSERT_SET if ulang else "do nothing")
 
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         ada = {row[0] for row in conn.execute("select distinct trade_date from research.raw_eod")}
         to_fetch = tanggal_perlu(days, ada, ulang)
 
@@ -312,7 +311,7 @@ def backfill(
 
 def refresh_prices_pit(dsn: str) -> None:
     """Populate prices_pit from the newest knowledge_date per (code, trade_date)."""
-    with psycopg.connect(dsn, autocommit=True) as conn:
+    with db.connect() as conn:
         n = conn.execute(
             """
             insert into research.prices_pit

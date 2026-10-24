@@ -8,7 +8,6 @@ Sumber tunggal (lihat `news_sources.py`).
 
 from __future__ import annotations
 
-import os
 import re
 import urllib.request
 from datetime import UTC, datetime, timedelta, timezone
@@ -18,6 +17,7 @@ from urllib.parse import urljoin
 import psycopg
 from bs4 import BeautifulSoup
 
+from . import db
 from .logging_setup import say
 from .news_sources import BASE_URL, SOURCE
 
@@ -97,10 +97,7 @@ def fetch_snips(url: str = BASE_URL, timeout: int = 20) -> list[dict[str, Any]]:
 
 
 def _dsn() -> str:
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL belum diset")
-    return dsn
+    return db.dsn()
 
 
 def ensure_table(conn: psycopg.Connection) -> None:
@@ -149,7 +146,7 @@ def run_once(now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     cutoff = retention_cutoff(now)
     items = [it for it in fetch_snips() if it["published_at"] >= cutoff]
-    with psycopg.connect(_dsn(), autocommit=False, connect_timeout=10) as conn:
+    with db.connect(autocommit=False, timeout=10) as conn:
         ensure_table(conn)
         new = upsert(conn, items)
         prune(conn, now=now)

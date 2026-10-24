@@ -16,9 +16,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
-import psycopg
-from psycopg.rows import dict_row
 
+from .. import db
 from .claim_eval import VERDICT_HORIZON, claim_outcomes, claim_verdict, format_record_line
 from .journal import (
     CLAIM_COLUMNS,
@@ -119,7 +118,7 @@ def pool_counts(dsn: str, trade_date: str) -> tuple[int, int]:
     membedakan "job rekomendasi belum jalan" dari "sesi ini memang tanpa nama".
     """
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         cur.execute(
@@ -142,7 +141,7 @@ def candidates_for(
     rupiah sengaja dibiarkan kosong alih-alih diarang.
     """
     with (
-        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        db.connect(dict_rows=True) as conn,
         conn.cursor() as cur,
     ):
         cur.execute(

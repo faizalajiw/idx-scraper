@@ -39,13 +39,13 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import pathlib
 import sys
 from datetime import date, datetime, time, timedelta, timezone
 
-import psycopg
 import yfinance as yf
+
+from idx_scraper import db
 
 WIB = timezone(timedelta(hours=7))
 CLOSE_T = time(16, 0, 0)  # pasca closing auction, konvensi index_summary_daily
@@ -113,7 +113,6 @@ def _yahoo_daily(start: date, end: date) -> tuple[dict[date, dict[str, float]], 
 
 def backfill(start: date, end: date) -> int:
     """Isi satu rentang dari Yahoo. Exit code: 0 bila ada bar tertulis, 1 bila gagal."""
-    dsn = os.environ["DATABASE_URL"]
     try:
         bars, dilewati = _yahoo_daily(start, end)
     except Exception as exc:
@@ -130,7 +129,7 @@ def backfill(start: date, end: date) -> int:
         return 1
     print(f"[idx] bar {min(bars)} .. {max(bars)}")
 
-    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with db.connect() as conn, conn.cursor() as cur:
         # 0) Pastikan unique index (code, date) ada sebelum insert dengan
         #    "on conflict". sql/schema.sql sekarang mendefinisikannya juga, tapi
         #    DB yang belum menjalankan file itu (atau versi lamanya) tetap perlu

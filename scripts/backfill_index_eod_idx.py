@@ -33,12 +33,10 @@ indeks hanya lewat scripts/backfill_index_eod.py (Yahoo, provenance beda).
 from __future__ import annotations
 
 import contextlib
-import os
 import sys
 from datetime import datetime, time, timedelta, timezone
 
-import psycopg
-
+from idx_scraper import db
 from idx_scraper.client import IDXClient
 
 WIB = timezone(timedelta(hours=7))
@@ -110,7 +108,7 @@ def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
 
     captured = datetime.combine(today, CLOSE_T, tzinfo=WIB)
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute("set time zone 'Asia/Jakarta'")
 
         # IDX kadang mengembalikan change 0/None; turunkan dari close hari bursa sebelumnya.
@@ -159,7 +157,7 @@ def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
 
 
 def main() -> None:
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         print("[err] DATABASE_URL belum diisi", file=sys.stderr)
         return

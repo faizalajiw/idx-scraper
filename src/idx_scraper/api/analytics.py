@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -22,6 +21,7 @@ from typing import Any
 
 import pandas as pd
 
+from .. import db
 from ..analysis import (
     calculate_adx,
     calculate_indicators,
@@ -1746,7 +1746,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
     if cached is not None:
         return cached
     out: dict[str, dict[str, float | None]] = {}
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if dsn:
         try:
             from ..research.orderbook import compute_daily, load_snapshots
@@ -1781,9 +1781,7 @@ def _event_study_bundle() -> dict[str, Any]:
 
     from ..research import events as ev
 
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
+    dsn = db.dsn()
 
     # Panel adjusted utk return emiten; market_daily (raw close rata-rata
     # pasar) utk konteks kurva event-time.
@@ -1937,11 +1935,7 @@ def get_factors_overview() -> dict[str, Any]:
 
 def get_regime_history(days: int = 90) -> dict[str, Any]:
     """Histori regime harian + agregat jangka panjang dari research.regime_daily."""
-    import psycopg
-
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
+    dsn = db.dsn()
 
     from ..research.regime import backfill, summary
 
@@ -1951,7 +1945,7 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
     with contextlib.suppress(Exception):
         backfill(dsn)
 
-    with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db.connect(timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
             """select trade_date, regime, adx, realized_vol
                from research.regime_daily where regime is not null
@@ -1994,9 +1988,7 @@ def get_sentiment(limit: int = 15) -> dict[str, Any]:
 
     from ..research import sentiment
 
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
+    dsn = db.dsn()
 
     with get_cursor() as cur:
         idx = _latest_index(cur)
@@ -2030,9 +2022,7 @@ def get_signal_track() -> dict[str, Any]:
 
     from ..research import signal_log as sl
 
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
+    dsn = db.dsn()
 
     try:
         if sl.load_log(dsn).empty:
@@ -2233,7 +2223,7 @@ def broker_activity_snapshot() -> dict[str, Any]:
         "panel": pd.DataFrame(),
     }
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         snap["reason"] = "DATABASE_URL belum diisi"
         _research_cache_put("broker_activity_snapshot", snap)
@@ -3182,7 +3172,7 @@ def get_recommendation_track() -> dict[str, Any]:
 
     from ..research.recommendation_log import evaluate
 
-    dsn = os.getenv("DATABASE_URL")
+    dsn = db.dsn() if db.tersedia() else None
     if not dsn:
         out = {
             "candidates": 0,
