@@ -16,6 +16,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -1531,6 +1532,97 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
 # --------------------------------------------------------------- AI screener
 
 
+@dataclass(frozen=True)
+class _FilterScreener:
+    """Kriteria opsional screener; semua kriteria aktif digabung dengan DAN.
+
+    Satu dataclass murni data — predikatnya dipisah supaya tiap kriteria bisa
+    diuji sendiri-sendiri dan ``get_screener`` tinggal menerapkannya.
+    """
+
+    signal: str | None = None
+    rsi_min: float | None = None
+    rsi_max: float | None = None
+    min_momentum: float | None = None
+    max_momentum: float | None = None
+    min_value: float | None = None
+    foreign_in_only: bool = False
+    min_vol_ratio: float | None = None
+    min_broker_score: float | None = None
+    min_days: int = 30
+
+
+def _tidak_di_bawah(nilai: float | None, batas: float | None) -> bool:
+    """Batas aktif + nilai tidak diketahui -> selalu gagal, bukan lolos diam-diam."""
+    return batas is None or (nilai is not None and nilai >= batas)
+
+
+def _tidak_di_atas(nilai: float | None, batas: float | None) -> bool:
+    return batas is None or (nilai is not None and nilai <= batas)
+
+
+def _lolos_hari(row: dict[str, Any], f: _FilterScreener) -> bool:
+    """``min_days`` hanya memfilter bila di atas bawaan 30 (perilaku lama)."""
+    return f.min_days <= 30 or row["hist_days"] >= f.min_days
+
+
+def _lolos_signal(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return not f.signal or row["signal"] == f.signal
+
+
+def _lolos_rsi_min(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_bawah(row["rsi"], f.rsi_min)
+
+
+def _lolos_rsi_max(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_atas(row["rsi"], f.rsi_max)
+
+
+def _lolos_momentum_min(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_bawah(row["momentum_20d"], f.min_momentum)
+
+
+def _lolos_momentum_max(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_atas(row["momentum_20d"], f.max_momentum)
+
+
+def _lolos_nilai(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_bawah(row["value"], f.min_value)
+
+
+def _lolos_asing_masuk(row: dict[str, Any], f: _FilterScreener) -> bool:
+    fnet = row["foreign_net"]
+    return not f.foreign_in_only or (fnet is not None and fnet > 0)
+
+
+def _lolos_vol_ratio(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_bawah(row["vol_ratio"], f.min_vol_ratio)
+
+
+def _lolos_broker(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return _tidak_di_bawah(row["broker_score"], f.min_broker_score)
+
+
+#: Urutan kriteria bebas — semuanya AND — tetapi daftarnya eksplisit supaya
+#: filter baru wajib masuk ke tabel ini, bukan terselip di fungsi utama.
+_KRITERIA_SCREENER = (
+    _lolos_hari,
+    _lolos_signal,
+    _lolos_rsi_min,
+    _lolos_rsi_max,
+    _lolos_momentum_min,
+    _lolos_momentum_max,
+    _lolos_nilai,
+    _lolos_asing_masuk,
+    _lolos_vol_ratio,
+    _lolos_broker,
+)
+
+
+def _lolos_screener(row: dict[str, Any], f: _FilterScreener) -> bool:
+    return all(kriteria(row, f) for kriteria in _KRITERIA_SCREENER)
+
+
 def get_screener(
     signal: str | None = None,
     rsi_min: float | None = None,
@@ -1559,41 +1651,19 @@ def get_screener(
     Baris lengkap (tanpa filter) di-cache; filter hanya menyeleksi baris, jadi
     bisa diterapkan ke cache tanpa mengubah hasil.
     """
-    rows = _screener_rows()
-
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        sig = row["signal"]
-        momo = row["momentum_20d"]
-        value = row["value"]
-        fnet = row["foreign_net"]
-        rsi = row["rsi"]
-        vol_ratio = row["vol_ratio"]
-        if min_days > 30 and row["hist_days"] < min_days:
-            continue
-        if signal and sig != signal:
-            continue
-        if rsi_min is not None and (rsi is None or rsi < rsi_min):
-            continue
-        if rsi_max is not None and (rsi is None or rsi > rsi_max):
-            continue
-        if min_momentum is not None and (momo is None or momo < min_momentum):
-            continue
-        if max_momentum is not None and (momo is None or momo > max_momentum):
-            continue
-        if min_value is not None and (value is None or value < min_value):
-            continue
-        if foreign_in_only and (fnet is None or fnet <= 0):
-            continue
-        if min_vol_ratio is not None and (vol_ratio is None or vol_ratio < min_vol_ratio):
-            continue
-        if min_broker_score is not None:
-            bs = row["broker_score"]
-            if bs is None or bs < min_broker_score:
-                continue
-        out.append(row)
-
-    return out[:limit]
+    spec = _FilterScreener(
+        signal=signal,
+        rsi_min=rsi_min,
+        rsi_max=rsi_max,
+        min_momentum=min_momentum,
+        max_momentum=max_momentum,
+        min_value=min_value,
+        foreign_in_only=foreign_in_only,
+        min_vol_ratio=min_vol_ratio,
+        min_broker_score=min_broker_score,
+        min_days=min_days,
+    )
+    return [row for row in _screener_rows() if _lolos_screener(row, spec)][:limit]
 
 
 def search_stocks(q: str, limit: int = 10) -> list[dict[str, Any]]:

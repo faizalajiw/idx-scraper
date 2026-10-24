@@ -788,6 +788,255 @@ def _zscore_context(df: pd.DataFrame) -> dict[str, Any]:
     return {"z": round(z, 2), "mean": round(float(mean), 2)}
 
 
+def _hold_layer_broker() -> tuple[dict[str, dict[str, Any]], bool]:
+    """Skor aktivitas broker per kode; gagal -> lapisan nonaktif.
+
+    Dihitung sebelum blok cursor: snapshot-nya membuka koneksi sendiri untuk
+    query panel faktor yang berat, jadi jangan tahan koneksi pool sambil
+    menunggu. Gagal atau belum tervalidasi -> lapisan tidak aktif (adj 0) dan
+    hold-check berperilaku persis seperti sebelum fitur ini ada.
+    """
+    from .analytics import broker_scores_by_code
+
+    try:
+        return broker_scores_by_code()
+    except Exception as e:
+        logger.warning(f"[warn] skor aktivitas broker dilewati: {e}")
+        return {}, False
+
+
+def _hold_layer_factor(cur: Any) -> tuple[dict[str, Any], dict[str, float] | None]:
+    """Percentile faktor cross-sectional + bobot IC; gagal -> lapisan kosong.
+
+    Percentile dihitung terhadap SELURUH pasar — bukan hanya watchlist — supaya
+    ranking bermakna statistik. Bobot dibaca dari research.factor_ic_history
+    (run `idx ic` terbaru); fallback konstanta bila tabel kosong.
+    """
+    from ..research.composite import latest_weights, market_factor_ranks
+
+    try:
+        return market_factor_ranks(cur), latest_weights(cur)
+    except Exception as e:
+        # Lapisan faktor adalah enhancement — DB query gagal tidak boleh
+        # mematikan hold-check teknikal yang sudah jalan.
+        logger.warning(f"[warn] composite factor ranks dilewati: {e}")
+        return {}, None
+
+
+def _hold_names(cur: Any) -> dict[str, str | None]:
+    """Nama emiten terbaru per kode (untuk label hasil)."""
+    cur.execute(
+        """select distinct on (code) code, name from research.latest_pit
+           order by code, trade_date desc"""
+    )
+    return {r["code"]: r["name"] for r in cur.fetchall()}
+
+
+def _hold_metrics(cur: Any, code: str, min_days: int) -> dict[str, Any] | None:
+    """Indikator + konteks harga satu emiten; ``None`` bila riwayat kurang."""
+    df, _ = _build_frame(cur, code)
+    if df.empty or len(df) < min_days:
+        return None
+    df = calculate_indicators(df)
+    raw_signal = generate_signal(df)
+    # Corp-action filter: SELL yang hanya terbentuk karena drop mekanis
+    # ex-dividend dinetralkan jadi HOLD juga di hold-check, supaya skor tidak
+    # kena penalti -25 untuk hal yang bukan tekanan jual.
+    signal, div_cash, div_mech = _apply_dividend_guard(cur, code, df, raw_signal)
+    last = df.iloc[-1]
+    close = float(last["close"])
+    ma_s = _f(last.get("MA_Short"))
+    ma_l = _f(last.get("MA_Long"))
+    macd = _f(last.get("MACD"))
+    macd_sig = _f(last.get("MACD_Signal"))
+    bb_u = _f(last.get("BB_Upper"))
+    bb_l = _f(last.get("BB_Lower"))
+    zc = _zscore_context(df)
+    z = zc["z"]
+    mean = zc["mean"]
+    return {
+        "signal": signal,
+        "div_cash": div_cash,
+        "div_mech": div_mech,
+        "trend_up": bool(ma_s is not None and ma_l is not None and ma_s > ma_l),
+        "rsi": _f(last.get("RSI")),
+        "macd_bullish": bool(macd is not None and macd_sig is not None and macd > macd_sig),
+        "bb_pos": (
+            ("above" if close > bb_u else "below" if close < bb_l else "inside")
+            if bb_u is not None and bb_l is not None and bb_u > bb_l
+            else None
+        ),
+        "z": z,
+        "below_target": (
+            round((mean - close) / mean * 100, 1) if mean is not None and mean > 0 else None
+        ),
+    }
+
+
+def _hold_skor_sinyal(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    """Sinyal teknikal — faktor dominan."""
+    if m["signal"] == "BUY":
+        return sk + 20, [*al, "Sinyal teknikal BUY (SMA20 > SMA50, RSI sehat)"]
+    if m["signal"] == "SELL":
+        return sk - 25, [*al, "Sinyal teknikal SELL (tren jangka pendek menembus ke bawah)"]
+    if m["div_mech"]:
+        return sk, [
+            *al,
+            f"Sinyal SELL dibatalkan: turun mekanis ex-dividend "
+            f"(Rp {m['div_cash']:.0f}/saham) — bukan tekanan jual",
+        ]
+    return sk, [*al, "Sinyal teknikal HOLD (tidak ada konfirmasi kuat)"]
+
+
+def _hold_skor_tren(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    if m["trend_up"]:
+        return sk + 10, [*al, "Tren menengah masih naik (SMA20 di atas SMA50)"]
+    return sk - 5, [*al, "Tren menengah melemah (SMA20 di bawah SMA50)"]
+
+
+def _hold_skor_macd(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    if m["macd_bullish"]:
+        return sk + 5, [*al, "MACD masih bullish (di atas garis sinyal)"]
+    return sk - 5, [*al, "MACD melemah (di bawah garis sinyal)"]
+
+
+def _hold_skor_rsi(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    rsi = m["rsi"]
+    if rsi is None:
+        return sk, al
+    if rsi >= 75:
+        return sk - 10, [*al, f"RSI {rsi:.0f} overbought — rentan koreksi"]
+    if rsi <= 25:
+        return sk - 10, [*al, f"RSI {rsi:.0f} oversold — tekanan jual kuat"]
+    if rsi >= 65:
+        return sk - 3, [*al, f"RSI {rsi:.0f} mendekati overbought"]
+    return sk, al
+
+
+def _hold_skor_valuasi(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    """Konteks valuasi (skor-z vs band 60 hari sendiri)."""
+    z = m["z"]
+    if z is None:
+        return sk, al
+    if z >= 2.0:
+        return sk - 15, [*al, f"Harga jauh di atas band 60-hari (z {z:+.1f}) — overextended"]
+    if z >= 1.5:
+        return sk - 8, [*al, f"Harga di atas band 60-hari (z {z:+.1f}) — waspada"]
+    if z <= -1.0:
+        # Penurunan hanya sehat kalau trennya masih naik.
+        if m["trend_up"]:
+            return sk + 5, [
+                *al,
+                f"Harga di bawah band 60-hari (z {z:+.1f}) tapi tren masih naik — kualitas dip",
+            ]
+        return sk - 5, [*al, f"Harga di bawah band 60-hari (z {z:+.1f}) dengan tren melemah"]
+    return sk, [*al, "Harga masih dalam band wajar 60-hari"]
+
+
+def _hold_skor_bb(sk: float, al: list[str], m: dict[str, Any]) -> tuple[float, list[str]]:
+    if m["bb_pos"] == "above":
+        return sk - 5, [*al, "Harga menembus Bollinger atas — ekstensi jangka pendek"]
+    if m["bb_pos"] == "below":
+        return sk - 10, [*al, "Harga di bawah Bollinger bawah — tekanan jual"]
+    return sk, al
+
+
+def _hold_skor_dasar(m: dict[str, Any]) -> tuple[float, list[str]]:
+    """Skor 0-100 dari komponen teknikal murni, sebelum lapisan faktor/broker.
+
+    Urutan pemanggilan menentukan urutan alasan di keluaran; skornya sendiri
+    penjumlahan sehingga urutan tidak mengubah hasil.
+    """
+    sk = 50.0
+    al: list[str] = []
+    sk, al = _hold_skor_sinyal(sk, al, m)
+    sk, al = _hold_skor_tren(sk, al, m)
+    sk, al = _hold_skor_macd(sk, al, m)
+    sk, al = _hold_skor_rsi(sk, al, m)
+    sk, al = _hold_skor_valuasi(sk, al, m)
+    sk, al = _hold_skor_bb(sk, al, m)
+    return max(0.0, min(100.0, sk)), al
+
+
+def _hold_verdict(sk: float) -> str:
+    if sk >= 75:
+        return "STRONG HOLD"
+    if sk >= 55:
+        return "HOLD"
+    if sk >= 35:
+        return "TRIM"
+    return "EXIT"
+
+
+def _hold_baris(
+    cur: Any,
+    code: str,
+    nama: dict[str, str | None],
+    market_ranks: dict[str, Any],
+    weights: dict[str, float] | None,
+    broker_by_code: dict[str, dict[str, Any]],
+    broker_validated: bool,
+    min_days: int,
+) -> dict[str, Any] | None:
+    """Satu baris hold-check: skor dasar, lapisan faktor, lapisan broker."""
+    from ..research.broker_activity import apply_broker_layer
+    from ..research.composite import apply_factor_layer
+
+    m = _hold_metrics(cur, code, min_days)
+    if m is None:
+        return None
+
+    base_score, reasons = _hold_skor_dasar(m)
+    verdict = _hold_verdict(base_score)
+
+    base = market_ranks.get(code)
+    score, verdict, reasons, factor_adj = apply_factor_layer(
+        base_score, verdict, reasons, base, weights
+    )
+    broker_row = broker_by_code.get(code)
+    score, verdict, reasons, broker_adj = apply_broker_layer(
+        score,
+        verdict,
+        reasons,
+        broker_row["score"] if broker_row else None,
+        broker_validated,
+    )
+
+    return {
+        "code": code,
+        "name": nama.get(code),
+        "signal": m["signal"],
+        "trend_up": m["trend_up"],
+        "rsi": m["rsi"],
+        "macd_bullish": m["macd_bullish"],
+        "bb_position": m["bb_pos"],
+        "z_score": m["z"],
+        "below_target_pct": m["below_target"],
+        "foreign_net": None,
+        "score": round(score),  # type: ignore[arg-type]
+        "base_score": round(base_score),  # type: ignore[arg-type]
+        "factor_adj": round(factor_adj, 1),
+        "factor_pct": base if base is not None else None,
+        "broker_score": broker_row["score"] if broker_row else None,
+        "broker_adj": round(broker_adj, 1),
+        "verdict": verdict,
+        "reasons": reasons,
+    }
+
+
+def _hold_lengkapi_foreign_net(out: list[dict[str, Any]]) -> None:
+    """Isi ``foreign_net`` EOD sebagai konteks; pass terpisah, loop utama tetap ramping."""
+    with get_cursor() as cur:
+        for row in out:
+            cur.execute(
+                """select foreign_net from research.latest_pit
+                   where code = %s order by trade_date desc limit 1""",
+                (row["code"],),
+            )
+            r = cur.fetchone()
+            row["foreign_net"] = _f(r["foreign_net"]) if r else None
+
+
 def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]:
     """ "Hold Check" verdicts: is each watched stock still worth holding?
 
@@ -813,224 +1062,28 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
     if cached is not None:
         return cached
 
-    # Lapisan aktivitas broker (proksi aliran, bobot dari IC). Dihitung SEBELUM
-    # blok cursor: snapshot-nya membuka koneksi sendiri untuk query panel faktor
-    # yang berat, jadi jangan tahan koneksi pool sambil menunggu. Gagal atau
-    # belum tervalidasi -> lapisan tidak aktif (adj 0) dan hold-check berperilaku
-    # persis seperti sebelum fitur ini ada.
-    from ..research.broker_activity import apply_broker_layer
-
-    try:
-        from .analytics import broker_scores_by_code
-
-        broker_by_code, broker_validated = broker_scores_by_code()
-    except Exception as e:
-        logger.warning(f"[warn] skor aktivitas broker dilewati: {e}")
-        broker_by_code, broker_validated = {}, False
+    broker_by_code, broker_validated = _hold_layer_broker()
 
     out: list[dict[str, Any]] = []
     with get_cursor() as cur:
-        names: dict[str, str | None] = {}
-        cur.execute(
-            """select distinct on (code) code, name from research.latest_pit
-               order by code, trade_date desc"""
-        )
-        for r in cur.fetchall():
-            names[r["code"]] = r["name"]
-
-        # Lapisan faktor (IC-derived): percentile cross-sectional vs SELURUH
-        # pasar — bukan hanya watchlist — supaya ranking bermakna statistik.
-        # Bobot dibaca dari research.factor_ic_history (run `idx ic` terbaru);
-        # fallback konstanta bila tabel kosong. Cache 30 menit di composite.
-        from ..research.composite import (
-            apply_factor_layer,
-            latest_weights,
-            market_factor_ranks,
-        )
-
-        try:
-            market_ranks = market_factor_ranks(cur)
-            weights = latest_weights(cur)
-        except Exception as e:
-            # Faktor lapisan adalah enhancement — DB query gagal tidak boleh
-            # mematikan hold-check teknikal yang sudah jalan.
-            logger.warning(f"[warn] composite factor ranks dilewati: {e}")
-            market_ranks = {}
-            weights = None
-
+        nama = _hold_names(cur)
+        market_ranks, weights = _hold_layer_factor(cur)
         for code in codes:
-            df, _ = _build_frame(cur, code)
-            if df.empty or len(df) < min_days:
-                continue
-            df = calculate_indicators(df)
-            raw_signal = generate_signal(df)
-            # Corp-action filter: SELL yang hanya terbentuk karena drop
-            # mekanis ex-dividend dinetralkan jadi HOLD juga di hold-check,
-            # supaya skor tidak kena penalti -25 untuk hal yang bukan
-            # tekanan jual.
-            signal, div_cash, div_mech = _apply_dividend_guard(cur, code, df, raw_signal)
-            last = df.iloc[-1]
-            close = float(last["close"])
-            rsi = _f(last.get("RSI"))
-            ma_s = _f(last.get("MA_Short"))
-            ma_l = _f(last.get("MA_Long"))
-            trend_up = bool(ma_s is not None and ma_l is not None and ma_s > ma_l)
-            macd = _f(last.get("MACD"))
-            macd_sig = _f(last.get("MACD_Signal"))
-            macd_bullish = bool(macd is not None and macd_sig is not None and macd > macd_sig)
-
-            bb_u = _f(last.get("BB_Upper"))
-            bb_l = _f(last.get("BB_Lower"))
-            if bb_u is not None and bb_l is not None and bb_u > bb_l:
-                bb_pos = "above" if close > bb_u else "below" if close < bb_l else "inside"
-            else:
-                bb_pos = None
-
-            zc = _zscore_context(df)
-            z = zc["z"]
-            mean = zc["mean"]
-            below_target = (
-                round((mean - close) / mean * 100, 1) if mean is not None and mean > 0 else None
-            )
-
-            reasons: list[str] = []
-            score = 50.0
-
-            # --- technical signal (dominant factor)
-            if signal == "BUY":
-                score += 20
-                reasons.append("Sinyal teknikal BUY (SMA20 > SMA50, RSI sehat)")
-            elif signal == "SELL":
-                score -= 25
-                reasons.append("Sinyal teknikal SELL (tren jangka pendek menembus ke bawah)")
-            elif div_mech:
-                reasons.append(
-                    f"Sinyal SELL dibatalkan: turun mekanis ex-dividend "
-                    f"(Rp {div_cash:.0f}/saham) — bukan tekanan jual"
-                )
-            else:
-                reasons.append("Sinyal teknikal HOLD (tidak ada konfirmasi kuat)")
-
-            if trend_up:
-                score += 10
-                reasons.append("Tren menengah masih naik (SMA20 di atas SMA50)")
-            else:
-                score -= 5
-                reasons.append("Tren menengah melemah (SMA20 di bawah SMA50)")
-
-            if macd_bullish:
-                score += 5
-                reasons.append("MACD masih bullish (di atas garis sinyal)")
-            else:
-                score -= 5
-                reasons.append("MACD melemah (di bawah garis sinyal)")
-
-            # --- RSI extremes
-            if rsi is not None:
-                if rsi >= 75:
-                    score -= 10
-                    reasons.append(f"RSI {rsi:.0f} overbought — rentan koreksi")
-                elif rsi <= 25:
-                    score -= 10
-                    reasons.append(f"RSI {rsi:.0f} oversold — tekanan jual kuat")
-                elif rsi >= 65:
-                    score -= 3
-                    reasons.append(f"RSI {rsi:.0f} mendekati overbought")
-
-            # --- valuation context (z-score vs own 60d band)
-            if z is not None:
-                if z >= 2.0:
-                    score -= 15
-                    reasons.append(f"Harga jauh di atas band 60-hari (z {z:+.1f}) — overextended")
-                elif z >= 1.5:
-                    score -= 8
-                    reasons.append(f"Harga di atas band 60-hari (z {z:+.1f}) — waspada")
-                elif z <= -1.0:
-                    # A dip only counts as healthy if the trend is still up.
-                    if trend_up:
-                        score += 5
-                        reasons.append(
-                            f"Harga di bawah band 60-hari (z {z:+.1f}) tapi tren masih naik — kualitas dip"
-                        )
-                    else:
-                        score -= 5
-                        reasons.append(
-                            f"Harga di bawah band 60-hari (z {z:+.1f}) dengan tren melemah"
-                        )
-                else:
-                    reasons.append("Harga masih dalam band wajar 60-hari")
-
-            if bb_pos == "above":
-                score -= 5
-                reasons.append("Harga menembus Bollinger atas — ekstensi jangka pendek")
-            elif bb_pos == "below":
-                score -= 10
-                reasons.append("Harga di bawah Bollinger bawah — tekanan jual")
-
-            score = max(0.0, min(100.0, score))
-            base_score = score
-            if score >= 75:
-                verdict = "STRONG HOLD"
-            elif score >= 55:
-                verdict = "HOLD"
-            elif score >= 35:
-                verdict = "TRIM"
-            else:
-                verdict = "EXIT"
-
-            # --- lapisan faktor IC (vol/likuiditas/jarak 52w) ---
-
-            base = market_ranks.get(code)
-            (
-                score,
-                verdict,
-                reasons,
-                factor_adj,
-            ) = apply_factor_layer(base_score, verdict, reasons, base, weights)
-
-            # --- lapisan aktivitas broker (diterapkan setelah lapisan faktor) ---
-            broker_row = broker_by_code.get(code)
-            score, verdict, reasons, broker_adj = apply_broker_layer(
-                score,
-                verdict,
-                reasons,
-                broker_row["score"] if broker_row else None,
+            baris = _hold_baris(
+                cur,
+                code,
+                nama,
+                market_ranks,
+                weights,
+                broker_by_code,
                 broker_validated,
+                min_days,
             )
-
-            out.append(
-                {
-                    "code": code,
-                    "name": names.get(code),
-                    "signal": signal,
-                    "trend_up": trend_up,
-                    "rsi": rsi,
-                    "macd_bullish": macd_bullish,
-                    "bb_position": bb_pos,
-                    "z_score": z,
-                    "below_target_pct": below_target,
-                    "foreign_net": None,
-                    "score": round(score),  # type: ignore[arg-type]
-                    "base_score": round(base_score),  # type: ignore[arg-type]
-                    "factor_adj": round(factor_adj, 1),
-                    "factor_pct": base if base is not None else None,
-                    "broker_score": broker_row["score"] if broker_row else None,
-                    "broker_adj": round(broker_adj, 1),
-                    "verdict": verdict,
-                    "reasons": reasons,
-                }
-            )
+            if baris is not None:
+                out.append(baris)
 
     # EOD foreign net for context (separate pass, keeps the main loop simple).
-    with get_cursor() as cur:
-        for row in out:
-            cur.execute(
-                """select foreign_net from research.latest_pit
-                   where code = %s order by trade_date desc limit 1""",
-                (row["code"],),
-            )
-            r = cur.fetchone()
-            row["foreign_net"] = _f(r["foreign_net"]) if r else None
+    _hold_lengkapi_foreign_net(out)
 
     out.sort(key=lambda r: r["score"], reverse=True)
     _research_cache_put(cache_key, out, ttl=600.0)
