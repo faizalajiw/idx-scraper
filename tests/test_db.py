@@ -75,12 +75,13 @@ def test_connect_dict_rows_dan_transaksional(monkeypatch) -> None:
 
 def test_psycopg_connect_hanya_di_db_py() -> None:
     """Satu pintu: pemanggilan ``psycopg.connect(`` tidak boleh muncul di tempat lain."""
+    berkas = (*AKAR.joinpath("src").rglob("*.py"), *AKAR.joinpath("scripts").glob("*.py"))
     bermasalah = [
         str(p.relative_to(AKAR))
-        for p in BERKAS_PY
+        for p in berkas
         if "psycopg.connect(" in p.read_text(encoding="utf-8")
     ]
-    assert bermasalah == [str(Path("src/idx_scraper/db.py"))], bermasalah
+    assert bermasalah == ["src\\idx_scraper\\db.py"], bermasalah
 
 
 def test_database_url_env_hanya_terbaca_di_satu_modul() -> None:
@@ -90,7 +91,8 @@ def test_database_url_env_hanya_terbaca_di_satu_modul() -> None:
     ``os.environ`` (bootstrap berkas, bukan pembacaan untuk koneksi).
     """
     bermasalah: list[str] = []
-    for p in BERKAS_PY:
+    berkas = (*AKAR.joinpath("src").rglob("*.py"), *AKAR.joinpath("scripts").glob("*.py"))
+    for p in berkas:
         if p.name == "db.py":
             continue
         for nomor, baris in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
@@ -98,6 +100,5 @@ def test_database_url_env_hanya_terbaca_di_satu_modul() -> None:
                 continue
             if any(pola in baris for pola in POLA_ENV):
                 bermasalah.append(f"{p.relative_to(AKAR)}:{nomor}")
-    assert bermasalah == [
-        str(Path("scripts/backfill_raw_eod.py")) + ":" + bermasalah[0].split(":")[1]
-    ]
+    tepat = [b for b in bermasalah if b.startswith("scripts\\backfill_raw_eod.py")]
+    assert bermasalah == [tepat[0]], bermasalah

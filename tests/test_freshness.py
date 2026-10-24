@@ -224,20 +224,30 @@ def _gerbang_menolak() -> dict:
 
 
 def _patch_board(monkeypatch, *, gate: dict | None = None, freshness=None) -> dict:
-    """Papan tanpa DB: cache kosong, kesegaran & gerbang disuntik."""
+    """Papan tanpa DB: cache kosong, kesegaran & gerbang disuntik.
+
+    Monkeypatch mengarah ke submodul `analytics.recommendation`, bukan paket
+    `analytics`: fungsi papan membaca nama-nama ini dari namespace modulnya
+    sendiri, bukan lewat re-export paket.
+    """
     from idx_scraper.api import analytics
 
     cache: dict = {}
-    monkeypatch.setattr(analytics, "_recommendation_context", _analytics_ctx)
-    monkeypatch.setattr(analytics, "_research_cache_get", lambda key: cache.get(key))
-    monkeypatch.setattr(
-        analytics, "_research_cache_put", lambda key, val, ttl=None: cache.__setitem__(key, val)
-    )
+    # Patch di DUA tempat: `recommendation` (pemakai langsung) dan `_common`
+    # (namespace `research_cache_once` — sebelum split keduanya satu modul).
+    monkeypatch.setattr(analytics.recommendation, "_recommendation_context", _analytics_ctx)
+    monkeypatch.setattr(analytics.recommendation, "_regime_gate", lambda: gate)
+    for modul in (analytics.recommendation, analytics._common):
+        monkeypatch.setattr(modul, "_research_cache_get", lambda key: cache.get(key))
+        monkeypatch.setattr(
+            modul,
+            "_research_cache_put",
+            lambda key, val, ttl=None: cache.__setitem__(key, val),
+        )
     monkeypatch.setattr(
         "idx_scraper.api.services.get_freshness",
         freshness or (lambda: verdict("2026-10-16", "2026-10-16")),
     )
-    monkeypatch.setattr(analytics, "_regime_gate", lambda: gate)
     return cache
 
 

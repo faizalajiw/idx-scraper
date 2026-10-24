@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import idx_scraper.api.analytics as analytics
 from idx_scraper.api.analytics import (
     _KRITERIA_SCREENER,
     _FilterScreener,
@@ -112,7 +111,9 @@ def test_lolos_screener_gabungan_dan(monkeypatch):
         baris(code="MID", signal="HOLD", rsi=50.0, momentum_20d=1.0),
         baris(code="JUAL", signal="SELL", rsi=20.0, momentum_20d=-9.0),
     ]
-    monkeypatch.setattr(analytics, "_screener_rows", lambda: [dict(r) for r in rows])
+    from idx_scraper.api.analytics import screener
+
+    monkeypatch.setattr(screener, "_screener_rows", lambda: [dict(r) for r in rows])
     assert [r["code"] for r in get_screener(signal="BUY")] == ["AAA"]
     assert [r["code"] for r in get_screener(rsi_min=60, rsi_max=80)] == ["AAA"]
     assert [r["code"] for r in get_screener(min_momentum=0.0)] == ["AAA", "MID"]

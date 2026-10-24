@@ -133,13 +133,15 @@ def _fake_regime_rows(days: int = 45, rising: bool = True) -> list[dict]:
 def _regime_with_mock(rows: list[dict]):
     from unittest.mock import MagicMock, patch
 
-    from idx_scraper.api import analytics
+    from idx_scraper.api.analytics import market
 
     fake_cur = MagicMock()
     fake_cur.fetchall.return_value = rows
     fake_cm = MagicMock()
     fake_cm.__enter__.return_value = fake_cur
-    with patch.object(analytics, "get_cursor", return_value=fake_cm):
+    with patch.object(market, "get_cursor", return_value=fake_cm):
+        from idx_scraper.api import analytics
+
         return analytics.get_market_regime()
 
 
