@@ -21,13 +21,6 @@ import dotenv
 
 dotenv.load_dotenv()
 
-# scripts/ lives at the repo root, outside the installable src/ package. Put the
-# repo root on sys.path so the scheduler's `from scripts.X import ...` resolves
-# regardless of the caller's working directory or PYTHONPATH.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -289,7 +282,7 @@ def _job_broker_eod() -> int:
     if not dsn:
         return 0
     try:
-        from scripts.backfill_broker_eod import backfill_broker_eod
+        from .jobs.backfill_broker_eod import backfill_broker_eod
 
         n, d = backfill_broker_eod(dsn)
         say(f"[{datetime.now(WIB).isoformat()}] broker summary {d}: {n} baris")
@@ -859,7 +852,7 @@ def _job_index_eod_close() -> None:
     if not dsn:
         return
     try:
-        from scripts.backfill_index_eod_idx import backfill_index_eod_idx
+        from .jobs.backfill_index_eod_idx import backfill_index_eod_idx
 
         upserted, snapshots = backfill_index_eod_idx(dsn)
         say(

@@ -302,7 +302,7 @@ def test_boleh_tulis_close_index_mengikuti_jam():
 
 
 def test_job_index_eod_close_menghormati_jam(monkeypatch):
-    import scripts.backfill_index_eod_idx as idx_eod
+    from idx_scraper.jobs import backfill_index_eod_idx as idx_eod
 
     panggilan: list = []
     monkeypatch.setattr(
