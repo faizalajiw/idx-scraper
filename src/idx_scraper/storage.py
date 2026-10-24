@@ -3,7 +3,7 @@ Storage abstraction for IDX scraper.
 
 Supports:
 - SQLite (default, zero-config, file-based) — great for local dev / offline
-- Supabase / Postgres — production, shared, scalable, API-ready
+- Postgres: production, shared, scalable, API-ready
 """
 
 from __future__ import annotations
@@ -299,14 +299,14 @@ class SQLiteStorage(Storage):
         self._conn.close()
 
 
-class SupabaseStorage(Storage):
-    """Supabase / Postgres storage via psycopg. Uses connection pooler for polling."""
+class PostgresStorage(Storage):
+    """PostgreSQL storage via psycopg. One long-lived connection, autocommit."""
 
     def __init__(self, dsn: str) -> None:
         if psycopg is None:
             raise RuntimeError("psycopg[binary] not installed. Run: pip install 'idx-scraper[postgres]'")
         self._dsn = dsn
-        # Use autocommit for simple inserts; connection pooling handled by Supabase pooler
+        # Use autocommit for simple inserts; any external pooler is set by the DSN.
         self._conn = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
         self._conn.execute("set time zone 'Asia/Jakarta'")  # keep session dates/times in WIB
         self._init_schema()
@@ -542,10 +542,12 @@ def get_storage_from_env() -> Storage:
     """Factory: pick backend from env vars."""
     backend = os.getenv("IDX_STORAGE", "sqlite").lower()
     if backend in ("supabase", "postgres"):
+        # "supabase" = nilai lama yang sudah terpasang di .env tertentu; backend-nya
+        # Postgres biasa, jadi tetap diterima supaya tidak mematahkan konfigurasi itu.
         dsn = os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL")
         if not dsn:
             raise RuntimeError(f"IDX_STORAGE={backend} but DATABASE_URL/SUPABASE_DB_URL not set")
-        return SupabaseStorage(dsn)
+        return PostgresStorage(dsn)
     # default sqlite
     sqlite_path = os.getenv("IDX_SQLITE_PATH", "./data/idx.db")
     return SQLiteStorage(sqlite_path)

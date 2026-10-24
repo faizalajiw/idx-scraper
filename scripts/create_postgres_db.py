@@ -2,7 +2,7 @@
 
 Reads DATABASE_URL from the environment (loaded from .env by the caller).
 Connects to the maintenance 'postgres' database to issue CREATE DATABASE,
-then SupabaseStorage builds the schema on first connection to the target DB.
+then PostgresStorage builds the schema on first connection to the target DB.
 Safe to re-run: skips creation if the database already exists.
 """
 
@@ -44,9 +44,9 @@ def main() -> None:
             print(f"created database '{dbname}'")
 
     # Build schema by connecting to the target DB (triggers _init_schema)
-    from idx_scraper.storage import SupabaseStorage
+    from idx_scraper.storage import PostgresStorage
 
-    storage = SupabaseStorage(dsn)
+    storage = PostgresStorage(dsn)
     storage.close()
     print(f"schema ready on '{dbname}'")
 

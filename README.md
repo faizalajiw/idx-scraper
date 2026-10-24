@@ -12,7 +12,7 @@ cd D:\Project\market-labs\idx-scraper
 
 ### 2. Environment (`.env`)
 ```dotenv
-# Storage backend (sqlite or supabase)
+# Storage backend: sqlite (default) or postgres
 IDX_STORAGE=sqlite
 IDX_SQLITE_PATH=./data/idx.db
 
@@ -33,7 +33,7 @@ IDX_TRANSPORT=auto
 # Hanya perlu bila memakai Chrome (IDX_TRANSPORT=browser atau fallback auto):
 # IDX_CHROME_PROFILE_DIR=C:\Users\<you>\AppData\Local\idx-scraper-chrome-p3
 ```
-> **Tip** – Set `IDX_STORAGE=supabase` and add `SUPABASE_DB_URL=...` when running in production.
+> **Tip** – Set `IDX_STORAGE=postgres` and add `DATABASE_URL=...` when running in production (PostgreSQL lokal di server yang sama; lihat `DEPLOY-LINUX.md` §4).
 
 ### 3. Run the service
 ```powershell
@@ -198,7 +198,7 @@ Copy-Item "$src\Local State" "$dst\Local State"
 
 ## Storage & Schemas
 * **SQLite** – default, file `./data/idx.db` (local development).
-* **Supabase** – production; set `IDX_STORAGE=supabase` and `SUPABASE_DB_URL` in `.env`. Execute `sql/schema.sql` on the remote database.
+* **PostgreSQL** – production; set `IDX_STORAGE=postgres` and `DATABASE_URL` in `.env`. The schema is created on first connection (`sql/schema.sql` is the same DDL, for manual runs).
 
 ### Core Tables (excerpt)
 | Table | Description |

@@ -143,17 +143,11 @@ Urutkan begini; jangan lompat ke unit systemd sebelum 1–7 selesai.
 
 ## 4. Database
 
-### Pilihan: Postgres lokal vs Supabase
+### PostgreSQL lokal
 
-| | Postgres lokal di server | Supabase (terkelola) |
-| --- | --- | --- |
-| Biaya | Sudah termasuk VPS | Berbayar di atas kuota gratis |
-| Latensi dari API | Sangat rendah (unix socket) | Terganjal jaringan internet |
-| Backup | Tanggung jawab Anda | Otomatis |
-| Cocok untuk | **Rekomendasi untuk beban kerja ini** | Kalau tidak mau mengurus backup |
-
-Keduanya memakai jalur kode yang **sama**: set `IDX_STORAGE=postgres`
-(`supabase` juga diterima) + `DATABASE_URL`. Tidak ada perbedaan kode.
+Database-nya PostgreSQL yang berjalan di server yang sama dengan API, bukan
+layanan database terkelola. Set `IDX_STORAGE=postgres` + `DATABASE_URL`; jalur
+kodenya sama untuk Postgres lokal maupun server lain, yang berbeda hanya DSN.
 
 ### Siapkan Postgres lokal
 
@@ -255,8 +249,8 @@ menunjuk ke situ; `cli.py` memanggil `load_dotenv()` sendiri).
 
 | Variabel | Contoh | Keterangan |
 | --- | --- | --- |
-| `IDX_STORAGE` | `postgres` | `sqlite` (default) / `postgres` / `supabase` |
-| `DATABASE_URL` | `postgresql://idx_app:***@127.0.0.1:5432/market_labs` | `SUPABASE_DB_URL` juga diterima |
+| `IDX_STORAGE` | `postgres` | `sqlite` (default) / `postgres` |
+| `DATABASE_URL` | `postgresql://idx_app:***@127.0.0.1:5432/market_labs` | DSN PostgreSQL; wajib untuk `postgres` |
 | `IDX_WATCHLIST` | `BBCA,BBRI,BMRI,TLKM,ASII` | daftar pantau |
 | `IDX_TRANSPORT` | `http` | **`http` = tanpa Chrome.** Lihat §14 |
 

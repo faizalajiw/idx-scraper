@@ -5,7 +5,7 @@ Usage:
         --sqlite ./data/idx.db \
         --dsn "postgresql://user:pass@host:5432/idx"
 
-The target schema is created by SupabaseStorage._init_schema (same DDL used at runtime),
+The target schema is created by PostgresStorage._init_schema (same DDL used at runtime),
 so we reuse it here to guarantee parity. All inserts are ON CONFLICT-safe so the script
 can be re-run without duplicating rows. SQLite is never modified.
 """
@@ -25,7 +25,7 @@ except ImportError:
     print("psycopg not installed. Run: pip install 'idx-scraper[postgres]'", file=sys.stderr)
     raise
 
-from idx_scraper.storage import SupabaseStorage
+from idx_scraper.storage import PostgresStorage
 
 BATCH = 1000
 
@@ -84,7 +84,7 @@ def _copy_table(
 
 def migrate(sqlite_path: str, dsn: str) -> dict[str, int]:
     sconn = sqlite3.connect(sqlite_path)
-    storage = SupabaseStorage(dsn)  # creates schema if missing
+    storage = PostgresStorage(dsn)  # creates schema if missing
     pconn = storage._conn
     counts: dict[str, int] = {}
     try:
