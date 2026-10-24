@@ -34,9 +34,9 @@ Contoh pakai:
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -46,9 +46,12 @@ import psycopg
 from psycopg.rows import dict_row
 
 from ..analysis import calculate_indicators, signal_series
+from ..logging_setup import say
 from ..smart_money import PRICE_WINDOW, pattern_flags
 from .recommend import assign_grades, score_candidate
 from .signal_log import DEFAULT_HORIZONS, NLAGS_DEFAULT, attach_outcomes
+
+logger = logging.getLogger(__name__)
 
 # --- parameter default ------------------------------------------------------
 SESSION_LOOKBACK = 300  # sesi ditarik untuk rolling 252 + warmup
@@ -121,7 +124,6 @@ _LOG_COLUMNS = [
     "horizon_days",
     "patterns",
 ]
-
 
 # --------------------------------------------------------------------------- #
 # Panel loader
@@ -506,7 +508,7 @@ def record(
     try:
         quarantined = load_quarantined_codes(dsn)
     except Exception as e:  # kolam tanpa karantina lebih baik daripada job mati
-        print(f"[warn] karantina tidak terbaca, kolam tanpa karantina: {e}", file=sys.stderr)
+        logger.warning(f"[warn] karantina tidak terbaca, kolam tanpa karantina: {e}")
         quarantined = set()
     records = build_records(
         metrics,
@@ -701,30 +703,30 @@ def record_and_report(dsn: str, months: int = BACKFILL_MONTHS_DEFAULT) -> dict[s
 
 
 def print_report(r: dict[str, Any]) -> None:
-    print("=" * 78)
-    print("REKOMENDASI BELI — track record kandidat (PIT, entry T+1, vs pasar)")
-    print("=" * 78)
+    say("=" * 78)
+    say("REKOMENDASI BELI — track record kandidat (PIT, entry T+1, vs pasar)")
+    say("=" * 78)
     if not r.get("candidates"):
-        print("  (belum ada kandidat tercatat — jalankan backfill)")
+        say("  (belum ada kandidat tercatat — jalankan backfill)")
         return
-    print(
+    say(
         f"  {r['candidates']} kandidat "
         f"({r.get('grade_a', 0)} A / {r.get('grade_b', 0)} B / {r.get('grade_c', 0)} C)"
         f"  {r['first_date']} -> {r['last_date']}"
     )
     for h in r["horizons"]:
-        print(f"\n--- horizon {h} hari bursa ---")
+        say(f"\n--- horizon {h} hari bursa ---")
         for row in r["by_grade"]:
             if row["horizon"] != h or row["n"] == 0:
                 continue
             abn = row["mean_abnormal"]
             abn_s = f"  abn={abn:+.2%}" if abn is not None else ""
-            print(
+            say(
                 f"  grade {row['grade']}  n={row['n']:<5} hit={row['hit_rate']:.0%}  "
                 f"mean={row['mean_fwd']:+.2%}{abn_s}"
             )
-    print("\nCatatan: hit-rate/mean return historis indikatif, bukan jaminan.")
-    print("Kandidat tanpa level eksekusi yang bisa dihitung tidak masuk log.")
+    say("\nCatatan: hit-rate/mean return historis indikatif, bukan jaminan.")
+    say("Kandidat tanpa level eksekusi yang bisa dihitung tidak masuk log.")
 
 
 def main() -> int:
@@ -735,10 +737,10 @@ def main() -> int:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        logger.error("[err] DATABASE_URL belum diisi")
         return 1
     written = record(dsn, months=args.months)
-    print(f"[ok] {written} baris kandidat ditulis")
+    say(f"[ok] {written} baris kandidat ditulis")
     print_report(evaluate(dsn, horizons=tuple(args.k)))
     return 0
 

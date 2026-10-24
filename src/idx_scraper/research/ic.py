@@ -24,16 +24,19 @@ Contoh pakai:
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import os
-import sys
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import psycopg
 
+from ..logging_setup import say
 from .factors import FACTOR_DEFINITIONS, compute_factors
+
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # Panel loader
@@ -304,7 +307,7 @@ def build_factor_panel(
         ob_daily = compute_daily(load_snapshots(dsn, start=start, end=end))
         panel = attach_orderbook_factors(panel, ob_daily)
     except Exception as e:  # graceful degradation disengaja — jangan matikan IC
-        print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] faktor order-book dilewati: {e}")
 
     return panel
 
@@ -352,18 +355,18 @@ def run_ic_analysis(
 
 
 def print_report(report: ICReport) -> None:
-    print("=" * 78)
-    print("IC ANALYSIS — Spearman rank IC faktor vs forward return (IDX, PIT-adjusted)")
-    print("=" * 78)
+    say("=" * 78)
+    say("IC ANALYSIS — Spearman rank IC faktor vs forward return (IDX, PIT-adjusted)")
+    say("=" * 78)
     for k in report.horizons:
         s = report.summaries[k]
-        print(f"\n--- Horizon {k} hari bursa (fill T+1, Newey-West lag 5) ---")
+        say(f"\n--- Horizon {k} hari bursa (fill T+1, Newey-West lag 5) ---")
         if s.empty:
-            print("  (tidak cukup data)")
+            say("  (tidak cukup data)")
             continue
         for _, r in s.iterrows():
             if pd.isna(r.get("mean_ic")):
-                print(f"  {r['factor']:<16}  (kurang dari 5 hari IC valid)")
+                say(f"  {r['factor']:<16}  (kurang dari 5 hari IC valid)")
                 continue
             star = ""
             icir_str = f"{r['icir']:+.2f}" if math.isfinite(r["icir"]) else "inf"
@@ -371,12 +374,12 @@ def print_report(report: ICReport) -> None:
                 star = "  <-- LAYAK"
             elif abs(r["mean_ic"]) >= 0.03:
                 star = "  (+ menjanjikan)"
-            print(
+            say(
                 f"  {r['factor']:<16} IC={r['mean_ic']:+.4f}  "
                 f"ICIR={icir_str}  hit={r['hit_rate']:.0%}  "
                 f"t={r['t_stat']:+.1f}  hari={int(r['n_days'])}{star}"
             )
-        print()
+        say()
         for (f, kh), qdf in report.quintiles.items():
             if kh != k or qdf.empty:
                 continue
@@ -388,12 +391,12 @@ def print_report(report: ICReport) -> None:
                 if len(qdf) >= 2
                 else float("nan")
             )
-            print(f"  kuintil {f:<16} {qtxt}   | Q5-Q1 spread={spread:+.2%}")
-    print()
-    print("Catatan: |IC|>=0.05 & |ICIR|>=0.5 = layak dipakai; t-stat pakai Newey-West")
-    print("(lag 5) karena forward return tumpang tindih antar hari sampling.")
-    print("Faktor flow (foreign_*) coverage-nya masih pendek di data sekarang —")
-    print("baca hasilnya sebagai indikatif, ulangi setelah histori flow memanjang.")
+            say(f"  kuintil {f:<16} {qtxt}   | Q5-Q1 spread={spread:+.2%}")
+    say()
+    say("Catatan: |IC|>=0.05 & |ICIR|>=0.5 = layak dipakai; t-stat pakai Newey-West")
+    say("(lag 5) karena forward return tumpang tindih antar hari sampling.")
+    say("Faktor flow (foreign_*) coverage-nya masih pendek di data sekarang —")
+    say("baca hasilnya sebagai indikatif, ulangi setelah histori flow memanjang.")
 
 
 def main() -> int:
@@ -408,7 +411,7 @@ def main() -> int:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
+        say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
 
     report = run_ic_analysis(

@@ -39,6 +39,7 @@ import pandas as pd
 import psycopg
 
 from ..analysis import calculate_indicators, is_mechanical_sell, signal_series
+from ..logging_setup import say
 from .events import _nw_tstat
 
 # --- parameter default ------------------------------------------------------
@@ -509,22 +510,22 @@ def record_and_report(dsn: str, months: int = BACKFILL_MONTHS_DEFAULT) -> dict[s
 
 
 def print_report(r: dict[str, Any]) -> None:
-    print("=" * 78)
-    print("JEJAK SINYAL — track record BUY/SELL (PIT, entry T+1, vs pasar)")
-    print("=" * 78)
+    say("=" * 78)
+    say("JEJAK SINYAL — track record BUY/SELL (PIT, entry T+1, vs pasar)")
+    say("=" * 78)
     if not r.get("signals"):
-        print("  (belum ada sinyal tercatat — jalankan backfill)")
+        say("  (belum ada sinyal tercatat — jalankan backfill)")
         return
-    print(
+    say(
         f"  {r['signals']} sinyal ({r['buy']} BUY / {r['sell']} SELL)"
         f"  {r['first_date']} -> {r['last_date']}"
     )
     for h in r["horizons"]:
-        print(f"\n--- horizon {h} hari bursa ---")
+        say(f"\n--- horizon {h} hari bursa ---")
         for row in r["overall"]:
             if row["horizon"] != h or row["n"] == 0:
                 continue
-            print(
+            say(
                 f"  {row['signal']:<5} n={row['n']:<5} hit={row['hit_rate']:.0%}  "
                 f"mean={row['mean_fwd']:+.2%}  median={row['median_fwd']:+.2%}  "
                 f"abn={row['mean_abnormal']:+.2%}"
@@ -532,8 +533,8 @@ def print_report(r: dict[str, Any]) -> None:
                 else f"  {row['signal']:<5} n={row['n']:<5} hit={row['hit_rate']:.0%}  "
                 f"mean={row['mean_fwd']:+.2%}"
             )
-    print("\nCatatan: hit-rate/men return historis indikatif, bukan jaminan.")
-    print("SELL yang dinilai di sini adalah sinyal keluar untuk posisi lama.")
+    say("\nCatatan: hit-rate/men return historis indikatif, bukan jaminan.")
+    say("SELL yang dinilai di sini adalah sinyal keluar untuk posisi lama.")
 
 
 def main() -> int:
@@ -544,10 +545,10 @@ def main() -> int:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
+        say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
     written = backfill(dsn, months=args.months)
-    print(f"[ok] {written} baris sinyal ditulis")
+    say(f"[ok] {written} baris sinyal ditulis")
     print_report(evaluate(dsn, horizons=tuple(args.k)))
     return 0
 

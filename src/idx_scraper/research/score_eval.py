@@ -56,15 +56,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
-import sys
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import psycopg
 
+from ..logging_setup import say
 from .events import _nw_tstat
 from .recommend import (
     COMPONENT_NOTES,
@@ -77,6 +78,8 @@ from .recommend import (
 )
 from .recommendation_log import load_candidate_panel, metrics_frame
 from .signal_log import attach_outcomes
+
+logger = logging.getLogger(__name__)
 
 # --- parameter walk-forward ------------------------------------------------- #
 
@@ -97,7 +100,6 @@ BAND_SHARES = (0.75, 0.90, 0.98)  # bagian pool harian untuk band C / B / A
 _ABN = "abn"  # prefix kolom outcome di attach_outcomes
 
 _FEATURES: tuple[str, ...] = tuple(COMPONENT_NOTES)
-
 
 # --------------------------------------------------------------------------- #
 # Universe + fitur (pure)
@@ -750,44 +752,44 @@ def format_weights(weights_by_horizon: dict[int, dict[str, float]]) -> str:
 
 
 def print_report(report: dict[str, Any]) -> None:
-    print("=" * 78)
-    print("WALK-FORWARD KOMPOSISI SKOR KANDIDAT BELI (PIT, entry T+1, abn vs pasar)")
-    print("=" * 78)
-    print(
+    say("=" * 78)
+    say("WALK-FORWARD KOMPOSISI SKOR KANDIDAT BELI (PIT, entry T+1, abn vs pasar)")
+    say("=" * 78)
+    say(
         f"  sesi={report['sessions']}  train={report['train']}  test={report['test']}  "
         f"step={report['step']}"
     )
     for k, h in report["by_horizon"].items():
-        print(f"\n--- horizon {k} hari ---")
+        say(f"\n--- horizon {k} hari ---")
         if not h.get("folds"):
-            print(f"  {h.get('note', 'tidak ada fold')}")
+            say(f"  {h.get('note', 'tidak ada fold')}")
             continue
-        print(f"  fold={h['folds']}  baris test OOS={h['pooled_oos_rows']}")
+        say(f"  fold={h['folds']}  baris test OOS={h['pooled_oos_rows']}")
         for fold in h["fold_detail"]:
             ic = fold["ic"]
             mo = fold["monotonicity"]
             ic_s = f"IC={ic.get('mean_ic'):+.4f}" if ic.get("mean_ic") is not None else "IC=n/a"
             t_s = f"t={ic.get('t_stat'):+.1f}" if ic.get("t_stat") is not None else "t=n/a"
             mo_s = f"rho={mo.get('spearman'):+.2f}" if mo.get("spearman") is not None else "rho=n/a"
-            print(
+            say(
                 f"    {fold['test'][0]}..{fold['test'][1]}  n={fold['n_test']:<5} "
                 f"aktif={fold['active_components']:<2} {ic_s} {t_s} {mo_s}"
             )
         pic = h["pooled_oos_ic"]
         pmo = h["pooled_oos_monotonicity"]
-        print("  pooled OOS:")
-        print(
+        say("  pooled OOS:")
+        say(
             f"    IC={pic.get('mean_ic')} ICIR={pic.get('icir')} t={pic.get('t_stat')} "
             f"hit={pic.get('hit_rate')} hari={pic.get('days')}"
         )
-        print(
+        say(
             f"    monotonisitas: rho={pmo.get('spearman')} spread Q10-Q1={pmo.get('top_minus_bottom')}"
         )
         for row in h["pooled_oos_deciles"]:
-            print(f"      desil {row['decile']:<2} n={row['n']:<6} abn={row['mean_abn']:+.2%}")
+            say(f"      desil {row['decile']:<2} n={row['n']:<6} abn={row['mean_abn']:+.2%}")
         if h["fold_detail"]:
             mix = h["fold_detail"][-1].get("train_tier_mix") or {}
-            print(
+            say(
                 f"  sebaran tier di train fold terakhir (n={mix.get('n')}): "
                 + ", ".join(
                     f"{lab.upper()} {mix[lab]['rows']} ({mix[lab]['share']:.0%} >= {mix[lab]['min_score']})"
@@ -795,7 +797,7 @@ def print_report(report: dict[str, Any]) -> None:
                     if isinstance(mix.get(lab), dict)
                 )
             )
-        print("  bobot per fold (0 = tidak lolos gate di fold itu):")
+        say("  bobot per fold (0 = tidak lolos gate di fold itu):")
         fw = h["fold_weights"]
         for name in _FEATURES:
             samples = fw.get(name) or []
@@ -805,21 +807,21 @@ def print_report(report: dict[str, Any]) -> None:
             vd = (h["verdict"] or {}).get(name, {})
             mark = "DIPAKAI " if vd.get("status") == "dipakai" else "dimatikan"
             note = "" if vd.get("status") == "dipakai" else f"  ({vd.get('reason')})"
-            print(f"    {name:<32} {cells}  -> {mark}{note}")
+            say(f"    {name:<32} {cells}  -> {mark}{note}")
         if not h["weights"]:
-            print("    (tidak ada komponen yang lolos gate + stabilitas tanda)")
-        print(f"  bobot stabil yang dibakukan: {h['weights']}")
-        print(
+            say("    (tidak ada komponen yang lolos gate + stabilitas tanda)")
+        say(f"  bobot stabil yang dibakukan: {h['weights']}")
+        say(
             "  grade = peringkat relatif pool harian; share band "
             f"C/B/A = {BAND_SHARES[0]:.0%}/{BAND_SHARES[1]:.0%}/{BAND_SHARES[2]:.0%}"
         )
-        print("  edge seluruh sampel (deskriptif, in-sample — pembanding signal_log):")
+        say("  edge seluruh sampel (deskriptif, in-sample — pembanding signal_log):")
         for row in h["full_sample_edges"]:
             if row.get("edge") is None:
                 continue
             if abs(float(row["edge"])) < 0.002 and abs(float(row.get("edge_pooled") or 0)) < 0.002:
                 continue
-            print(
+            say(
                 f"    {row['component']:<32} edge={row['edge']:+.3%} "
                 f"pooled={row['edge_pooled']:+.3%} t={row['t_stat']} "
                 f"hit={row['hit_rate']} hari={row['days']}"
@@ -830,13 +832,13 @@ def print_report(report: dict[str, Any]) -> None:
             if int(row.get("days") or 0) < MIN_EDGE_DAYS
         ]
         if thin:
-            print(
+            say(
                 f"  {len(thin)} komponen belum bisa dinilai: terukur di < {MIN_EDGE_DAYS} sesi "
                 f"(mis. {', '.join(thin[:4])}) — bobotnya 0 bukan karena lemah, tapi "
                 "karena datanya belum cukup panjang."
             )
-    print("\nCatatan: angka bukti = pooled OOS di atas; jalur 'frozen' hanya deskriptif.")
-    print(
+    say("\nCatatan: angka bukti = pooled OOS di atas; jalur 'frozen' hanya deskriptif.")
+    say(
         "Komponen tanpa gate |t|>=1,5 & |edge|>=0,15% & >=20 sesi terukur di train "
         "berbobot 0. Grade sendiri bukan ambang skor: ia peringkat relatif pool harian."
     )
@@ -855,7 +857,7 @@ def main() -> int:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        logger.error("[err] DATABASE_URL belum diisi")
         return 1
 
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -863,7 +865,7 @@ def main() -> int:
 
     feats = load_features(dsn, sessions=args.sessions)
     if feats.empty:
-        print("[err] tidak ada baris kandidat — cek rentang data", file=sys.stderr)
+        logger.error("[err] tidak ada baris kandidat — cek rentang data")
         return 1
 
     horizons = tuple(args.horizons)
@@ -880,26 +882,26 @@ def main() -> int:
 
     if args.frozen:
         report["frozen"] = frozen_eval(feats, weights_by_horizon, horizons=horizons)
-        print("\n" + "=" * 78)
-        print("FROZEN (deskriptif — bobot diturunkan dari sampel yang sama)")
-        print("=" * 78)
+        say("\n" + "=" * 78)
+        say("FROZEN (deskriptif — bobot diturunkan dari sampel yang sama)")
+        say("=" * 78)
         for k, v in report["frozen"].items():
             if k == "note":
                 continue
-            print(
+            say(
                 f"  horizon {k}: IC={v['ic'].get('mean_ic')} t={v['ic'].get('t_stat')} "
                 f"rho={v['monotonicity'].get('spearman')}"
             )
 
-    print("\n" + "=" * 78)
-    print("KONSTANTA SIAP-TEMPEL (recommend.py)")
-    print("=" * 78)
-    print(report["constants"])
+    say("\n" + "=" * 78)
+    say("KONSTANTA SIAP-TEMPEL (recommend.py)")
+    say("=" * 78)
+    say(report["constants"])
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=2, default=str)
-        print(f"\n[ok] laporan penuh ditulis ke {args.json}")
+        say(f"\n[ok] laporan penuh ditulis ke {args.json}")
     return 0
 
 

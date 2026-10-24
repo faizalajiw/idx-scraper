@@ -12,8 +12,8 @@ sector_map.py and is intentionally data, not logic.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -33,6 +33,8 @@ from ..freshness import expected_session, withhold
 from ..research.regime import gate
 from .database import get_cursor
 from .sector_map import FALLBACK_SECTOR, sector_for
+
+logger = logging.getLogger(__name__)
 
 WIB = timezone(timedelta(hours=7))
 
@@ -790,7 +792,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
     try:
         breadth = get_smart_money_breadth()
     except Exception as e:  # graceful degradation — banner tetap hidup
-        print(f"[warn] konteks pasar dilewati di smart-money: {e}", file=sys.stderr)
+        logger.warning(f"[warn] konteks pasar dilewati di smart-money: {e}")
         breadth = None
 
     narrative = build_narrative(code, v, pats, rng, pattern_history=hist, market=breadth)
@@ -803,7 +805,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
         if sector and sector != FALLBACK_SECTOR:
             sector_ctx = _sector_flow_context(code, sector)
     except Exception as e:
-        print(f"[warn] konteks sektor dilewati di smart-money: {e}", file=sys.stderr)
+        logger.warning(f"[warn] konteks sektor dilewati di smart-money: {e}")
         sector_ctx = None
 
     out: dict[str, Any] = {
@@ -1278,7 +1280,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
                 sent_row = it
                 break
     except Exception as e:
-        print(f"[warn] sentimen dilewati di decision: {e}", file=sys.stderr)
+        logger.warning(f"[warn] sentimen dilewati di decision: {e}")
 
     # --- 4) jejak asing 10 sesi (dari modul pure foreign_flow) -------------
     foreign_10: list[dict[str, Any]] = []
@@ -1290,7 +1292,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
         ]
         flip = ff.get("flip_summary", {}).get("last_flip")
     except Exception as e:
-        print(f"[warn] foreign flow dilewati di decision: {e}", file=sys.stderr)
+        logger.warning(f"[warn] foreign flow dilewati di decision: {e}")
 
     # --- 5) base rate event study emiten -----------------------------------
     events: list[dict[str, Any]] = []
@@ -1299,7 +1301,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
         if ev:
             events = ev.get("events", [])
     except Exception as e:
-        print(f"[warn] event study dilewati di decision: {e}", file=sys.stderr)
+        logger.warning(f"[warn] event study dilewati di decision: {e}")
 
     # --- 6) level invalidasi teknikal (pure dari frame emiten) -------------
     invalidation: dict[str, Any] | None = None
@@ -1332,7 +1334,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
                     "mean60_level": round(mean, 1) if mean else None,
                 }
     except Exception as e:
-        print(f"[warn] level invalidasi dilewati di decision: {e}", file=sys.stderr)
+        logger.warning(f"[warn] level invalidasi dilewati di decision: {e}")
 
     out: dict[str, Any] = {
         "code": code,
@@ -1763,7 +1765,7 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
                     "ob_date": str(pd.Timestamp(r.date).date()),
                 }
         except Exception as e:  # graceful degradation — screener tetap hidup
-            print(f"[warn] faktor order-book dilewati: {e}", file=sys.stderr)
+            logger.warning(f"[warn] faktor order-book dilewati: {e}")
     _research_cache_put("ob_latest", out)
     return out
 
@@ -2004,7 +2006,7 @@ def get_sentiment(limit: int = 15) -> dict[str, Any]:
     try:
         ob = _latest_orderbook_factors()
     except Exception as e:
-        print(f"[warn] sentimen tanpa faktor order-book: {e}", file=sys.stderr)
+        logger.warning(f"[warn] sentimen tanpa faktor order-book: {e}")
         ob = {}
 
     out = sentiment.compute(dsn, index_pct=index_pct, ob_by_code=ob, limit=limit)
@@ -2036,7 +2038,7 @@ def get_signal_track() -> dict[str, Any]:
         if sl.load_log(dsn).empty:
             sl.backfill(dsn)
     except Exception as e:  # DB belum siap -> tetap sajikan apa adanya
-        print(f"[warn] backfill jejak sinyal dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] backfill jejak sinyal dilewati: {e}")
 
     out = sl.evaluate(dsn, horizons=sl.DEFAULT_HORIZONS)
     out["generated_at"] = datetime.now(WIB).isoformat(timespec="seconds")
@@ -2650,7 +2652,6 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
 #: warmup SMA50/RSI/ATR. Sama dengan panel pasar yang dipakai radar/smart money.
 _RECOMMENDATION_HISTORY = 300
 
-
 RECOMMENDATION_LAYER_NOTE = (
     "Lapisan faktor IC dan aliran broker hanya ikut bila parameternya tervalidasi "
     "(lolos gate IC). Kalau belum, keduanya tidak menggerakkan skor sama sekali "
@@ -2720,7 +2721,7 @@ def _recommendation_context_uncached() -> dict[str, Any]:
         with get_cursor() as cur:
             quarantined = quarantined_codes(cur)
     except Exception as e:  # tabel karantina belum ada / DB sibuk
-        print(f"[warn] karantina kolam tidak terbaca: {e}", file=sys.stderr)
+        logger.warning(f"[warn] karantina kolam tidak terbaca: {e}")
 
     factor_adj: dict[str, float] = {}
     factor_validated = False
@@ -2743,7 +2744,7 @@ def _recommendation_context_uncached() -> dict[str, Any]:
                 factor_validated = True
                 factor_note = "Lapisan faktor aktif — bobot dari run IC tervalidasi."
     except Exception as e:  # DB kosong / query gagal: lapisan tidak aktif
-        print(f"[warn] lapisan faktor rekomendasi dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] lapisan faktor rekomendasi dilewati: {e}")
 
     broker_adj: dict[str, float] = {}
     broker_validated = False
@@ -2762,7 +2763,7 @@ def _recommendation_context_uncached() -> dict[str, Any]:
                     broker_adj[str(code).upper()] = adj
             broker_note = "Lapisan aliran broker aktif — faktor aliran lolos gate IC."
     except Exception as e:
-        print(f"[warn] lapisan broker rekomendasi dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] lapisan broker rekomendasi dilewati: {e}")
 
     from ..research.pool import pool_members
 
@@ -2859,7 +2860,7 @@ def _regime_gate() -> dict[str, Any] | None:
     try:
         gate = get_market_regime().get("gate")
     except Exception as e:
-        print(f"[warn] gerbang rezim tidak terbaca: {e}", file=sys.stderr)
+        logger.warning(f"[warn] gerbang rezim tidak terbaca: {e}")
         return None
     return gate if isinstance(gate, dict) else None
 
@@ -3195,7 +3196,7 @@ def get_recommendation_track() -> dict[str, Any]:
     try:
         out = evaluate(dsn)
     except Exception as e:
-        print(f"[warn] track record rekomendasi dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] track record rekomendasi dilewati: {e}")
         out = {
             "candidates": 0,
             "horizons": [5, 10, 21],

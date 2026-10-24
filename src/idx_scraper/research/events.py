@@ -31,6 +31,8 @@ from dataclasses import (
 import numpy as np
 import pandas as pd
 
+from ..logging_setup import say
+
 # Konteks harga pasar utk kurva event-time (diset API/CLI via set_market_daily).
 # "market_daily" = Series (index tanggal, raw close rata-rata pasar). Kurva
 # abnormal memakai RAW close: split tidak mengubah pola return harian, dan
@@ -363,17 +365,17 @@ def load_panel_from_db(dsn: str, months: int = 18) -> pd.DataFrame:
 
 
 def print_result(r: EventStudyResult) -> None:
-    print(f"\n=== {r.event} — {EVENT_PRESETS[r.event]['description']} ===")
-    print(f"  event valid: {r.n_events} (horizon {r.horizon} hari bursa, entry T+1)")
+    say(f"\n=== {r.event} — {EVENT_PRESETS[r.event]['description']} ===")
+    say(f"  event valid: {r.n_events} (horizon {r.horizon} hari bursa, entry T+1)")
     if r.n_events == 0 or r.mean_fwd is None:
-        print("  (tidak ada event dengan data ke depan yang cukup)")
+        say("  (tidak ada event dengan data ke depan yang cukup)")
         return
-    print(
+    say(
         f"  mean fwd={r.mean_fwd:+.2%}  median={r.median_fwd:+.2%}  "
         f"hit={r.hit_rate:.0%}  t(NW)={r.t_stat:+.2f}"
     )
     if r.mean_abnormal is not None:
-        print(f"  abnormal vs pasar: {r.mean_abnormal:+.2%}  t(NW)={r.t_abnormal:+.2f}")
+        say(f"  abnormal vs pasar: {r.mean_abnormal:+.2%}  t(NW)={r.t_abnormal:+.2f}")
     if not r.curve.empty:
         marks = [1, 3, 5, 10, 21]
         parts = [
@@ -381,7 +383,7 @@ def print_result(r: EventStudyResult) -> None:
             for row in r.curve.itertuples()
             if row.offset in marks
         ]
-        print("  kurva: " + "  ".join(parts))
+        say("  kurva: " + "  ".join(parts))
 
 
 def main() -> int:
@@ -400,12 +402,12 @@ def main() -> int:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
+        say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
 
     panel = load_panel_from_db(dsn, months=args.months)
     if panel.empty:
-        print("[abort] panel kosong")
+        say("[abort] panel kosong")
         return 1
     # vol_spike/jump butuh kolom rel_volume? tidak — deteksi langsung dari volume.
     names = [args.event] if args.event else sorted(EVENT_PRESETS)

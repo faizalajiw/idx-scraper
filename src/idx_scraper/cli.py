@@ -39,6 +39,7 @@ from .client import (
     fetch_yahoo_quotes,
 )
 from .live_capture import LiveCapture
+from .logging_setup import say, setup
 from .notify import (
     SignalState,
     TelegramNotifier,
@@ -75,7 +76,7 @@ def fetch_and_store_indices(client: IDXClient, storage) -> int:
             storage.insert_index_quote(q)
             count += 1
         except Exception as e:
-            print(f"[err] insert index {q.code}: {e}", file=sys.stderr)
+            say(f"[err] insert index {q.code}: {e}", err=True)
     return count
 
 
@@ -88,13 +89,13 @@ def fetch_and_store_watchlist(client: IDXClient, storage, codes: list[str]) -> i
             time.sleep(3.0)
             q = client.fetch_trading_daily(code)
         if q is None:
-            print(f"[warn] no data for {code} (throttle / kode tidak aktif?)", file=sys.stderr)
+            say(f"[warn] no data for {code} (throttle / kode tidak aktif?)", err=True)
         else:
             try:
                 storage.insert_stock_quote(q)
                 count += 1
             except Exception as e:
-                print(f"[err] insert stock {code}: {e}", file=sys.stderr)
+                say(f"[err] insert stock {code}: {e}", err=True)
         time.sleep(1.2)  # sopan ke server IDX, hindari throttling
     return count
 
@@ -107,7 +108,7 @@ def fetch_and_store_eod(client: IDXClient, storage, date_str: str) -> int:
             storage.insert_eod_stock(r)
             count += 1
         except Exception as e:
-            print(f"[err] insert eod {r.code}: {e}", file=sys.stderr)
+            say(f"[err] insert eod {r.code}: {e}", err=True)
     return count
 
 
@@ -120,7 +121,7 @@ def fetch_and_store_indices_yahoo(storage) -> int:
             storage.insert_index_quote(q)
             count += 1
         except Exception as e:
-            print(f"[err] insert yahoo index {q.code}: {e}", file=sys.stderr)
+            say(f"[err] insert yahoo index {q.code}: {e}", err=True)
     return count
 
 
@@ -133,7 +134,7 @@ def fetch_and_store_watchlist_yahoo(storage, codes: list[str]) -> int:
             storage.insert_stock_quote(q)
             count += 1
         except Exception as e:
-            print(f"[err] insert yahoo stock {q.code}: {e}", file=sys.stderr)
+            say(f"[err] insert yahoo stock {q.code}: {e}", err=True)
     return count
 
 
@@ -154,16 +155,16 @@ def seed_historical_data(storage, tickers: list[str], days: int = 180) -> int:
                     storage.insert_stock_daily(row)
                     count += 1
                 except Exception as e:
-                    print(f"[err] insert {ticker} {row.date}: {e}", file=sys.stderr)
+                    say(f"[err] insert {ticker} {row.date}: {e}", err=True)
         except Exception as e:
-            print(f"[err] fetch historical for {ticker}: {e}", file=sys.stderr)
-    print(f"seeded {count} historical rows for {len(tickers)} tickers")
+            say(f"[err] fetch historical for {ticker}: {e}", err=True)
+    say(f"seeded {count} historical rows for {len(tickers)} tickers")
     return count
 
 
 def show_signals(storage, codes: list[str]) -> None:
     """Generate buy/sell signals from stored daily data (IDX EOD + Yahoo fallback)."""
-    print("\n=== Trading Signals ===")
+    say("\n=== Trading Signals ===")
     count = 0
     for code in codes[:20]:
         try:
@@ -177,14 +178,14 @@ def show_signals(storage, codes: list[str]) -> None:
                 last = df.iloc[-1]
                 rsi = last.get("RSI")
                 rsi_str = f"{float(rsi):.1f}" if pd.notna(rsi) else "-"
-                print(f"[{signal}] {code}: {last['close']:.2f} (RSI: {rsi_str})")
+                say(f"[{signal}] {code}: {last['close']:.2f} (RSI: {rsi_str})")
                 count += 1
         except Exception as e:
-            print(f"[warn] signal {code}: {e}", file=sys.stderr)
+            say(f"[warn] signal {code}: {e}", err=True)
             continue
     if count == 0:
-        print("No signals (all HOLD)")
-    print()
+        say("No signals (all HOLD)")
+    say()
 
 
 def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
@@ -214,12 +215,12 @@ def _job_regime_daily() -> None:
 
         row = record_today(dsn)
         if row:
-            print(
+            say(
                 f"[{datetime.now(WIB).isoformat()}] regime {row['date']}: "
                 f"{row['regime']} (ADX {row['adx']}, vol {row['vol_state']})"
             )
     except Exception as e:
-        print(f"[err] regime harian: {e}", file=sys.stderr)
+        say(f"[err] regime harian: {e}", err=True)
 
 
 def _job_monthly_ic() -> None:
@@ -231,12 +232,12 @@ def _job_monthly_ic() -> None:
         from .research.monthly_ic import run_and_store
 
         out = run_and_store(dsn)
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] IC bulanan tersimpan "
             f"run_date={out['run_date']} rows={out['rows']} bobot={out['weights']}"
         )
     except Exception as e:
-        print(f"[err] IC bulanan: {e}", file=sys.stderr)
+        say(f"[err] IC bulanan: {e}", err=True)
 
 
 def _job_ownership() -> None:
@@ -255,12 +256,12 @@ def _job_ownership() -> None:
             ok, total = snapshot_ownership(codes, None, client)
         finally:
             client.close()
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] ownership snapshot — "
             f"{ok}/{len(codes)} emiten, {total} baris"
         )
     except Exception as e:
-        print(f"[err] ownership snapshot: {e}", file=sys.stderr)
+        say(f"[err] ownership snapshot: {e}", err=True)
 
 
 def _next_weekday_at(dow: int, hour: int, minute: int) -> datetime:
@@ -290,10 +291,10 @@ def _job_broker_eod() -> int:
         from scripts.backfill_broker_eod import backfill_broker_eod
 
         n, d = backfill_broker_eod(dsn)
-        print(f"[{datetime.now(WIB).isoformat()}] broker summary {d}: {n} baris")
+        say(f"[{datetime.now(WIB).isoformat()}] broker summary {d}: {n} baris")
         return n
     except Exception as e:
-        print(f"[err] broker summary job: {e}", file=sys.stderr)
+        say(f"[err] broker summary job: {e}", err=True)
         return 0
 
 
@@ -308,10 +309,10 @@ def _lapor_bisu(penjaga: str, sudah: bool) -> bool:
 
     stamp = datetime.now(WIB).isoformat()
     if sudah:
-        print(f"[{stamp}] health {penjaga} — 0 sesi terbaca (sudah dilaporkan)")
+        say(f"[{stamp}] health {penjaga} — 0 sesi terbaca (sudah dilaporkan)")
     else:
         TelegramNotifier().send_message(format_no_data_message(penjaga))
-        print(f"[{stamp}] health {penjaga} — 0 sesi terbaca (dilaporkan)")
+        say(f"[{stamp}] health {penjaga} — 0 sesi terbaca (dilaporkan)")
     return True
 
 
@@ -345,15 +346,15 @@ def _job_health_eod() -> None:
         h = check_eod_health()
         if not h.ok:
             TelegramNotifier().send_message(format_health_message(h))
-            print(f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — {', '.join(h.missing)}")
+            say(f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — {', '.join(h.missing)}")
         elif h.missing:
             # Mis. `DATABASE_URL` tidak diset: bukan "telat", tapi bukan OK juga.
             bisu = _lapor_bisu("Kesegaran EOD", bisu)
-            print(f"[err] health EOD: {', '.join(h.missing)}", file=sys.stderr)
+            say(f"[err] health EOD: {', '.join(h.missing)}", err=True)
         else:
-            print(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
+            say(f"[{datetime.now(WIB).isoformat()}] health EOD OK — {h.expected}")
     except Exception as e:
-        _cetak_aman(f"[err] health EOD: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health EOD: {e}", err=True)
 
     # Cek kedua: tanggal bisa ada tapi kolom foreign_* bolong (9 bulan
     # tanpa alarm pada 2025-09-24 → 2026-07-29). Telegram dikirim sebelum
@@ -366,12 +367,12 @@ def _job_health_eod() -> None:
             bisu = _lapor_bisu("Cakupan kolom foreign_*", bisu)
         elif not c.ok:
             TelegramNotifier().send_message(format_field_coverage_message(c))
-            print(
+            say(
                 f"[{datetime.now(WIB).isoformat()}] health cakupan kolom timpang — "
                 f"{len(c.troublemakers)}/{c.checked} sesi"
             )
     except Exception as e:
-        _cetak_aman(f"[err] health cakupan kolom: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health cakupan kolom: {e}", err=True)
 
     # Cek ketiga: tanggal ada, isinya cuma separuh sesi (insert tersela).
     try:
@@ -382,13 +383,13 @@ def _job_health_eod() -> None:
             bisu = _lapor_bisu("Jumlah baris per sesi", bisu)
         elif not r.ok:
             TelegramNotifier().send_message(format_row_count_message(r))
-            print(
+            say(
                 f"[{datetime.now(WIB).isoformat()}] health sesi separuh — "
                 f"{len(r.troublemakers)}/{r.checked} sesi di bawah median "
                 f"{r.median_rows} baris"
             )
     except Exception as e:
-        _cetak_aman(f"[err] health sesi separuh: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health sesi separuh: {e}", err=True)
 
     # Cek keempat: hari bursa tanpa baris sama sekali di tengah rentang data.
     try:
@@ -399,12 +400,12 @@ def _job_health_eod() -> None:
             bisu = _lapor_bisu("Lubang sesi", bisu)
         elif not g.ok:
             TelegramNotifier().send_message(format_session_gaps_message(g))
-            print(
+            say(
                 f"[{datetime.now(WIB).isoformat()}] health lubang sesi — "
                 f"{len(g.missing)} hari bursa tanpa baris"
             )
     except Exception as e:
-        _cetak_aman(f"[err] health lubang sesi: {e}", file=sys.stderr)
+        _cetak_aman(f"[err] health lubang sesi: {e}", err=True)
 
 
 def _job_signal_log() -> None:
@@ -424,12 +425,12 @@ def _job_signal_log() -> None:
         n = record_recent(dsn, months=1)
         log = load_log(dsn)
         last = str(log["date"].max().date()) if not log.empty else "-"
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] jejak sinyal tersimpan: "
             f"{n} baris (sinyal terakhir {last})"
         )
     except Exception as e:
-        print(f"[err] jejak sinyal job: {e}", file=sys.stderr)
+        say(f"[err] jejak sinyal job: {e}", err=True)
 
 
 def _job_recommendations() -> None:
@@ -449,16 +450,16 @@ def _job_recommendations() -> None:
 
         inputs = analytics_api.recommendation_record_inputs()
         n = record(dsn, months=1, **inputs)
-        print(f"[{datetime.now(WIB).isoformat()}] rekomendasi tersimpan: {n} kandidat")
+        say(f"[{datetime.now(WIB).isoformat()}] rekomendasi tersimpan: {n} kandidat")
     except Exception as e:
-        print(f"[err] rekomendasi job: {e}", file=sys.stderr)
+        say(f"[err] rekomendasi job: {e}", err=True)
 
 
 def cmd_recommendations(args) -> None:
     """Backfill + tampilkan track record kandidat beli (halaman Rekomendasi)."""
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        say("[err] DATABASE_URL belum diisi", err=True)
         return
     from .research.recommendation_log import evaluate, print_report, record
 
@@ -471,10 +472,10 @@ def cmd_recommendations(args) -> None:
 
         inputs = analytics_api.recommendation_record_inputs()
     except Exception as e:
-        print(f"[warn] input lapisan rekomendasi dilewati: {e}", file=sys.stderr)
+        say(f"[warn] input lapisan rekomendasi dilewati: {e}", err=True)
 
     written = record(dsn, months=args.months, **inputs)
-    print(f"[ok] {written} baris kandidat ditulis")
+    say(f"[ok] {written} baris kandidat ditulis")
     print_report(evaluate(dsn, horizons=tuple(args.k)))
 
 
@@ -554,9 +555,9 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
                 ringkas = journal_store.journal_summary(cur, rule=RULE_PAPAN)
                 verdict = str(ringkas["verdict"].get("status") or "") or None
             except Exception as e:
-                print(f"[warn] verdict buku klaim belum terbaca: {e}", file=sys.stderr)
+                say(f"[warn] verdict buku klaim belum terbaca: {e}", err=True)
     except Exception as e:
-        print(f"[warn] kesegaran data tidak terbaca: {e}", file=sys.stderr)
+        say(f"[warn] kesegaran data tidak terbaca: {e}", err=True)
 
     try:
         from .api import analytics as analytics_api
@@ -568,7 +569,7 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
         blocked = bool(gate.get("blocked"))
         alasan_rezim = str(gate.get("reason") or gate.get("regime") or "") or None
     except Exception as e:
-        print(f"[warn] gerbang rezim tidak terbaca: {e}", file=sys.stderr)
+        say(f"[warn] gerbang rezim tidak terbaca: {e}", err=True)
 
     return (
         claim_gate(
@@ -601,7 +602,7 @@ def _journal_write(dsn: str, *, trade_date: str | None = None, cetak: bool = Tru
         )
     if cetak:
         sebab = f" ({hasil['reason']})" if hasil.get("reason") else ""
-        print(
+        say(
             f"[ok] sesi {sesi}: {hasil['written']} klaim ditulis, "
             f"{hasil['refused']} penolakan{sebab}"
         )
@@ -621,7 +622,7 @@ def _job_journal_claims() -> None:
     try:
         _journal_write(dsn)
     except Exception as e:  # DB down must not kill the scheduler
-        print(f"[err] buku klaim job: {e}", file=sys.stderr)
+        say(f"[err] buku klaim job: {e}", err=True)
 
 
 def _job_journal_outcomes() -> None:
@@ -640,13 +641,13 @@ def _job_journal_outcomes() -> None:
             conn.cursor() as cur,
         ):
             hitung = journal_store.fill_outcomes(cur)
-        print(
+        say(
             f"[{_now_wib().isoformat()}] buku klaim: diperiksa {hitung['diperiksa']} klaim "
             f"terbuka · target {hitung['kena_target']} · stop {hitung['kena_stop']} · "
             f"kedaluwarsa {hitung['kedaluwarsa']}"
         )
     except Exception as e:
-        print(f"[err] isi hasil buku klaim: {e}", file=sys.stderr)
+        say(f"[err] isi hasil buku klaim: {e}", err=True)
 
 
 def _job_journal_reminder() -> int:
@@ -687,7 +688,7 @@ def _job_journal_reminder() -> int:
                 teks = format_claim_hits([]) if ada_catatan else format_claim_silence(sesi)
         return len(hits) if notifier.send_message(teks) else 0
     except Exception as e:
-        print(f"[err] pengingat buku klaim: {e}", file=sys.stderr)
+        say(f"[err] pengingat buku klaim: {e}", err=True)
         return 0
 
 
@@ -703,7 +704,7 @@ def cmd_journal(args) -> None:
 
     dsn = _journal_dsn()
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        say("[err] DATABASE_URL belum diisi", err=True)
         return
 
     from . import journal_halt
@@ -725,7 +726,7 @@ def cmd_journal(args) -> None:
         ):
             if aksi == "outcomes":
                 hitung = journal_store.fill_outcomes(cur, trade_date=sesi)
-                print(
+                say(
                     f"[ok] sesi {sesi}: diperiksa {hitung['diperiksa']} klaim terbuka · "
                     f"target {hitung['kena_target']} · stop {hitung['kena_stop']} · "
                     f"kedaluwarsa {hitung['kedaluwarsa']} · masih terbuka {hitung['terbuka']}"
@@ -737,17 +738,17 @@ def cmd_journal(args) -> None:
                     cur, rule=aturan, code=getattr(args, "code", None)
                 )
                 celah = journal_store.gaps(cur, sessions=10)
-                print(f"{aturan}: {ringkas['record_line']}")
-                print(
+                say(f"{aturan}: {ringkas['record_line']}")
+                say(
                     f"baris {ringkas['claims']} · terukur {ringkas['measured_claims']} · "
                     f"sesi terukur {ringkas['sessions']} dari {ringkas['claim_sessions']} "
                     f"sesi menulis · verdict {ringkas['verdict']['status']}"
                 )
                 if celah:
-                    print(
+                    say(
                         "[warn] sesi tanpa klaim dan tanpa penolakan: "
                         + ", ".join(c["trade_date"] for c in celah),
-                        file=sys.stderr,
+                        err=True,
                     )
                 return
 
@@ -760,28 +761,28 @@ def cmd_journal(args) -> None:
             )
             penolakan = [dict(r) for r in cur.fetchall()]
 
-        print(
+        say(
             "halt: "
             + ("ya" if halt["halted"] else "tidak")
             + (f" ({halt['reason']} · {halt['by']} {halt['at']})" if halt["halted"] else "")
         )
         if halt.get("note"):
-            print(f"[warn] {halt['note']}", file=sys.stderr)
-        print(f"aturan {RULE_PAPAN}: {ringkas['record_line']}")
-        print(f"verdict: {ringkas['verdict']['status']} ({ringkas['verdict']['reason']})")
+            say(f"[warn] {halt['note']}", err=True)
+        say(f"aturan {RULE_PAPAN}: {ringkas['record_line']}")
+        say(f"verdict: {ringkas['verdict']['status']} ({ringkas['verdict']['reason']})")
         for p in penolakan:
-            print(f"  {p['trade_date']} {p['reason']}: {p['detail'] or '-'}")
+            say(f"  {p['trade_date']} {p['reason']}: {p['detail'] or '-'}")
         if celah:
-            print(
+            say(
                 "[warn] sesi bisu (tanpa klaim dan tanpa penolakan): "
                 + ", ".join(c["trade_date"] for c in celah),
-                file=sys.stderr,
+                err=True,
             )
         return
 
-    print(
+    say(
         "[err] aksi journal tidak dikenal: pakai record, outcomes, summary, state, halt, resume",
-        file=sys.stderr,
+        err=True,
     )
 
 
@@ -791,14 +792,14 @@ def cmd_journal_halt(args) -> None:
 
     alasan = str(getattr(args, "reason", "") or "").strip()
     if not alasan:
-        print(
+        say(
             "[err] --reason wajib: sebab halt adalah satu-satunya yang membedakannya "
             "dari mesin yang rusak",
-            file=sys.stderr,
+            err=True,
         )
         return
     keadaan = journal_halt.set_halt(reason=alasan, by=getattr(args, "by", None) or "pemilik")
-    print(f"[ok] klaim baru dihentikan: {keadaan['reason']} ({keadaan['at']} oleh {keadaan['by']})")
+    say(f"[ok] klaim baru dihentikan: {keadaan['reason']} ({keadaan['at']} oleh {keadaan['by']})")
 
 
 def cmd_journal_resume(args) -> None:
@@ -806,19 +807,19 @@ def cmd_journal_resume(args) -> None:
     from . import journal_halt
 
     keadaan = journal_halt.clear(by=getattr(args, "by", None) or "pemilik")
-    print(f"[ok] klaim baru jalan lagi ({keadaan['at']} oleh {keadaan['by']})")
+    say(f"[ok] klaim baru jalan lagi ({keadaan['at']} oleh {keadaan['by']})")
 
 
 def cmd_signal_log(args) -> None:
     """Backfill + tampilkan track record sinyal (jejak sinyal)."""
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        say("[err] DATABASE_URL belum diisi", err=True)
         return
     from .research.signal_log import backfill, evaluate, print_report
 
     written = backfill(dsn, months=args.months)
-    print(f"[ok] {written} baris sinyal ditulis ke research.signal_log")
+    say(f"[ok] {written} baris sinyal ditulis ke research.signal_log")
     print_report(evaluate(dsn, horizons=tuple(args.k)))
 
 
@@ -826,13 +827,13 @@ def cmd_ic(args) -> None:
     """Run IC analysis manual + simpan histori bobot faktor."""
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        say("[err] DATABASE_URL belum diisi", err=True)
         return
     from .research.monthly_ic import run_and_store
 
     out = run_and_store(dsn, horizons=args.k)
-    print(f"run_date={out['run_date']} rows={out['rows']}")
-    print(f"bobot composite terbaru: {out['weights']}")
+    say(f"run_date={out['run_date']} rows={out['rows']}")
+    say(f"bobot composite terbaru: {out['weights']}")
 
 
 def _boleh_tulis_close_index(now: datetime | None = None) -> bool:
@@ -878,12 +879,12 @@ def _job_index_eod_close() -> None:
         from scripts.backfill_index_eod_idx import backfill_index_eod_idx
 
         upserted, snapshots = backfill_index_eod_idx(dsn)
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] index EOD close (IDX live) — "
             f"upsert={upserted}, snapshot baru={snapshots}"
         )
     except Exception as e:
-        print(f"[err] index EOD close job: {e}", file=sys.stderr)
+        say(f"[err] index EOD close job: {e}", err=True)
 
 
 # IDX kadang menolak endpoint BERAT (GetStockSummary, GetBrokerSummary) hanya
@@ -935,20 +936,20 @@ def _retry_step(label: str, step, *, percobaan: int | None = None) -> int:
             baris = step() or 0
         except Exception as e:
             baris = 0
-            print(f"[err] {label}: {e}", file=sys.stderr)
+            say(f"[err] {label}: {e}", err=True)
         if baris > 0:
             return baris
         if i + 1 < percobaan:
             jeda = _EOD_RETRY_DELAYS[min(i, len(_EOD_RETRY_DELAYS) - 1)]
-            print(
+            say(
                 f"[warn] {label}: 0 baris — percobaan {i + 2}/{percobaan} dalam {jeda}s",
-                file=sys.stderr,
+                err=True,
             )
             time.sleep(jeda)
     if percobaan > 1:
-        print(
+        say(
             f"[err] {label}: tetap kosong setelah {percobaan} percobaan",
-            file=sys.stderr,
+            err=True,
         )
     return baris
 
@@ -980,14 +981,14 @@ def _simpan_eod_hari(client: IDXClient, storage, day: date) -> int:
     try:
         _upsert_segment_day(rows)
     except Exception as e:
-        print(f"[err] agregat pasar reguler/non-reguler {day}: {e}", file=sys.stderr)
+        say(f"[err] agregat pasar reguler/non-reguler {day}: {e}", err=True)
     return count
 
 
 def _job_eod_full(client: IDXClient, storage) -> int:
     """Full market EOD snapshot at market close. Kembalikan jumlah baris."""
     count = _simpan_eod_hari(client, storage, datetime.now(WIB).date())
-    print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
+    say(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
     return count
 
 
@@ -1004,9 +1005,9 @@ def _clear_api_cache() -> None:
         req = urllib.request.Request(f"{base}/api/cache/clear", method="POST")
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
-        print(f"[{datetime.now(WIB).isoformat()}] cache analitik dikosongkan")
+        say(f"[{datetime.now(WIB).isoformat()}] cache analitik dikosongkan")
     except Exception as e:
-        print(f"[warn] gagal clear cache API: {e}", file=sys.stderr)
+        say(f"[warn] gagal clear cache API: {e}", err=True)
 
 
 # Kunci lintas-job: dua pipeline bersamaan (mis. rantai 16:10 yang molor bertemu
@@ -1024,9 +1025,9 @@ def _job_pipeline_refresh(client: IDXClient, storage, *, label: str, do_eod: boo
     jalan (semua langkah idempoten per tanggal).
     """
     if not _PIPELINE_BUSY.acquire(blocking=False):
-        print(
+        say(
             f"[warn] {label}: pipeline lain masih berjalan — dilewati",
-            file=sys.stderr,
+            err=True,
         )
         return
     try:
@@ -1047,7 +1048,7 @@ def _pipeline_refresh_body(client: IDXClient, storage, *, label: str, do_eod: bo
     summary) diberi percobaan ulang lewat ``_retry_step``; sisanya DB murni.
     Percobaan ulang dimatikan sebelum tenggat EOD - lihat ``_retry_percobaan``.
     """
-    print(f"[{datetime.now(WIB).isoformat()}] pipeline refresh — {label}")
+    say(f"[{datetime.now(WIB).isoformat()}] pipeline refresh — {label}")
     percobaan = _retry_percobaan()
     if do_eod:
         _retry_step(
@@ -1064,7 +1065,7 @@ def _pipeline_refresh_body(client: IDXClient, storage, *, label: str, do_eod: bo
         try:
             fn()
         except Exception as e:
-            print(f"[err] refresh {name}: {e}", file=sys.stderr)
+            say(f"[err] refresh {name}: {e}", err=True)
     _retry_step("broker summary", _job_broker_eod, percobaan=percobaan)
     _clear_api_cache()
     # Alert jejak smart money: verdict jendela 10 sesi baru berubah sekarang
@@ -1074,15 +1075,15 @@ def _pipeline_refresh_body(client: IDXClient, storage, *, label: str, do_eod: bo
         try:
             n_sm = run_smart_money_alerts(_parse_watchlist(os.getenv("IDX_WATCHLIST")))
             if n_sm:
-                print(f"[alerts] jejak smart money: {n_sm} transisi terkirim")
+                say(f"[alerts] jejak smart money: {n_sm} transisi terkirim")
         except Exception as e:
-            print(f"[err] refresh alert smart money: {e}", file=sys.stderr)
+            say(f"[err] refresh alert smart money: {e}", err=True)
         try:
             n_rec = run_recommendation_alerts()
             if n_rec:
-                print(f"[alerts] kandidat beli grade A: {n_rec} terkirim")
+                say(f"[alerts] kandidat beli grade A: {n_rec} terkirim")
         except Exception as e:
-            print(f"[err] refresh alert rekomendasi: {e}", file=sys.stderr)
+            say(f"[err] refresh alert rekomendasi: {e}", err=True)
 
 
 def _ingest_eod_research(rows) -> None:
@@ -1179,7 +1180,7 @@ def _ingest_eod_research(rows) -> None:
                  and prev.close is not null
                  and prev.trade_date = p.trade_date - 1"""
         )
-    print(f"[research] raw_eod +{inserted}, quarantine +{quarantined}, prices_pit refreshed")
+    say(f"[research] raw_eod +{inserted}, quarantine +{quarantined}, prices_pit refreshed")
 
 
 def _upsert_segment_day(rows) -> None:
@@ -1217,7 +1218,7 @@ def cmd_trade_summary(args) -> None:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("DATABASE_URL belum di-set — tidak bisa baca/menulis agregat.")
+        say("DATABASE_URL belum di-set — tidak bisa baca/menulis agregat.")
         return
 
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
@@ -1251,7 +1252,7 @@ def cmd_trade_summary(args) -> None:
                 )
             for trade_date, day_rows in by_date.items():
                 upsert_day(cur, trade_date, aggregate_day(day_rows))
-            print(f"[trade-summary] rebuild {len(by_date)} tanggal dari research.raw_eod")
+            say(f"[trade-summary] rebuild {len(by_date)} tanggal dari research.raw_eod")
 
         cur.execute(
             """select * from research.market_segment_daily
@@ -1261,22 +1262,22 @@ def cmd_trade_summary(args) -> None:
         row = cur.fetchone()
 
     if not row:
-        print("Belum ada agregat. Jalankan `idx eod` dulu (atau `idx trade-summary --rebuild`).")
+        say("Belum ada agregat. Jalankan `idx eod` dulu (atau `idx trade-summary --rebuild`).")
         return
 
     def _lot(v: int | None) -> str:
         return f"{(v or 0) / 100:,.0f}"
 
-    print(f"Pasar {row['trade_date']}  (emiten: {row['stock_count']})")
-    print(
+    say(f"Pasar {row['trade_date']}  (emiten: {row['stock_count']})")
+    say(
         f"  Reguler     : volume {_lot(_int(row['regular_volume']))} lot "
         f"({_int(row['regular_volume']):,} lembar) · value Rp {_num(row['regular_value']):,.0f} · freq {_int(row['regular_freq']):,}"
     )
-    print(
+    say(
         f"  Non-reguler : volume {_lot(_int(row['nonreg_volume']))} lot "
         f"({_int(row['nonreg_volume']):,} lembar) · value Rp {_num(row['nonreg_value']):,.0f} · freq {_int(row['nonreg_freq']):,}"
     )
-    print(
+    say(
         f"  Total       : volume {_lot(_int(row['total_volume']))} lot · value Rp {_num(row['total_value']):,.0f}"
     )
 
@@ -1289,11 +1290,11 @@ def cmd_snapshot(args) -> None:
         top_n = getattr(args, "top", None)
         if top_n:
             codes = liquid_codes(client, top_n)
-            print(f"scanning {len(codes)} most liquid tickers...")
+            say(f"scanning {len(codes)} most liquid tickers...")
         else:
             codes = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
         n_stock = fetch_and_store_watchlist(client, storage, codes)
-        print(f"snapshot done — index={n_idx}, stocks={n_stock}")
+        say(f"snapshot done — index={n_idx}, stocks={n_stock}")
     finally:
         client.close()
         storage.close()
@@ -1308,7 +1309,7 @@ def cmd_eod(args) -> None:
         else:
             day = datetime.now(WIB).date()
         count = _simpan_eod_hari(client, storage, day)
-        print(f"EOD fetch done — {count} stocks stored")
+        say(f"EOD fetch done — {count} stocks stored")
     finally:
         client.close()
         storage.close()
@@ -1450,7 +1451,7 @@ def _backfill_hari_lampau(
             tanpa_index.append(day)
 
     if lapor_lubang_index and tanpa_index:
-        print(
+        say(
             f"[catchup] {label}: {len(kandidat)} hari bursa lampau dicek, "
             f"{len(tanpa_index)} di antaranya tanpa close indeks resmi "
             f"({', '.join(str(d) for d in tanpa_index)}) — close indeks hanya "
@@ -1465,16 +1466,16 @@ def _backfill_hari_lampau(
         try:
             baris = _simpan_eod_hari(client, storage, day)
         except Exception as e:
-            print(f"[err] backfill {day}: {e}", file=sys.stderr)
+            say(f"[err] backfill {day}: {e}", err=True)
             continue
         if baris:
             terisi += 1
-            print(f"[catchup] {label}: EOD {day} ditarik ulang — {baris} emiten")
+            say(f"[catchup] {label}: EOD {day} ditarik ulang — {baris} emiten")
         else:
-            print(
+            say(
                 f"[warn] {label}: IDX membalas 0 baris untuk {day} — "
                 "boleh dicoba lagi di cek berikutnya",
-                file=sys.stderr,
+                err=True,
             )
     if terisi:
         # Tanpa EOD: tidak ada sesi pasar baru, yang perlu jalan hanya recompute
@@ -1512,25 +1513,25 @@ def _eod_catchup_hari_ini(client: IDXClient, storage, *, label: str) -> str:
     """
     now_wib = datetime.now(WIB)
     if not _hari_bursa(now_wib.date()) or now_wib.hour < 16:
-        print(f"[catchup] {label}: dilewati (pasar belum tutup atau bukan hari bursa)")
+        say(f"[catchup] {label}: dilewati (pasar belum tutup atau bukan hari bursa)")
         return "bukan-hari-bursa"
     ada_saham, ada_indeks = _eod_fresh_for(now_wib.date())
     if not ada_saham:
-        print(
+        say(
             f"[catchup] {label}: EOD saham {now_wib:%Y-%m-%d} belum ada — "
             "menjalankan pipeline penuh..."
         )
         _job_pipeline_refresh(client, storage, label=f"catchup {label}", do_eod=True)
         return "pipeline"
     if not ada_indeks:
-        print(
+        say(
             f"[catchup] {label}: close resmi COMPOSITE {now_wib:%Y-%m-%d} belum ada — "
             "menjalankan index EOD close..."
         )
         _job_index_eod_close()
         _clear_api_cache()
         return "indeks"
-    print(f"[catchup] {label}: EOD hari ini sudah lengkap (saham OK, index OK)")
+    say(f"[catchup] {label}: EOD hari ini sudah lengkap (saham OK, index OK)")
     return "lengkap"
 
 
@@ -1564,7 +1565,7 @@ def cmd_refresh(args) -> None:
         today = datetime.now(WIB).date()
         has_stocks, has_index = _eod_fresh_for(today)
         if has_stocks and has_index:
-            print(
+            say(
                 f"[refresh] data EOD {today.isoformat()} sudah lengkap "
                 "(saham + indeks) — dilewati (--skip-if-fresh)"
             )
@@ -1615,7 +1616,7 @@ def snapshot_ownership(
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=sys.stderr)
+        say("[err] DATABASE_URL belum diisi", err=True)
         return 0, 0
     if not codes:
         return 0, 0
@@ -1629,14 +1630,14 @@ def snapshot_ownership(
                 try:
                     prof = client.fetch_company_profile(code)
                 except Exception as e:
-                    print(f"[warn] profil {code}: {e}", file=sys.stderr)
+                    say(f"[warn] profil {code}: {e}", err=True)
                     prof = None
                 n = snapshot_from_profile(cur, code, prof, snap)
                 if n:
                     ok += 1
                 total += n
                 if i % 25 == 0:
-                    print(f"  {i}/{len(codes)} — {total} baris")
+                    say(f"  {i}/{len(codes)} — {total} baris")
     finally:
         if own_client:
             client.close()
@@ -1663,11 +1664,11 @@ def cmd_ownership(args) -> None:
         else:
             codes = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
         if not codes:
-            print("tidak ada kode untuk di-snapshot")
+            say("tidak ada kode untuk di-snapshot")
             return
-        print(f"snapshot kepemilikan {len(codes)} emiten...")
+        say(f"snapshot kepemilikan {len(codes)} emiten...")
         ok, total = snapshot_ownership(codes, snap, client)
-        print(f"ownership done — {ok}/{len(codes)} emiten, {total} baris")
+        say(f"ownership done — {ok}/{len(codes)} emiten, {total} baris")
     finally:
         client.close()
 
@@ -1691,17 +1692,17 @@ def cmd_alerts(args) -> None:
         smart = run_smart_money_alerts(tickers)
         recs = run_recommendation_alerts()
         if signals or rules or smart or recs:
-            print(
+            say(
                 f"alerts terkirim — sinyal: {signals}, aturan: {rules}, "
                 f"smart money: {smart}, kandidat beli: {recs}"
             )
         else:
-            print("alerts: tidak ada sinyal/aturan/smart money/kandidat yang berubah")
+            say("alerts: tidak ada sinyal/aturan/smart money/kandidat yang berubah")
     finally:
         storage.close()
 
 
-def _cetak_aman(pesan: str, file=None) -> None:
+def _cetak_aman(pesan: str, file=None, err: bool = False) -> None:
     """Print yang tidak mematikan alarm di konsol yang tak bisa emoji.
 
     Konsol Windows (cp1252) melempar ``UnicodeEncodeError`` saat mencetak "⚠️";
@@ -1709,10 +1710,16 @@ def _cetak_aman(pesan: str, file=None) -> None:
     Dipakai juga untuk pesan error di jalur alarm — pesan exception yang berisi
     non-ASCII tidak boleh menjatuhkan jalur penjaga berikutnya.
     """
+    pengodean = (
+        getattr(file, "encoding", None)
+        if file is not None
+        else getattr(sys.stderr, "encoding", None)
+    )
     try:
-        print(pesan, file=file)
-    except UnicodeEncodeError:
-        print(pesan.encode("ascii", "replace").decode("ascii"), file=file)
+        pesan.encode(pengodean or "utf-8")
+    except (UnicodeEncodeError, LookupError):
+        pesan = pesan.encode("ascii", "replace").decode("ascii")
+    say(pesan, file=file, err=err)
 
 
 def _periksa(nama: str, fungsi, masalah: list[str], **kwargs):
@@ -1774,19 +1781,19 @@ def cmd_health(args) -> None:
     g = _periksa("lubang sesi", check_session_gaps, masalah, in_progress=hari_ini)
 
     if h is not None:
-        print(
+        say(
             f"hari bursa diharapkan: {h.expected} | saham terbaru: {h.stocks_latest} "
             f"| close IHSG terbaru: {h.index_latest}"
         )
     if c is not None:
-        print(f"cakupan kolom foreign_*: {c.checked} sesi diperiksa, terburuk {c.worst_pct:.1f}%")
+        say(f"cakupan kolom foreign_*: {c.checked} sesi diperiksa, terburuk {c.worst_pct:.1f}%")
         if c.checked == 0:
             masalah.append("cakupan kolom: tidak ada sesi yang diperiksa")
         elif not c.ok:
             _cetak_aman(format_field_coverage_message(c))
             masalah.append(f"cakupan kolom: {len(c.troublemakers)}/{c.checked} sesi")
     if r is not None:
-        print(
+        say(
             f"baris per sesi: median {r.median_rows} baris, {len(r.troublemakers)} sesi "
             f"di bawah {r.threshold_pct:.0f}% median ({r.checked} sesi diperiksa)"
         )
@@ -1796,7 +1803,7 @@ def cmd_health(args) -> None:
             _cetak_aman(format_row_count_message(r))
             masalah.append(f"sesi separuh: {len(r.troublemakers)}/{r.checked} sesi")
     if g is not None:
-        print(
+        say(
             f"lubang sesi: {len(g.missing)} hari bursa tanpa baris "
             f"({g.sessions} sesi, basis {g.basis})"
         )
@@ -1828,13 +1835,13 @@ def cmd_health(args) -> None:
             label = "TELAT — belum masuk: "
         else:
             label = "TERTINGGAL — belum masuk: "
-        print(label + ", ".join(h.missing))
+        say(label + ", ".join(h.missing))
 
     if h is not None and not h.missing and not masalah:
-        print("OK — data EOD terbaru lengkap")
+        say("OK — data EOD terbaru lengkap")
         return
     if masalah:
-        print("TIMPANG — " + "; ".join(masalah))
+        say("TIMPANG — " + "; ".join(masalah))
     if gagal:
         sys.exit(1)
 
@@ -1856,7 +1863,7 @@ def run_rule_alerts() -> int:
     try:
         evaluations = alerts_api.evaluate_all()
     except Exception as e:  # DB down / config missing must not kill the scheduler
-        print(f"[err] aturan pantauan dilewati: {e}", file=sys.stderr)
+        say(f"[err] aturan pantauan dilewati: {e}", err=True)
         return 0
     if not evaluations:
         return 0
@@ -1885,7 +1892,7 @@ def run_recommendation_alerts() -> int:
     try:
         board = analytics_api.get_recommendations(limit=50, min_grade="A")
     except Exception as e:  # DB down / config missing must not kill the scheduler
-        print(f"[err] alert rekomendasi dilewati: {e}", file=sys.stderr)
+        say(f"[err] alert rekomendasi dilewati: {e}", err=True)
         return 0
     rows = board.get("rows") or []
     if not rows:
@@ -1923,7 +1930,7 @@ def run_smart_money_alerts(codes: list[str]) -> int:
     try:
         verdicts = analytics_api.get_smart_money_verdicts(codes)
     except Exception as e:  # DB down / config missing must not kill the scheduler
-        print(f"[err] alert smart money dilewati: {e}", file=sys.stderr)
+        say(f"[err] alert smart money dilewati: {e}", err=True)
         return 0
     if not verdicts:
         return 0
@@ -1943,7 +1950,7 @@ def _job_alerts(storage, codes: list[str]) -> None:
     signals = run_alert_check(storage, codes, notifier, SignalState())
     rules = run_rule_alerts()
     if signals or rules:
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] telegram alerts — "
             f"sinyal: {signals}, aturan: {rules}"
         )
@@ -1971,7 +1978,7 @@ def _job_indices(client: IDXClient, storage) -> None:
     else:
         n = fetch_and_store_indices_yahoo(storage)
         tag = "YAHOO"
-    print(f"[{datetime.now(WIB).isoformat()}] index refreshed ({tag}): {n}")
+    say(f"[{datetime.now(WIB).isoformat()}] index refreshed ({tag}): {n}")
 
 
 def _job_watchlist(client: IDXClient, storage, codes: list[str]) -> None:
@@ -1983,7 +1990,7 @@ def _job_watchlist(client: IDXClient, storage, codes: list[str]) -> None:
     else:
         n = fetch_and_store_watchlist_yahoo(storage, codes)
         tag = "YAHOO"
-    print(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed ({tag}): {n}")
+    say(f"[{datetime.now(WIB).isoformat()}] watchlist refreshed ({tag}): {n}")
 
 
 def _job_news_refresh() -> None:
@@ -1992,9 +1999,9 @@ def _job_news_refresh() -> None:
         from .news import run_once
 
         n = run_once()
-        print(f"[{datetime.now(WIB).isoformat()}] news: {n} item baru")
+        say(f"[{datetime.now(WIB).isoformat()}] news: {n} item baru")
     except Exception as e:
-        print(f"[err] news job: {e}", file=sys.stderr)
+        say(f"[err] news job: {e}", err=True)
 
 
 # --- penjaga satu instance ------------------------------------------------
@@ -2042,7 +2049,7 @@ def _take_single_instance_lock() -> bool:
 
 def cmd_serve(args) -> None:
     if not _take_single_instance_lock():
-        print(
+        say(
             "[serve] instance lain sedang berjalan — keluar tanpa start.\n"
             "        (dua serve = dua Chrome berebut profil yang sama, EOD jadi 0 baris)\n"
             f"        kunci: {_serve_lock_path()}"
@@ -2305,9 +2312,9 @@ def cmd_serve(args) -> None:
     )
     if live_top > 0:
         live_capture.start()
-        print(f"live capture — {live_top} liquid + 20 movers, {live_delay_ms}ms/req, rolling sweep")
+        say(f"live capture — {live_top} liquid + 20 movers, {live_delay_ms}ms/req, rolling sweep")
     else:
-        print("live capture OFF (IDX_LIVE_TOP=0)")
+        say("live capture OFF (IDX_LIVE_TOP=0)")
 
     # Telegram alert loop (hanya kalau env Telegram diisi)
     alert_interval = int(os.getenv("IDX_ALERT_INTERVAL", "300"))
@@ -2319,30 +2326,30 @@ def cmd_serve(args) -> None:
             args=[storage, watchlist],
             id="alerts",
         )
-        print(f"telegram alerts (sinyal + aturan pantauan) every {alert_interval}s")
+        say(f"telegram alerts (sinyal + aturan pantauan) every {alert_interval}s")
     else:
-        print("telegram alerts OFF (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi)")
+        say("telegram alerts OFF (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi)")
 
-    print(f"serving — index every {idx_interval}s, watchlist every {wl_interval}s")
-    print(f"watchlist: {watchlist[:10]}...")
-    print(
+    say(f"serving — index every {idx_interval}s, watchlist every {wl_interval}s")
+    say(f"watchlist: {watchlist[:10]}...")
+    say(
         f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
         f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)"
     )
-    print(
+    say(
         "refresh pipeline 8 menu - Sen-Jum 08:50, Sen-Kam 12:00 / Jum 11:30, "
         "Sen-Jum 16:10; akhir pekan 08:45 & 16:00 (recompute+clear cache)"
     )
-    print(
+    say(
         "jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
         "kalau EOD hari ini sudah lengkap); "
         "health EOD 17:45; IC 16:50; ownership Senin 17:00"
     )
-    print(
+    say(
         "buku klaim lapis 4 — tulis 17:55 lalu tiap jam sampai 21:55 (idempoten), "
         "isi hasil 18:10, pengingat 19:20; gerbang penahan punya sebab sendiri"
     )
-    print(
+    say(
         f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
         "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
         "tidak bisa ditarik otomatis"
@@ -2362,7 +2369,7 @@ def cmd_serve(args) -> None:
                 lapor_lubang_index=True,
             )
     except Exception as e:
-        print(f"[warn] catchup check gagal: {e}", file=sys.stderr)
+        say(f"[warn] catchup check gagal: {e}", err=True)
 
     try:
         scheduler.start()
@@ -2504,6 +2511,9 @@ def main() -> None:
     j_resume.add_argument("--by", default="pemilik", help="pelaku (default: pemilik)")
 
     args = parser.parse_args()
+    # Semua perintah CLI (termasuk job terjadwal) menulis lewat satu kanal:
+    # stderr berformat, plus berkas harian bila IDX_LOG_DIR diset.
+    setup(job=args.command or "idx")
     if args.command == "snapshot":
         cmd_snapshot(args)
     elif args.command == "eod":
@@ -2530,7 +2540,7 @@ def main() -> None:
         try:
             watchlist = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
             n = fetch_and_store_watchlist(client, storage, watchlist)
-            print(f"watchlist done — {n} stocks stored")
+            say(f"watchlist done — {n} stocks stored")
         finally:
             client.close()
             storage.close()
@@ -2547,9 +2557,9 @@ def main() -> None:
 
         if getattr(args, "set", None):
             force_source(args.set)
-            print(f"source di-set ke: {args.set.upper()}")
+            say(f"source di-set ke: {args.set.upper()}")
         st = get_state()
-        print(f"source={st.source} probe_count={st.probe_count} idx_ok_count={st.idx_ok_count}")
+        say(f"source={st.source} probe_count={st.probe_count} idx_ok_count={st.idx_ok_count}")
     else:
         parser.print_help()
 

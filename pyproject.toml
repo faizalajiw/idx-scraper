@@ -64,7 +64,7 @@ target-version = "py311"
 # ARG sengaja belum diambil: 185 argumen tak terpakai sebagian besar adalah
 # parameter callback/route yang harus tetap bernama; butuh rename massal tanpa
 # manfaat perilaku.
-select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "T20"]
 ignore = [
     # Karakter tipografis (—, –, ×, →, ±) disengaja di docstring/komentar berbahasa
     # Indonesia; RUF002/RUF003 akan memaksa ASCII dan membuat prosa lebih buruk.
@@ -83,6 +83,12 @@ ignore = [
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
 # bisa diimpor saat dijalankan langsung (`python scripts/check_eod_gaps.py`).
 "scripts/check_eod_gaps.py" = ["E402"]
+# `scripts/` = skrip operasional satu-pakai yang dijalankan manual; keluarannya
+# memang print, bukan log terstruktur. `print` hanya boleh hidup di
+# `logging_setup.say` di dalam paket.
+"scripts/*.py" = ["T201"]
+# Pintu keluaran tunggal: satu-satunya `print` di `src/` ada di sini.
+"src/idx_scraper/logging_setup.py" = ["T201"]
 
 [tool.coverage.run]
 source = ["src/idx_scraper"]

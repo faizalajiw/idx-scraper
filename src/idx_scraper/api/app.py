@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from idx_scraper import news, watchlist_store
 
+from ..logging_setup import say
 from . import alerts, analytics, journal, services, simulation
 from .config import get_settings
 from .database import close_pool, get_cursor, init_pool
@@ -94,7 +95,7 @@ def _catat(pesan: str) -> None:
     hilang total kalau prosesnya dibunuh sebelum itu. Sudah kejadian: log uji
     hanya memuat dua dari enam baris warm-up walau keenam tugasnya selesai.
     """
-    print(pesan, flush=True)
+    say(pesan, flush=True)
 
 
 def _warm_heavy_caches() -> None:

@@ -12,7 +12,7 @@ Satu bagian yang gagal tidak menjatuhkan dossier: bagian itu diberi
 
 from __future__ import annotations
 
-import sys
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -20,6 +20,8 @@ from typing import Any
 from . import analytics
 from .database import get_cursor
 from .sector_map import sector_for
+
+logger = logging.getLogger(__name__)
 
 SECTION_KEYS = (
     "profil",
@@ -72,7 +74,7 @@ def _section(
     try:
         data = fn()
     except Exception as exc:  # satu bagian gagal tidak boleh menjatuhkan dossier
-        print(f"[warn] dossier bagian {name} dilewati: {exc}", file=sys.stderr)
+        logger.warning(f"[warn] dossier bagian {name} dilewati: {exc}")
         return {"data": None, "session_date": None, "stale": True, "error": str(exc)}
     session = session_of(data) if data is not None else None
     return {

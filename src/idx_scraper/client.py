@@ -6,8 +6,8 @@ All endpoints are unofficial/internal IDX APIs used for personal research.
 
 from __future__ import annotations
 
+import logging
 import math
-import sys
 import threading
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
@@ -18,6 +18,8 @@ from pydantic import BaseModel
 
 from .cf_transport import make_transport
 from .models import EodStockRow, IndexQuote, StockQuote
+
+logger = logging.getLogger(__name__)
 
 WIB = timezone(timedelta(hours=7))
 IDX_BASE = "https://www.idx.co.id"
@@ -68,7 +70,7 @@ class IDXClient:
                 return None
             return r
         except Exception as e:
-            print(f"[warn] IDX {path} gagal: {e}", file=sys.stderr)
+            logger.warning(f"[warn] IDX {path} gagal: {e}")
             return None
 
     # --- Index / IHSG ---
@@ -358,7 +360,7 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
             auto_adjust=False,
         )
     except Exception as e:
-        print(f"[warn] yahoo intraday gagal: {e}", file=sys.stderr)
+        logger.warning(f"[warn] yahoo intraday gagal: {e}")
     try:
         day = yf.download(
             tickers=" ".join(tickers),
@@ -370,7 +372,7 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
             auto_adjust=False,
         )
     except Exception as e:
-        print(f"[warn] yahoo daily gagal: {e}", file=sys.stderr)
+        logger.warning(f"[warn] yahoo daily gagal: {e}")
         return []
 
     single = len(tickers) == 1
@@ -457,7 +459,7 @@ def fetch_yahoo_indices(index_codes: list[str] | None = None) -> list[IndexQuote
         try:
             df = yf.Ticker(yt).history(period="5d")
         except Exception as e:
-            print(f"[warn] yahoo index {code} gagal: {e}", file=sys.stderr)
+            logger.warning(f"[warn] yahoo index {code} gagal: {e}")
             continue
         df = df.dropna(how="all")
         if len(df) == 0:

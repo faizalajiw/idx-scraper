@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ..logging_setup import say
+
 ELIGIBLE_ABS_IC = 0.05
 ELIGIBLE_ABS_ICIR = 0.5
 
@@ -207,7 +209,7 @@ def self_test() -> None:
         "vol": w["vol_21d"],
         "dist_52w": w["dist_52w_high"],
     }
-    print("self_test OK:", w)
+    say("self_test OK:", w)
 
 
 def weights_from_rows_by_key(weights: dict[str, float]) -> dict[str, float]:

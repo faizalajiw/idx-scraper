@@ -23,13 +23,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
-import sys
 import threading
 import time
 from typing import Any
 
 from curl_cffi import requests as cf_requests
+
+logger = logging.getLogger(__name__)
 
 IDX_BASE = "https://www.idx.co.id"
 _REVIVE_COOLDOWN_SEC = 600
@@ -136,10 +138,9 @@ class BrowserTransport:
             asyncio.run_coroutine_threadsafe(_reopen(), self._loop).result(timeout=180)
         except Exception as e:
             self._revive_blocked_until = time.monotonic() + _REVIVE_COOLDOWN_SEC
-            print(
+            logger.warning(
                 f"[cf-transport] revive gagal: {e!r}; retry dalam {_REVIVE_COOLDOWN_SEC}s "
                 f"(profile {PROFILE_DIR} mungkin dikunci Chrome lain)",
-                file=sys.stderr,
             )
         return self._page
 
@@ -158,7 +159,7 @@ class BrowserTransport:
                 try:
                     await _run()
                 except Exception as e:
-                    print(f"[cf-transport] browser open failed: {e!r}", file=sys.stderr)
+                    logger.warning(f"[cf-transport] browser open failed: {e!r}")
                 finally:
                     self._ready.set()
 
@@ -203,12 +204,12 @@ class BrowserTransport:
             )
             self.last_status = data["status"]
             if data["status"] != 200:
-                print(f"[warn] IDX {path} status {data['status']}", file=sys.stderr)
+                logger.warning(f"[warn] IDX {path} status {data['status']}")
                 return None
             try:
                 return json.loads(data["text"])
             except json.JSONDecodeError:
-                print(f"[warn] IDX {path} non-JSON body", file=sys.stderr)
+                logger.warning(f"[warn] IDX {path} non-JSON body")
                 return None
 
         return self._call(_fetch())
@@ -241,7 +242,7 @@ class BrowserTransport:
             )
             self.last_status = data["status"]
             if data["status"] != 200 or not data.get("b64"):
-                print(f"[warn] CF fetch {url} status {data['status']}", file=sys.stderr)
+                logger.warning(f"[warn] CF fetch {url} status {data['status']}")
                 return None
             import base64
 
@@ -301,12 +302,12 @@ class HttpTransport:
         r = self._session.get(url, impersonate=self.impersonate, headers=_HTTP_HEADERS, timeout=30)
         self.last_status = r.status_code
         if r.status_code != 200:
-            print(f"[warn] IDX {path} status {r.status_code}", file=sys.stderr)
+            logger.warning(f"[warn] IDX {path} status {r.status_code}")
             return None
         try:
             return r.json()
         except Exception:
-            print(f"[warn] IDX {path} non-JSON body", file=sys.stderr)
+            logger.warning(f"[warn] IDX {path} non-JSON body")
             return None
 
     def get_bytes(self, url: str) -> bytes | None:
@@ -314,11 +315,11 @@ class HttpTransport:
         try:
             r = self._session.get(url, impersonate=self.impersonate, timeout=30)
         except Exception as e:
-            print(f"[warn] http fetch {url} gagal: {e!r}", file=sys.stderr)
+            logger.warning(f"[warn] http fetch {url} gagal: {e!r}")
             return None
         self.last_status = r.status_code
         if r.status_code != 200:
-            print(f"[warn] http fetch {url} status {r.status_code}", file=sys.stderr)
+            logger.warning(f"[warn] http fetch {url} status {r.status_code}")
             return None
         return r.content
 
@@ -366,15 +367,14 @@ class AutoTransport:
             try:
                 raw = self.http.get(path)
             except Exception as e:
-                print(f"[transport] HTTP {path} gagal: {e!r}", file=sys.stderr)
+                logger.warning(f"[transport] HTTP {path} gagal: {e!r}")
             if raw is not None:
                 self.last_status = self.http.last_status
                 return raw
             self._http_blocked_until = time.monotonic() + _HTTP_BLOCKED_SEC
-            print(
+            logger.warning(
                 f"[transport] HTTP ditolak (status {self.http.last_status}) — "
                 f"pindah ke browser {_HTTP_BLOCKED_SEC}s",
-                file=sys.stderr,
             )
         raw = self.browser.get(path)
         self.last_status = self.browser.last_status
@@ -406,5 +406,5 @@ def make_transport() -> Any:
     if mode == "browser":
         return BrowserTransport()
     if mode != "auto":
-        print(f"[warn] IDX_TRANSPORT={mode!r} tidak dikenal — dipakai 'auto'", file=sys.stderr)
+        logger.warning(f"[warn] IDX_TRANSPORT={mode!r} tidak dikenal — dipakai 'auto'")
     return AutoTransport()

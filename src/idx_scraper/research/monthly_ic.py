@@ -12,6 +12,7 @@ from typing import Any
 
 import psycopg
 
+from ..logging_setup import say
 from .composite import invalidate_caches
 from .ic import run_ic_analysis
 from .ic_history import save_ic_summary
@@ -79,10 +80,10 @@ def main() -> int:  # pragma: no cover - CLI kecil untuk debugging
     args = ap.parse_args()
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        print("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
+        say("[err] DATABASE_URL belum diisi", file=__import__("sys").stderr)
         return 1
     out = run_and_store(dsn, horizons=args.k)
-    print(out)
+    say(out)
     return 0
 
 

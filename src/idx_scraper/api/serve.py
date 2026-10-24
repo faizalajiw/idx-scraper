@@ -35,6 +35,8 @@ from collections.abc import Callable
 
 import uvicorn
 
+from ..logging_setup import say
+
 APP_DEFAULT = "idx_scraper.api.app:app"
 
 
@@ -65,7 +67,7 @@ def _minta_ulang(server: uvicorn.Server, tunggu: float = 10.0) -> None:
 
     def paksa() -> None:
         time.sleep(tunggu)
-        print(
+        say(
             f"[pengawas] uvicorn belum berhenti {tunggu:.0f} dtk setelah diminta - keluar (3)",
             flush=True,
         )
@@ -102,9 +104,9 @@ def _pengawas(
             gagal = 0
             continue
         gagal += 1
-        print(f"[pengawas] :{port} tidak menjawab ({gagal}/{gagal_maks})", flush=True)
+        say(f"[pengawas] :{port} tidak menjawab ({gagal}/{gagal_maks})", flush=True)
         if gagal >= gagal_maks:
-            print(f"[pengawas] :{port} gagal {gagal}x beruntun - menyalakan ulang", flush=True)
+            say(f"[pengawas] :{port} gagal {gagal}x beruntun - menyalakan ulang", flush=True)
             ambil_alih()
             return
 
@@ -120,7 +122,7 @@ def jalankan(
 ) -> None:
     """Jalankan API sampai berhenti; nyalakan ulang kalau pengawas memintanya."""
     jenis_loop = "Selector" if sys.platform == "win32" else "policy"
-    print(
+    say(
         f"[api] {host}:{port} loop={jenis_loop} pengawas={jeda_pengawas:g}s/{gagal_maks}",
         flush=True,
     )
@@ -143,9 +145,9 @@ def jalankan(
         if not diminta.is_set():
             return
         if percobaan == ulang_maks:
-            print(f"[pengawas] sudah {ulang_maks}x dinyalakan ulang - menyerah", flush=True)
+            say(f"[pengawas] sudah {ulang_maks}x dinyalakan ulang - menyerah", flush=True)
             sys.exit(4)
-        print("[pengawas] menyalakan ulang uvicorn", flush=True)
+        say("[pengawas] menyalakan ulang uvicorn", flush=True)
         if tidur_ulang:
             time.sleep(tidur_ulang)
 

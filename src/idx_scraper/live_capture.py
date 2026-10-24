@@ -12,12 +12,16 @@ is therefore the *liquid* universe (~80 names), not all ~960 listed emiten.
 
 from __future__ import annotations
 
+import logging
 import os
-import sys
 import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from .logging_setup import say
+
+logger = logging.getLogger(__name__)
 
 WIB = timezone(timedelta(hours=7))
 _MIN_INTERVAL = 1.0
@@ -100,7 +104,7 @@ class LiveCapture:
                 ):
                     self.sweep_once()
             except Exception as e:
-                print(f"[err] live capture: {e}", file=sys.stderr, flush=True)
+                logger.error(f"[err] live capture: {e}", flush=True)
             self._pause(5)
 
     def _status(self) -> int | None:
@@ -120,7 +124,7 @@ class LiveCapture:
 
             if self._throttle_run:
                 cool = _BACKOFF_STEPS[min(self._throttle_run, len(_BACKOFF_STEPS)) - 1]
-                print(
+                say(
                     f"[{datetime.now(WIB).isoformat()}] live capture cooling down {cool}s",
                     flush=True,
                 )
@@ -134,7 +138,7 @@ class LiveCapture:
                 try:
                     q = self._client.fetch_trading_daily(code)
                 except Exception as e:
-                    print(f"[warn] live {code}: {e}", file=sys.stderr, flush=True)
+                    logger.warning(f"[warn] live {code}: {e}", flush=True)
                     q = None
 
                 if q is not None and q.close is not None and q.close > 0:
@@ -145,9 +149,8 @@ class LiveCapture:
                         throttled += 1
                         misses = 0
                         if throttled >= _THROTTLE_ABORT_RUN:
-                            print(
+                            logger.warning(
                                 f"[warn] live capture throttled at {code}; aborting cycle",
-                                file=sys.stderr,
                                 flush=True,
                             )
                             break
@@ -171,7 +174,7 @@ class LiveCapture:
             self._throttle_run += 1
         else:
             self._throttle_run = 0
-        print(
+        say(
             f"[{datetime.now(WIB).isoformat()}] live captured: {len(rows)}/{len(codes)} (untraded {misses})",
             flush=True,
         )

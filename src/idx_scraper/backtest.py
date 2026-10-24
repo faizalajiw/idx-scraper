@@ -38,6 +38,8 @@ from typing import Self
 
 import psycopg
 
+from .logging_setup import say
+
 WIB = timezone(timedelta(hours=7))
 
 
@@ -509,7 +511,7 @@ def _demo() -> None:
     with PITReader() as reader:
         first, last = reader.first_last()
         if not first:
-            print("no data")
+            say("no data")
             return
         start, end = first, last
 
@@ -517,10 +519,10 @@ def _demo() -> None:
             return {"BBRI": 1.0}
 
         res = Backtester(reader).run(strategy, start, end)
-        print(f"window: {start} -> {end} ({len(res.equity_curve)} days)")
-        print(f"final equity : {res.final_equity:,.0f}")
-        print(f"total return : {res.total_return:+.2%}")
-        print(f"max drawdown : {res.max_drawdown:.2%}")
+        say(f"window: {start} -> {end} ({len(res.equity_curve)} days)")
+        say(f"final equity : {res.final_equity:,.0f}")
+        say(f"total return : {res.total_return:+.2%}")
+        say(f"max drawdown : {res.max_drawdown:.2%}")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ data and performs no calculations of its own.
 
 from __future__ import annotations
 
-import sys
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -24,6 +24,8 @@ from ..health import (
     parse_holidays,
 )
 from .database import get_cursor
+
+logger = logging.getLogger(__name__)
 
 WIB = timezone(timedelta(hours=7))
 
@@ -113,7 +115,7 @@ def get_market_trade_summary(date_str: str | None = None) -> dict[str, Any]:
     except Exception as e:
         # Tabel belum ada (worker belum pernah menulis) atau tanggal tak valid
         # -> sajikan kosong, bukan 500. Dicatat supaya tak jadi kegagalan senyap.
-        print(f"[warn] market trade summary dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] market trade summary dilewati: {e}")
         return empty
 
     if not row or row["trade_date"] is None:
@@ -823,7 +825,7 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
 
         broker_by_code, broker_validated = broker_scores_by_code()
     except Exception as e:
-        print(f"[warn] skor aktivitas broker dilewati: {e}", file=sys.stderr)
+        logger.warning(f"[warn] skor aktivitas broker dilewati: {e}")
         broker_by_code, broker_validated = {}, False
 
     out: list[dict[str, Any]] = []
@@ -852,7 +854,7 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
         except Exception as e:
             # Faktor lapisan adalah enhancement — DB query gagal tidak boleh
             # mematikan hold-check teknikal yang sudah jalan.
-            print(f"[warn] composite factor ranks dilewati: {e}", file=sys.stderr)
+            logger.warning(f"[warn] composite factor ranks dilewati: {e}")
             market_ranks = {}
             weights = None
 

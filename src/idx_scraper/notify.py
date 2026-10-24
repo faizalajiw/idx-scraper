@@ -18,8 +18,8 @@ Anti-spam: sinyal terakhir per ticker disimpan di file state JSON
 from __future__ import annotations
 
 import json
+import logging
 import os
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,7 +27,10 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from .analysis import calculate_indicators, generate_signal
+from .logging_setup import say
 from .smart_money import build_alert_message
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .alert_rules import RuleEvaluation
@@ -65,22 +68,20 @@ class TelegramNotifier:
         try:
             r = cf_requests.post(url, json=payload, timeout=self.timeout)
             if r.status_code != 200:
-                print(
+                logger.warning(
                     f"[warn] telegram {method} status {r.status_code}: {r.text[:200]}",
-                    file=sys.stderr,
                 )
                 return None
             return r.json()
         except Exception as e:  # jaringan/timeout — jangan bikin scraper mati
-            print(f"[warn] telegram {method} gagal: {e}", file=sys.stderr)
+            logger.warning(f"[warn] telegram {method} gagal: {e}")
             return None
 
     def send_message(self, text: str) -> bool:
         """Kirim 1 pesan (HTML). True kalau sukses."""
         if not self.enabled:
-            print(
+            logger.warning(
                 "[info] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi — skip kirim",
-                file=sys.stderr,
             )
             return False
         resp = self._post(
@@ -99,9 +100,9 @@ class TelegramNotifier:
         resp = self._post("getMe", {})
         if resp and resp.get("ok"):
             me = resp["result"]
-            print(f"telegram OK — bot @{me.get('username')}")
+            say(f"telegram OK — bot @{me.get('username')}")
             return True
-        print("telegram gagal — cek TELEGRAM_BOT_TOKEN", file=sys.stderr)
+        logger.warning("telegram gagal — cek TELEGRAM_BOT_TOKEN")
         return False
 
 
@@ -276,7 +277,7 @@ def scan_signals(storage, codes: list[str], min_days: int = 25) -> list[dict]:
                 }
             )
         except Exception as e:
-            print(f"[warn] scan signal {code}: {e}", file=sys.stderr)
+            logger.warning(f"[warn] scan signal {code}: {e}")
     return out
 
 
@@ -293,7 +294,7 @@ class SignalState:
             if self.path.exists():
                 self._data = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
-            print(f"[warn] state file rusak, mulai dari kosong: {e}", file=sys.stderr)
+            logger.warning(f"[warn] state file rusak, mulai dari kosong: {e}")
             self._data = {}
 
     def save(self) -> None:

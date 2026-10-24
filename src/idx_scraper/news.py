@@ -18,6 +18,7 @@ from urllib.parse import urljoin
 import psycopg
 from bs4 import BeautifulSoup
 
+from .logging_setup import say
 from .news_sources import BASE_URL, SOURCE
 
 WIB = timezone(timedelta(hours=7))
@@ -91,7 +92,7 @@ def fetch_snips(url: str = BASE_URL, timeout: int = 20) -> list[dict[str, Any]]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return parse_snips(resp.read().decode("utf-8", "replace"))
     except Exception as e:
-        print(f"[warn] snips gagal: {e}")
+        say(f"[warn] snips gagal: {e}")
         return []
 
 

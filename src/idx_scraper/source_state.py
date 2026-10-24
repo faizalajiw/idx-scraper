@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from .logging_setup import say
+
 WIB = timezone(timedelta(hours=7))
 
 SOURCE_YAHOO = "YAHOO"
@@ -127,7 +129,7 @@ def maybe_probe_and_switch(reachable_fn, probe_interval_sec: int, need_ok: int =
         state.last_switch_ts = now
         state.idx_ok_count = 0
         _save(state)
-        print(f"[{datetime.now(WIB).isoformat()}] SOURCE AUTO-SWITCH -> IDX (cooldown selesai)")
+        say(f"[{datetime.now(WIB).isoformat()}] SOURCE AUTO-SWITCH -> IDX (cooldown selesai)")
         return SOURCE_IDX
 
     _save(state)
