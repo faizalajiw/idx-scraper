@@ -85,12 +85,26 @@ def test_pengawas_ambil_alih_setelah_gagal_beruntun() -> None:
     assert diambil == [1]
 
 
-def test_minta_ulang_menyetel_should_exit() -> None:
-    """Ambil alih = minta uvicorn berhenti rapi supaya supervisor mengulang."""
+def test_minta_ulang_menyetel_should_exit(monkeypatch) -> None:
+    """Ambil alih = minta uvicorn berhenti rapi supaya supervisor mengulang.
+
+    `_minta_ulang` memasang thread paksa yang memanggil `os._exit(3)` setelah
+    `tunggu` detik. Thread itu daemon dan tidak bisa dibatalkan, jadi tes ini
+    mengganti `os._exit` dengan pencatat: kalau tidak, sisa suite yang berjalan
+    lebih lama dari `tunggu` akan dimatikan dengan exit 3 (gejala yang muncul
+    saat suite dijalankan dengan coverage, yang memperlambat semua tes).
+    """
     server = SimpleNamespace(should_exit=False)
-    # tunggu lama: thread paksa tidak boleh menembak os._exit saat tes berjalan
-    _minta_ulang(server, tunggu=60)
+    keluar: list[int] = []
+    monkeypatch.setattr(serve.os, "_exit", lambda code: keluar.append(code))
+
+    _minta_ulang(server, tunggu=0.05)
     assert server.should_exit is True
+
+    batas = time.monotonic() + 3.0
+    while not keluar and time.monotonic() < batas:
+        time.sleep(0.02)
+    assert keluar == [3]
 
 
 def test_jalankan_berhenti_bila_tidak_ada_permintaan_ulang(monkeypatch) -> None:
@@ -189,6 +203,7 @@ def _tunggu_siap(port: int, proses: subprocess.Popen, batas: float = 30.0) -> No
 
 def _badai_reset(port: int, jumlah: int = 3000, utas: int = 8) -> None:
     """Koneksi lalu RST (SO_LINGER 0) — pemicu `AcceptEx` gagal di proactor."""
+
     def churn() -> None:
         for i in range(jumlah // utas):
             s = socket.socket()
@@ -226,7 +241,7 @@ def test_pendengar_bertahan_setelah_klien_mereset_koneksi(tmp_path) -> None:
         _badai_reset(port)
         time.sleep(0.5)
         for _ in range(3):
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as r:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=15) as r:
                 assert r.status == 200
             time.sleep(0.1)
     finally:

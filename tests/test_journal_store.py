@@ -59,11 +59,9 @@ class _FakeCursor:
         self._out = []
 
         if q.startswith("insert into research.claim_journal"):
-            baris = dict(zip(CLAIM_COLUMNS, params))
+            baris = dict(zip(CLAIM_COLUMNS, params, strict=True))
             kunci = (str(baris["code"]), str(baris["trade_date"])[:10], baris["rule"])
-            ada = {
-                (str(k["code"]), str(k["trade_date"])[:10], k["rule"]) for k in self.klaim
-            }
+            ada = {(str(k["code"]), str(k["trade_date"])[:10], k["rule"]) for k in self.klaim}
             # `rowcount` mengikuti janji SQL-nya: tanpa `on conflict ... do nothing`,
             # Postgres akan menimpa, dan tesnya harus ikut gagal.
             if "do nothing" not in q or kunci not in ada:
@@ -74,9 +72,7 @@ class _FakeCursor:
             kunci = (str(tanggal)[:10], sebab)
             ada = {(str(p["trade_date"])[:10], p["reason"]) for p in self.penolakan}
             if "do nothing" not in q or kunci not in ada:
-                self.penolakan.append(
-                    {"trade_date": tanggal, "reason": sebab, "detail": detail}
-                )
+                self.penolakan.append({"trade_date": tanggal, "reason": sebab, "detail": detail})
                 self.rowcount = 1
         elif "from research.claim_journal" in q:
             baris = list(self.klaim)
@@ -238,9 +234,7 @@ def test_gerbang_menolak_maka_tidak_ada_klaim_dan_sebabnya_tercatat(monkeypatch)
 def test_kandidat_tak_lengkap_ditolak_dengan_sebabnya(monkeypatch) -> None:
     """Kandidat tanpa stop tidak masuk buku, dan sebabnya tercatat per nama."""
     cur = _FakeCursor()
-    monkeypatch.setattr(
-        toko, "candidates_for", lambda *a, **k: [_kandidat(code="XX", stop=None)]
-    )
+    monkeypatch.setattr(toko, "candidates_for", lambda *a, **k: [_kandidat(code="XX", stop=None)])
     out = toko.write_session("dsn", cur, trade_date="2026-10-15")
     assert out["written"] == 0
     assert cur.klaim == []

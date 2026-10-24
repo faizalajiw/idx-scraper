@@ -42,6 +42,7 @@ def set_market_daily(series: pd.Series | None) -> None:
     """Set konteks harga pasar utk kurva event-time (None = breadth panel)."""
     _G["market_daily"] = series
 
+
 # --------------------------------------------------------------------------- #
 # Preset event (semua backward-looking)
 # --------------------------------------------------------------------------- #
@@ -49,27 +50,39 @@ def set_market_daily(series: pd.Series | None) -> None:
 EVENT_PRESETS: dict[str, dict] = {
     "jump_up": {
         "description": "Hari ini naik >= 3% dengan volume >= 2x rata-rata 21 hari",
-        "fn": "jump", "ret": 0.03, "volx": 2.0,
+        "fn": "jump",
+        "ret": 0.03,
+        "volx": 2.0,
     },
     "jump_down": {
         "description": "Hari ini turun <= -3% dengan volume >= 2x rata-rata 21 hari",
-        "fn": "jump", "ret": -0.03, "volx": 2.0,
+        "fn": "jump",
+        "ret": -0.03,
+        "volx": 2.0,
     },
     "vol_spike": {
         "description": "Volume hari ini >= 3x rata-rata 21 hari (tanpa syarat arah)",
-        "fn": "spike", "volx": 3.0,
+        "fn": "spike",
+        "volx": 3.0,
     },
     "near_high": {
         "description": "Menutup dekat puncak 63 hari (<= 2% di bawahnya)",
-        "fn": "near_high", "max_dist": 0.02, "window": 63,
+        "fn": "near_high",
+        "max_dist": 0.02,
+        "window": 63,
     },
     "ma_cross_up": {
         "description": "SMA20 memotong ke atas SMA50 hari ini",
-        "fn": "cross", "short": 20, "long": 50,
+        "fn": "cross",
+        "short": 20,
+        "long": 50,
     },
     "ma_cross_down": {
         "description": "SMA20 memotong ke bawah SMA50 hari ini",
-        "fn": "cross", "short": 20, "long": 50, "down": True,
+        "fn": "cross",
+        "short": 20,
+        "long": 50,
+        "down": True,
     },
 }
 
@@ -100,10 +113,7 @@ def _event_mask(panel: pd.DataFrame, name: str) -> pd.Series:
         long = g["close"].transform(lambda s: s.rolling(preset["long"]).mean())
         diff = short - long
         prev = diff.groupby(df["code"]).shift(1)  # diff hari sebelumnya, per emiten
-        if preset.get("down"):
-            mask = (diff < 0) & (prev >= 0)
-        else:
-            mask = (diff > 0) & (prev <= 0)
+        mask = (diff < 0) & (prev >= 0) if preset.get("down") else (diff > 0) & (prev <= 0)
 
     else:  # pragma: no cover - preset baru harus didefinisikan di atas
         raise ValueError(f"preset tidak dikenal: {name}")
@@ -153,10 +163,10 @@ class EventStudyResult:
     mean_fwd: float | None
     median_fwd: float | None
     hit_rate: float | None
-    t_stat: float | None          # Newey-West lag 5 (event tumpang tindih)
-    mean_abnormal: float | None   # vs pasar equal-weight hari yang sama
+    t_stat: float | None  # Newey-West lag 5 (event tumpang tindih)
+    mean_abnormal: float | None  # vs pasar equal-weight hari yang sama
     t_abnormal: float | None
-    curve: pd.DataFrame           # kolom: offset, mean_fwd, mean_abnormal, n
+    curve: pd.DataFrame  # kolom: offset, mean_fwd, mean_abnormal, n
     events: pd.DataFrame = field(default_factory=pd.DataFrame)  # per-event (fwd, abnormal)
 
 
@@ -169,9 +179,9 @@ def _nw_tstat(x: pd.Series) -> float | None:
     d = x - mean
     T = len(d)
     var = (d * d).mean()
-    for l in range(1, min(5, T - 1) + 1):
-        cov = (d.iloc[l:] * d.iloc[:-l].values).mean()
-        var += 2.0 * (1.0 - l / 6.0) * cov
+    for lag in range(1, min(5, T - 1) + 1):
+        cov = (d.iloc[lag:] * d.iloc[:-lag].values).mean()
+        var += 2.0 * (1.0 - lag / 6.0) * cov
     if var <= 0:
         return math.inf if mean > 0 else (-math.inf if mean < 0 else None)
     return float(mean / math.sqrt(var / T))
@@ -239,7 +249,7 @@ def _at_pos(df: pd.DataFrame, col: str, target: pd.Series) -> pd.Series:
     tmp = df[["code", col]].copy()
     tmp["_pos"] = df.groupby("code").cumcount()
     lookup = tmp.set_index(["code", "_pos"])[col]
-    keys = list(zip(df["code"], target.astype(int)))
+    keys = list(zip(df["code"], target.astype(int), strict=True))
     vals = [lookup.get(k, np.nan) for k in keys]
     return pd.Series(vals, index=df.index, dtype=float)
 
@@ -274,7 +284,7 @@ def event_time_curve(
         index=pd.MultiIndex.from_arrays([df["code"], pd.to_datetime(df["date"])]),
     )
     event_idx = set()
-    for code, d in zip(events["code"], events["date"]):
+    for code, d in zip(events["code"], events["date"], strict=True):
         p = key_pos.get((code, pd.Timestamp(d)))
         if p is not None:
             event_idx.add((code, int(p)))
@@ -293,12 +303,14 @@ def event_time_curve(
                 fwd_ret.append(float(got["_ret"]))
                 if market and not pd.isna(got["_mkt"]):
                     fwd_abn.append(float(got["_ret"]) - float(got["_mkt"]))
-        rows.append({
-            "offset": offset,
-            "mean_fwd": float(np.mean(fwd_ret)) if fwd_ret else np.nan,
-            "mean_abnormal": float(np.mean(fwd_abn)) if fwd_abn and market else np.nan,
-            "n": len(fwd_ret),
-        })
+        rows.append(
+            {
+                "offset": offset,
+                "mean_fwd": float(np.mean(fwd_ret)) if fwd_ret else np.nan,
+                "mean_abnormal": float(np.mean(fwd_abn)) if fwd_abn and market else np.nan,
+                "n": len(fwd_ret),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -317,13 +329,15 @@ def run_event_study(
     """Pipeline: deteksi -> fwd returns -> statistik -> kurva."""
     events = detect_events(panel, event, min_gap=min_gap, params=params)
     if events.empty:
-        return EventStudyResult(event, 0, horizon, None, None, None, None, None, None,
-                                pd.DataFrame())
+        return EventStudyResult(
+            event, 0, horizon, None, None, None, None, None, None, pd.DataFrame()
+        )
     fwd = event_forward_returns(panel, events, horizon=horizon)
     curve = event_time_curve(panel, events, max_days=horizon)
     if fwd.empty:
-        return EventStudyResult(event, len(events), horizon, None, None, None, None,
-                                None, None, curve, events)
+        return EventStudyResult(
+            event, len(events), horizon, None, None, None, None, None, None, curve, events
+        )
     mean_fwd = float(fwd["fwd"].mean())
     t_abn = _nw_tstat(fwd["abnormal"]) if "abnormal" in fwd else None
     return EventStudyResult(
@@ -359,9 +373,7 @@ def print_result(r: EventStudyResult) -> None:
         f"hit={r.hit_rate:.0%}  t(NW)={r.t_stat:+.2f}"
     )
     if r.mean_abnormal is not None:
-        print(
-            f"  abnormal vs pasar: {r.mean_abnormal:+.2%}  t(NW)={r.t_abnormal:+.2f}"
-        )
+        print(f"  abnormal vs pasar: {r.mean_abnormal:+.2%}  t(NW)={r.t_abnormal:+.2f}")
     if not r.curve.empty:
         marks = [1, 3, 5, 10, 21]
         parts = [
@@ -374,8 +386,13 @@ def print_result(r: EventStudyResult) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="events")
-    ap.add_argument("--event", type=str, default=None,
-                    choices=sorted(EVENT_PRESETS), help="kosongkan untuk semua preset")
+    ap.add_argument(
+        "--event",
+        type=str,
+        default=None,
+        choices=sorted(EVENT_PRESETS),
+        help="kosongkan untuk semua preset",
+    )
     ap.add_argument("--horizon", type=int, default=21)
     ap.add_argument("--gap", type=int, default=10, help="jarak minimum antar event (hari bursa)")
     ap.add_argument("--months", type=int, default=18)

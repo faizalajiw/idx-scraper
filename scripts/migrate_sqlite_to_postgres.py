@@ -74,7 +74,7 @@ def _copy_table(
             params = []
             for row in batch:
                 vals = []
-                for c, v in zip(cols, row):
+                for c, v in zip(cols, row, strict=True):
                     vals.append(transforms[c](v) if c in transforms else v)
                 params.append(tuple(vals))
             pcur.executemany(insert, params)
@@ -89,32 +89,72 @@ def migrate(sqlite_path: str, dsn: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     try:
         counts["index_quotes"] = _copy_table(
-            sconn, pconn, "index_quotes",
+            sconn,
+            pconn,
+            "index_quotes",
             ["source", "code", "close", "change", "percent", "current", "captured_at", "metadata"],
             "on conflict do nothing",
             {"metadata": _metadata_to_json},
         )
         counts["stock_quotes"] = _copy_table(
-            sconn, pconn, "stock_quotes",
-            ["source", "code", "board", "previous", "open", "high", "low", "close", "change",
-             "volume", "value", "frequency", "bid", "bid_volume", "offer", "offer_volume",
-             "foreign_net", "captured_at", "metadata"],
+            sconn,
+            pconn,
+            "stock_quotes",
+            [
+                "source",
+                "code",
+                "board",
+                "previous",
+                "open",
+                "high",
+                "low",
+                "close",
+                "change",
+                "volume",
+                "value",
+                "frequency",
+                "bid",
+                "bid_volume",
+                "offer",
+                "offer_volume",
+                "foreign_net",
+                "captured_at",
+                "metadata",
+            ],
             "on conflict do nothing",
             {"metadata": _metadata_to_json},
         )
         counts["index_summary_daily"] = _copy_table(
-            sconn, pconn, "index_summary_daily",
+            sconn,
+            pconn,
+            "index_summary_daily",
             ["code", "close", "open", "high", "low", "volume", "value", "date", "captured_at"],
             "on conflict do nothing",
         )
         counts["stock_summary_daily"] = _copy_table(
-            sconn, pconn, "stock_summary_daily",
-            ["code", "close", "open", "high", "low", "previous", "change", "percent",
-             "volume", "value", "date", "captured_at"],
+            sconn,
+            pconn,
+            "stock_summary_daily",
+            [
+                "code",
+                "close",
+                "open",
+                "high",
+                "low",
+                "previous",
+                "change",
+                "percent",
+                "volume",
+                "value",
+                "date",
+                "captured_at",
+            ],
             "on conflict (code, date) do nothing",
         )
         counts["stock_daily"] = _copy_table(
-            sconn, pconn, "stock_daily",
+            sconn,
+            pconn,
+            "stock_daily",
             ["ticker", "date", "open", "high", "low", "close", "volume", "adjusted_close"],
             "on conflict (ticker, date) do nothing",
         )

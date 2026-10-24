@@ -98,9 +98,7 @@ def backfill_index_eod(dsn: str, days: int) -> tuple[int, int]:
             )
             if cur.fetchone():
                 continue  # sudah pernah ditulis — idempotent
-            prev = next(
-                (x["close"] for x in reversed(bars) if x["date"] < b["date"]), None
-            )
+            prev = next((x["close"] for x in reversed(bars) if x["date"] < b["date"]), None)
             change = (b["close"] - prev) if prev else None
             percent = (change / prev * 100) if (prev and change is not None) else None
             cur.execute(

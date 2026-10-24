@@ -89,8 +89,11 @@ def _pengawas(
             return
         time.sleep(0.2)
 
+    def bawaan_ambil_alih() -> None:
+        _minta_ulang(server)
+
     if ambil_alih is None:
-        ambil_alih = lambda: _minta_ulang(server)
+        ambil_alih = bawaan_ambil_alih
 
     gagal = 0
     while not server.should_exit:

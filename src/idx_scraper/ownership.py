@@ -82,7 +82,7 @@ def parse_shareholders(profile: Mapping[str, Any] | None) -> list[dict[str, Any]
                 "is_controller": bool(item.get("Pengendali")),
             }
         )
-    out.sort(key=lambda r: (r["pct"] if r["pct"] is not None else -1.0), reverse=True)
+    out.sort(key=lambda r: r["pct"] if r["pct"] is not None else -1.0, reverse=True)
     return out
 
 

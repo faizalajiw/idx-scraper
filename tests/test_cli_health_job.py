@@ -137,9 +137,7 @@ def _rows_separuh() -> health.RowCountCoverage:
 
 
 def _gaps_ok() -> health.SessionGaps:
-    return health.SessionGaps(
-        first=date(2024, 10, 15), last=date(2026, 10, 16), sessions=476
-    )
+    return health.SessionGaps(first=date(2024, 10, 15), last=date(2026, 10, 16), sessions=476)
 
 
 def _gaps_lubang() -> health.SessionGaps:

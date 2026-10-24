@@ -331,9 +331,7 @@ def composite_scores(
     ).loc[keep]
 
     out = out.copy()
-    out["drivers"] = [
-        _drivers_for(contrib.loc[i], pct.loc[i], driver_count) for i in out.index
-    ]
+    out["drivers"] = [_drivers_for(contrib.loc[i], pct.loc[i], driver_count) for i in out.index]
     return out.reset_index(drop=True)
 
 
@@ -655,7 +653,7 @@ def concentration(rows: list[dict[str, Any]], top_n: int = 10) -> dict[str, Any]
 
     shares = [c["value"] / total for c in clean]
     top: list[dict[str, Any]] = []
-    for c, s in zip(clean[:top_n], shares[:top_n]):
+    for c, s in zip(clean[:top_n], shares[:top_n], strict=True):
         top.append({**c, "share": s})
 
     return {

@@ -125,9 +125,7 @@ def test_pipeline_mengulang_kedua_langkah_idx(monkeypatch, sleeps):
     _stub_pipeline(monkeypatch, panggilan, hasil_eod=0, hasil_broker=0)
     # Retry penuh hanya berlaku sesudah close, sedangkan suite bisa dijalankan
     # jam berapa saja -> percobaan dipatok supaya tes tidak tergantung jam.
-    monkeypatch.setattr(
-        cli, "_retry_percobaan", lambda: len(cli._EOD_RETRY_DELAYS) + 1
-    )
+    monkeypatch.setattr(cli, "_retry_percobaan", lambda: len(cli._EOD_RETRY_DELAYS) + 1)
 
     cli._job_pipeline_refresh(object(), object(), label="tes", do_eod=True)
 

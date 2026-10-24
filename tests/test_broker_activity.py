@@ -30,8 +30,9 @@ from idx_scraper.research.broker_activity import (
 from idx_scraper.research.factors import compute_factors
 
 
-def _panel_one_code(n: int = 30, close: float = 100.0, value: float = 1_000_000.0,
-                    net: float = 1000.0) -> pd.DataFrame:
+def _panel_one_code(
+    n: int = 30, close: float = 100.0, value: float = 1_000_000.0, net: float = 1000.0
+) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "code": ["AAAA"] * n,
@@ -127,11 +128,11 @@ def _ic(factor: str, mean_ic: float | None, icir: float | None, horizon: int = 1
 
 def test_select_factors_enforces_ic_gate():
     rows = [
-        _ic("flow_net_21d", 0.08, 0.9),   # lolos
-        _ic("flow_net_5d", 0.04, 3.0),    # IC terlalu kecil
-        _ic("flow_accel", 0.20, 0.3),     # ICIR terlalu kecil
+        _ic("flow_net_21d", 0.08, 0.9),  # lolos
+        _ic("flow_net_5d", 0.04, 3.0),  # IC terlalu kecil
+        _ic("flow_accel", 0.20, 0.3),  # ICIR terlalu kecil
         _ic("ob_imbalance", None, None),  # tanpa data
-        _ic("mom_21d", 0.30, 3.0),        # di luar keluarga broker
+        _ic("mom_21d", 0.30, 3.0),  # di luar keluarga broker
     ]
     picked = select_factors(rows)
     by_factor = {p["factor"]: p for p in picked}
@@ -187,7 +188,9 @@ def _selected(factor: str, direction: float, weight: float = 1.0) -> dict:
 
 
 def test_composite_score_orders_by_percentile():
-    latest = pd.DataFrame({"code": ["AAAA", "BBBB", "CCCC", "DDDD"], "flow_net_5d": [1.0, 2.0, 3.0, 4.0]})
+    latest = pd.DataFrame(
+        {"code": ["AAAA", "BBBB", "CCCC", "DDDD"], "flow_net_5d": [1.0, 2.0, 3.0, 4.0]}
+    )
     out = composite_scores(latest, [_selected("flow_net_5d", 1.0)]).set_index("code")
     assert out.loc["DDDD", "score"] == 100.0
     assert out.loc["AAAA", "score"] == 25.0
@@ -198,7 +201,9 @@ def test_composite_score_orders_by_percentile():
 
 
 def test_composite_score_negates_when_ic_is_negative():
-    latest = pd.DataFrame({"code": ["AAAA", "BBBB", "CCCC", "DDDD"], "flow_net_5d": [1.0, 2.0, 3.0, 4.0]})
+    latest = pd.DataFrame(
+        {"code": ["AAAA", "BBBB", "CCCC", "DDDD"], "flow_net_5d": [1.0, 2.0, 3.0, 4.0]}
+    )
     out = composite_scores(latest, [_selected("flow_net_5d", -1.0)]).set_index("code")
     assert out.loc["AAAA", "score"] == 75.0
     assert out.loc["DDDD", "score"] == 0.0
@@ -220,7 +225,7 @@ def test_composite_score_drops_low_coverage_names():
     latest = pd.DataFrame(
         {
             "code": ["AAAA", "BBBB"],
-            "a": [1.0, np.nan],   # BBBB tidak punya nilai a
+            "a": [1.0, np.nan],  # BBBB tidak punya nilai a
             "b": [1.0, 1.0],
         }
     )
@@ -241,7 +246,9 @@ def test_composite_score_missing_factor_is_neutral_not_zero():
 def test_composite_score_empty_without_active_factors():
     latest = pd.DataFrame({"code": ["AAAA"], "flow_net_5d": [1.0]})
     assert composite_scores(latest, []).empty
-    assert composite_scores(latest, [dict(_selected("flow_net_5d", 0.0), eligible=False, weight=0.0)]).empty
+    assert composite_scores(
+        latest, [dict(_selected("flow_net_5d", 0.0), eligible=False, weight=0.0)]
+    ).empty
     assert composite_scores(pd.DataFrame(), [_selected("flow_net_5d", 1.0)]).empty
 
 
@@ -408,39 +415,28 @@ def test_history_percentiles_are_computed_per_date():
     # Nilai AAAA meloncat 1 -> 100 antar tanggal; kalau percentile dihitung
     # global (bukan per tanggal) skornya akan bergeser. Skala pasar relatifnya
     # TIDAK berubah, jadi skornya harus persis sama di kedua tanggal.
-    hist = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA"
-    )
+    hist = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA")
     assert len(hist) == 2
     assert hist["score"].tolist() == [50.0, 50.0]
     assert hist["coverage"].tolist() == [1.0, 1.0]
     assert hist.iloc[0]["drivers"][0]["percentile"] == 0.5
 
 
-
 def test_history_tracks_the_winner_and_loser_differently():
-    hist_a = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA"
-    )
-    hist_b = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "BBBB"
-    )
+    hist_a = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA")
+    hist_b = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", 1.0)], "BBBB")
     assert hist_a["score"].tolist() == [50.0, 50.0]
     assert hist_b["score"].tolist() == [100.0, 100.0]
     # Arah negatif membalik urutannya.
-    flipped = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", -1.0)], "AAAA"
-    )
+    flipped = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", -1.0)], "AAAA")
     assert flipped["score"].tolist() == [50.0, 50.0]
-    assert composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", -1.0)], "BBBB"
-    )["score"].tolist() == [0.0, 0.0]
+    assert composite_score_history(_two_day_panel(), [_selected("flow_net_5d", -1.0)], "BBBB")[
+        "score"
+    ].tolist() == [0.0, 0.0]
 
 
 def test_history_is_case_insensitive():
-    hist = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "aaaa"
-    )
+    hist = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", 1.0)], "aaaa")
     assert len(hist) == 2
 
 
@@ -490,7 +486,9 @@ def test_history_last_point_matches_latest_cross_section_score():
 # --------------------------------------------------------------------------- #
 
 
-def _sector_panel(codes: list[str], values: list[float], dates: list[str] | None = None) -> pd.DataFrame:
+def _sector_panel(
+    codes: list[str], values: list[float], dates: list[str] | None = None
+) -> pd.DataFrame:
     dates = dates or ["2026-09-25"] * len(codes)
     return pd.DataFrame(
         {
@@ -531,9 +529,7 @@ def test_sector_history_min_names_gate():
 def test_sector_history_excludes_requested_sectors_and_unmapped_codes():
     panel = _sector_panel(["AAAA", "BBBB", "CCCC", "DDDD"], [1.0, 2.0, 3.0, 4.0])
     sector_of = {"AAAA": "X", "BBBB": "X", "CCCC": "X"}  # DDDD sengaja tidak dipetakan
-    out = sector_score_history(
-        panel, [_selected("flow_net_5d", 1.0)], sector_of, min_names=1
-    )
+    out = sector_score_history(panel, [_selected("flow_net_5d", 1.0)], sector_of, min_names=1)
     assert out["sector"].tolist() == ["X"]
     assert out.iloc[0]["n_names"] == 3
 
@@ -614,9 +610,7 @@ def test_breadth_threshold_is_above_market_median():
 
 def test_history_market_median_is_the_cross_section_median():
     # Panel 2 emiten: median cross-section dua nilai percentile-rank.
-    hist = composite_score_history(
-        _two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA"
-    )
+    hist = composite_score_history(_two_day_panel(), [_selected("flow_net_5d", 1.0)], "AAAA")
     # _score_matrix pakai percentile rank -> dua emiten = {50, 100}; median 75.
     assert hist["market_median"].tolist() == [75.0, 75.0]
     # Kolom baru tidak mengubah skor/coverage yang sudah diuji test lain.

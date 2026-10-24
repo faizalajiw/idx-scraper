@@ -56,14 +56,8 @@ def ingest() -> None:
                     continue
 
                 # Delisted/unknown tickers yield None instead of an empty Series.
-                if splits is None:
-                    splits = []
-                else:
-                    splits = list(splits.items())
-                if divs is None:
-                    divs = []
-                else:
-                    divs = list(divs.items())
+                splits = [] if splits is None else list(splits.items())
+                divs = [] if divs is None else list(divs.items())
 
                 for ts, val in splits:
                     ratio = float(val)

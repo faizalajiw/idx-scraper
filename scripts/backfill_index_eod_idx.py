@@ -32,6 +32,7 @@ indeks hanya lewat scripts/backfill_index_eod.py (Yahoo, provenance beda).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from datetime import datetime, time, timedelta, timezone
@@ -60,10 +61,8 @@ def _fetch_composite_idx() -> tuple[float, float | None, float | None] | None:
                 )
         return None
     finally:
-        try:
+        with contextlib.suppress(Exception):
             client.close()
-        except Exception:
-            pass
 
 
 def _prev_trading_close(cur, today) -> float | None:
@@ -91,6 +90,7 @@ def _prev_trading_close(cur, today) -> float | None:
     )
     row = cur.fetchone()
     return float(row[0]) if row else None
+
 
 def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
     """Tulis close resmi IDX hari ini ke index_quotes + index_summary_daily.
@@ -154,10 +154,7 @@ def backfill_index_eod_idx(dsn: str) -> tuple[int, int]:
             ("COMPOSITE", close_today, today),
         )
 
-    print(
-        f"index EOD (IDX live) {today}: close={close_today} "
-        f"change={change} percent={percent}"
-    )
+    print(f"index EOD (IDX live) {today}: close={close_today} change={change} percent={percent}")
     return 1, 1
 
 

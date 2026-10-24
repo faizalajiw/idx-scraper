@@ -161,11 +161,11 @@ NEUTRAL_SCORE = 50.0
 #: Semua fitur komponen adalah bendera 0/1 dengan ambang absolut, supaya bisa
 #: diukur di harness DAN dihitung saat skoring satu emiten tanpa butuh sebaran
 #: hari itu (satu sumber definisi untuk keduanya).
-MOM20_STRONG_PCT = 10.0      # momentum 20 sesi >= +10%
-HIGH_VOL_DAILY = 0.04        # std return 21 sesi >= 4% per hari
-VALUE_LARGE = 5.0e9          # nilai transaksi >= Rp 5 miliar
-Z_MID = 1.5                  # harga 1,5 std di atas band 60 sesi
-Z_EXTENDED = 2.0             # harga 2 std di atas band 60 sesi
+MOM20_STRONG_PCT = 10.0  # momentum 20 sesi >= +10%
+HIGH_VOL_DAILY = 0.04  # std return 21 sesi >= 4% per hari
+VALUE_LARGE = 5.0e9  # nilai transaksi >= Rp 5 miliar
+Z_MID = 1.5  # harga 1,5 std di atas band 60 sesi
+Z_EXTENDED = 2.0  # harga 2 std di atas band 60 sesi
 
 #: Nama komponen skor: bendera -> penjelasan (dipakai alasan di UI, dokumen
 #: harness, dan tabel bobot). Komponen di sini adalah SATU-SATUNYA sumber poin;
@@ -216,6 +216,7 @@ PATTERN_LABELS = {
 def pattern_label(pattern_id: str) -> str:
     """Label human-readable satu pola (fallback ke id bila tak dikenal)."""
     return PATTERN_LABELS.get(str(pattern_id), str(pattern_id))
+
 
 #: Umur maksimum referensi entry terhadap close (%) sebelum level terlalu
 #: jauh dari harga (level basi tidak boleh dipakai).
@@ -320,11 +321,7 @@ def confidence_label(score: float, horizon: int) -> str:
     tayang sebagai kandidat, tapi labelnya tidak boleh menjanjikan apa pun.
     """
     value = _f(score)
-    if (
-        value is not None
-        and value > float(NEUTRAL_SCORE)
-        and int(horizon) in validated_horizons()
-    ):
+    if value is not None and value > float(NEUTRAL_SCORE) and int(horizon) in validated_horizons():
         return "meyakinkan"
     return "belum terbukti"
 
@@ -483,15 +480,9 @@ def entry_plan(
     up = _b(trend_up)
 
     pullback = up and (
-        (bb is not None and c <= bb * 1.02)
-        or (r is not None and r <= RSI_HEALTHY_LOW)
+        (bb is not None and c <= bb * 1.02) or (r is not None and r <= RSI_HEALTHY_LOW)
     )
-    breakout = (
-        dist is not None
-        and dist >= BREAKOUT_NEAR_HIGH_PCT
-        and vr is not None
-        and vr >= 1.5
-    )
+    breakout = dist is not None and dist >= BREAKOUT_NEAR_HIGH_PCT and vr is not None and vr >= 1.5
 
     if pullback:
         setup = "pullback"
@@ -616,9 +607,7 @@ def smart_money_evidence(
     for pid in sell_patterns:
         h = hist.get(str(pid)) or {}
         label = str(h.get("label") or pattern_label(str(pid)))
-        warnings.append(
-            f"Pola {label} (sisi jual) juga menyala — sinyal beli jadi lemah."
-        )
+        warnings.append(f"Pola {label} (sisi jual) juga menyala — sinyal beli jadi lemah.")
 
     return {
         "reasons": reasons,

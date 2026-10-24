@@ -185,10 +185,9 @@ def compute_factors(panel: pd.DataFrame, include_foreign: bool = True) -> pd.Dat
         df["flow_net_21d"] = _roll_by_code(notional, codes, 21, "sum") / val21
         df["flow_accel"] = (net_5 - _shift_by_code(net_5, codes, 5)) / val21
         df["flow_consistency_21d"] = _roll_by_code(np.sign(fn), codes, 21, "mean")
-        df["flow_activity_21d"] = (
-            _roll_by_code(notional.abs(), codes, 21, "sum")
-            / _roll_by_code(value, codes, 21, "sum").replace(0, np.nan)
-        )
+        df["flow_activity_21d"] = _roll_by_code(notional.abs(), codes, 21, "sum") / _roll_by_code(
+            value, codes, 21, "sum"
+        ).replace(0, np.nan)
     else:
         # Panel tanpa foreign flow -> kolom tetap ada sebagai NaN (bukan 0)
         # supaya skema output tidak berubah-ubah.

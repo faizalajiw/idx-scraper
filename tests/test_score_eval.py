@@ -44,9 +44,7 @@ def _synthetic_prices(sessions: int = 160, codes: int = 25) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _feats_from_prices(
-    prices: pd.DataFrame, horizons: tuple[int, ...] = HORIZONS
-) -> pd.DataFrame:
+def _feats_from_prices(prices: pd.DataFrame, horizons: tuple[int, ...] = HORIZONS) -> pd.DataFrame:
     """Frame fitur lengkap: ``code,date,close,setup`` + semua kunci
     ``COMPONENT_NOTES`` (0.0) + kolom ``abn_{k}`` dari ``attach_abnormal``."""
     base = prices.copy()

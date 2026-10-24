@@ -163,9 +163,7 @@ def _rsi(closes: list[float], period: int = 14) -> float | None:
 # ------------------------------------------------------------------ strategies
 
 
-def _select_ma_cross(
-    series: SeriesMap, d: date, short: int = 20, long: int = 50
-) -> list[str]:
+def _select_ma_cross(series: SeriesMap, d: date, short: int = 20, long: int = 50) -> list[str]:
     """Hold every code whose short moving average is above its long one."""
     selected: list[str] = []
     for code, points in series.items():
@@ -177,9 +175,7 @@ def _select_ma_cross(
     return sorted(selected)
 
 
-def _select_momentum(
-    series: SeriesMap, d: date, lookback: int = 20, top_n: int = 5
-) -> list[str]:
+def _select_momentum(series: SeriesMap, d: date, lookback: int = 20, top_n: int = 5) -> list[str]:
     """Hold the top-N codes by trailing return over ``lookback`` days."""
     scored: list[tuple[float, str]] = []
     for code, points in series.items():
@@ -211,9 +207,7 @@ def _ma_cross(series: SeriesMap, d: date, params: dict[str, float]) -> list[str]
 
 
 def _momentum(series: SeriesMap, d: date, params: dict[str, float]) -> list[str]:
-    return _select_momentum(
-        series, d, lookback=int(params["lookback"]), top_n=int(params["top_n"])
-    )
+    return _select_momentum(series, d, lookback=int(params["lookback"]), top_n=int(params["top_n"]))
 
 
 def _rsi_oversold(series: SeriesMap, d: date, params: dict[str, float]) -> list[str]:
@@ -453,15 +447,9 @@ def _compute_metrics(curve: list[tuple[date, float]], initial_cash: float) -> Me
     total = final / initial_cash - 1.0
 
     returns = [
-        equities[i] / equities[i - 1] - 1.0
-        for i in range(1, len(equities))
-        if equities[i - 1]
+        equities[i] / equities[i - 1] - 1.0 for i in range(1, len(equities)) if equities[i - 1]
     ]
-    volatility = (
-        statistics.pstdev(returns) * math.sqrt(TRADING_DAYS_PER_YEAR)
-        if returns
-        else None
-    )
+    volatility = statistics.pstdev(returns) * math.sqrt(TRADING_DAYS_PER_YEAR) if returns else None
     mean_return = statistics.fmean(returns) if returns else 0.0
     sharpe = (mean_return * TRADING_DAYS_PER_YEAR / volatility) if volatility else None
     annualized = (
@@ -658,9 +646,7 @@ def run_backtest(
         {
             "date": d.isoformat(),
             "equity": round(equity, 2),
-            "benchmark": (
-                round(benchmark_by_date[d], 2) if d in benchmark_by_date else None
-            ),
+            "benchmark": (round(benchmark_by_date[d], 2) if d in benchmark_by_date else None),
         }
         for d, equity in result.equity_curve
     ]

@@ -33,7 +33,7 @@ import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from enum import Enum
+from enum import StrEnum
 from typing import Self
 
 import psycopg
@@ -41,7 +41,7 @@ import psycopg
 WIB = timezone(timedelta(hours=7))
 
 
-class RebalanceFreq(str, Enum):
+class RebalanceFreq(StrEnum):
     """How often a strategy may recompute its targets and trade.
 
     Between rebalance days the portfolio is left alone: positions drift with the
@@ -114,10 +114,7 @@ class CostModel:
     @property
     def is_frictionless(self) -> bool:
         return not (
-            self.commission_pct
-            or self.sell_tax_pct
-            or self.slippage_pct
-            or self.max_adv_pct
+            self.commission_pct or self.sell_tax_pct or self.slippage_pct or self.max_adv_pct
         )
 
 
@@ -125,7 +122,7 @@ class CostModel:
 class Bar:
     code: str
     trade_date: date
-    close: float          # adjusted close (backward split/bonus)
+    close: float  # adjusted close (backward split/bonus)
     raw_close: float
     volume: int
 
@@ -250,9 +247,9 @@ class Trade:
     """One executed fill. ``shares`` is a positive magnitude; ``side`` signs it."""
 
     code: str
-    side: str       # "buy" | "sell"
+    side: str  # "buy" | "sell"
     shares: float
-    price: float    # execution price, slippage already baked in
+    price: float  # execution price, slippage already baked in
     notional: float  # shares x close (the reference value fees are charged on)
     fee: float
     slippage: float  # cash lost versus trading exactly at the close
@@ -280,7 +277,7 @@ class Rebalance:
     holdings: list[Holding]
     cash: float
     turnover: float  # notional traded on this day only
-    fees: float      # fees paid on this day only
+    fees: float  # fees paid on this day only
 
 
 @dataclass
@@ -288,10 +285,10 @@ class Portfolio:
     cash: float
     positions: dict[str, float] = field(default_factory=dict)  # code -> shares
     equity_curve: list[tuple[date, float]] = field(default_factory=list)
-    fees: float = 0.0           # commission + sell tax actually paid
+    fees: float = 0.0  # commission + sell tax actually paid
     slippage_cost: float = 0.0  # erosion from trading away from the close
-    turnover: float = 0.0       # gross notional traded (buys + sells)
-    rebalance_days: int = 0     # days the engine actually recomputed targets
+    turnover: float = 0.0  # gross notional traded (buys + sells)
+    rebalance_days: int = 0  # days the engine actually recomputed targets
     rebalances: list[Rebalance] = field(default_factory=list)
 
 
@@ -381,9 +378,7 @@ def _rebalance(
 ) -> list[Trade]:
     """Move the book towards ``targets`` and return the fills it took to get there."""
     # current total equity marked at today's prices
-    equity = pf.cash + sum(
-        sh * prices[c].close for c, sh in pf.positions.items() if c in prices
-    )
+    equity = pf.cash + sum(sh * prices[c].close for c, sh in pf.positions.items() if c in prices)
     min_trade = equity * MIN_TRADE_FRACTION
     fills: list[Trade] = []
 
@@ -414,9 +409,7 @@ def _rebalance(
     return fills
 
 
-def _snapshot(
-    day: date, pf: Portfolio, prices: dict[str, Bar], trades: list[Trade]
-) -> Rebalance:
+def _snapshot(day: date, pf: Portfolio, prices: dict[str, Bar], trades: list[Trade]) -> Rebalance:
     """Capture the book as it stands immediately after a rebalance.
 
     Held codes without a bar today are left out of ``holdings``, mirroring how

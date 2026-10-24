@@ -27,9 +27,7 @@ def test_instance_kedua_ditolak_lalu_kunci_lepas_di_akhir(tmp_path, monkeypatch)
     monkeypatch.setattr(cli, "_SERVE_LOCK_FD", None)
 
     # Instance pertama (proses terpisah, seperti kenyataannya) pegang kunci.
-    holder = subprocess.Popen(
-        [sys.executable, "-c", HOLDER], stdout=subprocess.PIPE, text=True
-    )
+    holder = subprocess.Popen([sys.executable, "-c", HOLDER], stdout=subprocess.PIPE, text=True)
     try:
         assert holder.stdout.read(2) == "ok"
         # Instance kedua ditolak selama yang pertama masih hidup.

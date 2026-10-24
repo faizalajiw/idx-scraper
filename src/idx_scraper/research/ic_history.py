@@ -162,9 +162,7 @@ def save_ic_summary(
         # t-stat raksasa menggagalkan upsert, NaN meracuni agregasi pembaca.
         clean = tuple(_storable(i, v) for i, v in enumerate(row))
         cur.execute(_UPSERT_SQL, clean)
-    weights = derive_weights(
-        summaries.get(horizon_for_weights, []), horizon=horizon_for_weights
-    )
+    weights = derive_weights(summaries.get(horizon_for_weights, []), horizon=horizon_for_weights)
     return len(rows), weights
 
 

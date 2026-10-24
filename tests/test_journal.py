@@ -98,15 +98,13 @@ def test_gerbang_mengizinkan_saat_kesegaran_tak_diketahui() -> None:
 
 def test_klaim_tanpa_stop_ditolak() -> None:
     assert (
-        claim_reject_reason(entry=113.42, stop=None, target=127.60, size_pct=16.0)
-        == "tanpa_stop"
+        claim_reject_reason(entry=113.42, stop=None, target=127.60, size_pct=16.0) == "tanpa_stop"
     )
 
 
 def test_klaim_tanpa_target_ditolak() -> None:
     assert (
-        claim_reject_reason(entry=113.42, stop=106.33, target=None, size_pct=16.0)
-        == "tanpa_target"
+        claim_reject_reason(entry=113.42, stop=106.33, target=None, size_pct=16.0) == "tanpa_target"
     )
 
 
@@ -116,12 +114,10 @@ def test_klaim_tanpa_ukuran_ditolak() -> None:
 
 def test_geometri_tidak_masuk_akal_ditolak() -> None:
     assert (
-        claim_reject_reason(entry=113.42, stop=113.42, target=127.60, size_pct=16.0)
-        == "geometri"
+        claim_reject_reason(entry=113.42, stop=113.42, target=127.60, size_pct=16.0) == "geometri"
     )
     assert (
-        claim_reject_reason(entry=113.42, stop=106.33, target=113.42, size_pct=16.0)
-        == "geometri"
+        claim_reject_reason(entry=113.42, stop=106.33, target=113.42, size_pct=16.0) == "geometri"
     )
     assert claim_reject_reason(entry=0.0, stop=-1.0, target=1.0, size_pct=16.0) == "geometri"
 
@@ -172,8 +168,9 @@ def test_klaim_terbuka_bukan_klaim_terukur() -> None:
     Verdict berdiri di atas `measured_claims`; kalau baris terbuka ikut dihitung,
     ambang 30 klaim tercapai sebelum satu pun klaim sempat dinilai.
     """
-    rows = [_row("2026-10-15", abn=None, status="terbuka")] + [
-        _row("2026-10-15", abn=0.02, status="kena_target")
+    rows = [
+        _row("2026-10-15", abn=None, status="terbuka"),
+        _row("2026-10-15", abn=0.02, status="kena_target"),
     ]
     out = summarize_claims(rows)
     assert out["claims"] == 2
@@ -209,9 +206,7 @@ def test_horizon_tidak_sah_ditolak() -> None:
         == "horizon"
     )
     assert (
-        claim_reject_reason(
-            entry=113.42, stop=106.33, target=127.60, size_pct=16.0, horizon_days=0
-        )
+        claim_reject_reason(entry=113.42, stop=106.33, target=127.60, size_pct=16.0, horizon_days=0)
         == "horizon"
     )
 

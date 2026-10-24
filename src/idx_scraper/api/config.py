@@ -30,9 +30,7 @@ class Settings:
         self.database_url: str | None = os.getenv("DATABASE_URL")
         # Env var wins; otherwise read the .env file directly so watchlist
         # edits made through the API survive restarts (and are seen fresh).
-        self.watchlist: list[str] = _parse_watchlist(
-            os.getenv("IDX_WATCHLIST")
-        ) or read_watchlist()
+        self.watchlist: list[str] = _parse_watchlist(os.getenv("IDX_WATCHLIST")) or read_watchlist()
         # Comma-separated list of allowed CORS origins for the Next.js frontend.
         self.cors_origins: list[str] = [
             o.strip()

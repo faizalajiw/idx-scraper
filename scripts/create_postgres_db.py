@@ -33,9 +33,7 @@ def main() -> None:
 
     dbname = _target_db(dsn)
     with psycopg.connect(_maintenance_dsn(dsn), autocommit=True, connect_timeout=10) as conn:
-        exists = conn.execute(
-            "select 1 from pg_database where datname = %s", (dbname,)
-        ).fetchone()
+        exists = conn.execute("select 1 from pg_database where datname = %s", (dbname,)).fetchone()
         if exists:
             print(f"database '{dbname}' already exists")
         else:

@@ -51,7 +51,7 @@ from .recommend import assign_grades, score_candidate
 from .signal_log import DEFAULT_HORIZONS, NLAGS_DEFAULT, attach_outcomes
 
 # --- parameter default ------------------------------------------------------
-SESSION_LOOKBACK = 300      # sesi ditarik untuk rolling 252 + warmup
+SESSION_LOOKBACK = 300  # sesi ditarik untuk rolling 252 + warmup
 BACKFILL_MONTHS_DEFAULT = 6
 MIN_HISTORY_DEFAULT = 60
 
@@ -107,8 +107,19 @@ order by trade_date, code
 """
 
 _LOG_COLUMNS = [
-    "code", "date", "grade", "score", "signal", "setup", "close", "entry_ref",
-    "stop", "target", "rr", "horizon_days", "patterns",
+    "code",
+    "date",
+    "grade",
+    "score",
+    "signal",
+    "setup",
+    "close",
+    "entry_ref",
+    "stop",
+    "target",
+    "rr",
+    "horizon_days",
+    "patterns",
 ]
 
 
@@ -125,9 +136,10 @@ def load_candidate_panel(dsn: str, sessions: int = SESSION_LOOKBACK) -> dict[str
     ``date, close, high, low, volume, value, net_idr`` (net asing dalam rupiah =
     ``foreign_net * close``), urut tanggal menaik per emiten.
     """
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         cur.execute(
             """select code, name, trade_date as date,
                       foreign_net * close as net_idr,
@@ -229,18 +241,10 @@ def _code_metrics(code: str, name: str | None, rows: list[dict[str, Any]]) -> pd
             _num(netval10.iloc[i]),
         )
         buy_ids.append(
-            tuple(
-                pid
-                for pid in ("silent_accumulation", "initiation")
-                if flags.get(pid)
-            )
+            tuple(pid for pid in ("silent_accumulation", "initiation") if flags.get(pid))
         )
         sell_ids.append(
-            tuple(
-                pid
-                for pid in ("distribution_on_rally", "silent_distribution")
-                if flags.get(pid)
-            )
+            tuple(pid for pid in ("distribution_on_rally", "silent_distribution") if flags.get(pid))
         )
 
     out = pd.DataFrame(
@@ -281,10 +285,24 @@ def metrics_frame(panel: dict[str, dict[str, Any]]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame(
             columns=[
-                "code", "name", "date", "close", "signal", "trend_up", "rsi",
-                "mom_20d", "vol_daily", "dist_52w_pct", "vol_ratio", "bb_lower",
-                "range_low_20", "value", "z_score", "hist_days",
-                "pattern_buy", "pattern_sell",
+                "code",
+                "name",
+                "date",
+                "close",
+                "signal",
+                "trend_up",
+                "rsi",
+                "mom_20d",
+                "vol_daily",
+                "dist_52w_pct",
+                "vol_ratio",
+                "bb_lower",
+                "range_low_20",
+                "value",
+                "z_score",
+                "hist_days",
+                "pattern_buy",
+                "pattern_sell",
             ]
         )
     return pd.concat(frames, ignore_index=True)
@@ -501,7 +519,7 @@ def record(
         horizon=horizon,
         quarantined=quarantined,
     )
-    cutoff = (datetime.now(WIB).date() - timedelta(days=int(months * 31)))
+    cutoff = datetime.now(WIB).date() - timedelta(days=int(months * 31))
     with psycopg.connect(dsn, connect_timeout=15) as conn, conn.cursor() as cur:
         cur.execute(_DDL)
         cur.execute("delete from research.recommendation_log where trade_date >= %s", (cutoff,))
@@ -509,9 +527,20 @@ def record(
             cur.execute(
                 _UPSERT,
                 (
-                    r["code"], r["date"], r["grade"], r["score"], r["signal"],
-                    r["setup"], r["close"], r["entry_ref"], r["stop"], r["target"],
-                    r["rr"], r["horizon_days"], r["patterns"], "PIT",
+                    r["code"],
+                    r["date"],
+                    r["grade"],
+                    r["score"],
+                    r["signal"],
+                    r["setup"],
+                    r["close"],
+                    r["entry_ref"],
+                    r["stop"],
+                    r["target"],
+                    r["rr"],
+                    r["horizon_days"],
+                    r["patterns"],
+                    "PIT",
                 ),
             )
     return len(records)
@@ -594,7 +623,8 @@ def summarize_log(
         }
 
     cols = [
-        "code", "date",
+        "code",
+        "date",
         *[f"{p}_{k}" for k in horizons for p in ("fwd", "mfe", "mae", "abn")],
     ]
     merged = log.merge(outcomes[cols], on=["code", "date"], how="left")

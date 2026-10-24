@@ -136,9 +136,12 @@ def validate(sqlite_path: str, dsn: str) -> bool:
                 continue
             po, ph, pl, pc, pprev, pchg, ppct = row
             ok = (
-                _close(o, po, PRICE_TOL) and _close(h, ph, PRICE_TOL)
-                and _close(low, pl, PRICE_TOL) and _close(c_, pc, PRICE_TOL)
-                and _close(prev, pprev, PRICE_TOL) and _close(chg, pchg, PRICE_TOL)
+                _close(o, po, PRICE_TOL)
+                and _close(h, ph, PRICE_TOL)
+                and _close(low, pl, PRICE_TOL)
+                and _close(c_, pc, PRICE_TOL)
+                and _close(prev, pprev, PRICE_TOL)
+                and _close(chg, pchg, PRICE_TOL)
                 and _close(pct, ppct, PCT_TOL)
             )
             rep.check(ok, f"{code} {date} OHLC/prev/change/percent match")
@@ -161,8 +164,10 @@ def validate(sqlite_path: str, dsn: str) -> bool:
                 continue
             po, ph, pl, pc, pvol = row
             ok = (
-                _close(o, po, PRICE_TOL) and _close(h, ph, PRICE_TOL)
-                and _close(low, pl, PRICE_TOL) and _close(c_, pc, PRICE_TOL)
+                _close(o, po, PRICE_TOL)
+                and _close(h, ph, PRICE_TOL)
+                and _close(low, pl, PRICE_TOL)
+                and _close(c_, pc, PRICE_TOL)
                 and int(vol) == int(pvol)
             )
             rep.check(ok, f"{tk} {date} OHLCV match")

@@ -136,9 +136,7 @@ def test_mechanical_sell_is_dropped(monkeypatch):
     monkeypatch.setattr(
         "idx_scraper.research.signal_log.is_mechanical_sell", lambda _df, _cash: True
     )
-    guarded = compute_signal_rows(
-        panel, min_history=60, dividends={"AAA": [(sell_date, 12.0)]}
-    )
+    guarded = compute_signal_rows(panel, min_history=60, dividends={"AAA": [(sell_date, 12.0)]})
     assert "SELL" not in set(guarded["signal"])
     assert guarded.empty or set(guarded["signal"]) <= {"BUY"}
 
@@ -220,9 +218,7 @@ def test_summarize_outcomes_shape():
     assert summary["buy"] == 1 and summary["sell"] == 1
     assert len(summary["overall"]) == 4  # 2 sinyal x 2 horizon
     assert len(summary["by_regime"]) >= 2  # TIDAK DIKETAHUI ikut masuk
-    assert summary["recent"][0]["fwd_5"] is None or isinstance(
-        summary["recent"][0]["fwd_5"], float
-    )
+    assert summary["recent"][0]["fwd_5"] is None or isinstance(summary["recent"][0]["fwd_5"], float)
     for row in summary["overall"]:
         assert {"signal", "horizon", "n", "hit_rate", "mean_fwd", "avg_mfe", "avg_mae"} <= set(row)
 
@@ -259,10 +255,16 @@ def test_hit_rate_and_means():
 def test_returns_dataframe_columns_sorted():
     rows = compute_signal_rows(make_panel(up_series()), min_history=60)
     assert list(rows.columns) == [
-        "code", "date", "signal", "close", "rsi", "sma_short", "sma_long", "trend_up",
+        "code",
+        "date",
+        "signal",
+        "close",
+        "rsi",
+        "sma_short",
+        "sma_long",
+        "trend_up",
     ]
     assert np.issubdtype(rows["date"].dtype, np.datetime64)
-
 
 
 def test_summarize_t_stat_uses_abnormal_not_raw_forward():

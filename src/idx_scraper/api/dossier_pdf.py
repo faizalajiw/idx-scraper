@@ -66,11 +66,32 @@ def _scalar_rows(data: dict[str, Any], prefix: str = "") -> list[tuple[str, str]
 def _styles() -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
     return {
-        "title": ParagraphStyle("t", parent=base["Title"], fontName="Helvetica-Bold", fontSize=18, textColor=ACCENT, spaceAfter=2),
-        "sub": ParagraphStyle("s", parent=base["Normal"], fontSize=9, textColor=MUTED, spaceAfter=10),
-        "h2": ParagraphStyle("h", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=12, textColor=ACCENT, spaceBefore=10, spaceAfter=4),
-        "meta": ParagraphStyle("m", parent=base["Normal"], fontSize=8, textColor=MUTED, spaceAfter=4),
-        "warn": ParagraphStyle("w", parent=base["Normal"], fontSize=8, textColor=STALE, spaceAfter=4),
+        "title": ParagraphStyle(
+            "t",
+            parent=base["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=18,
+            textColor=ACCENT,
+            spaceAfter=2,
+        ),
+        "sub": ParagraphStyle(
+            "s", parent=base["Normal"], fontSize=9, textColor=MUTED, spaceAfter=10
+        ),
+        "h2": ParagraphStyle(
+            "h",
+            parent=base["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            textColor=ACCENT,
+            spaceBefore=10,
+            spaceAfter=4,
+        ),
+        "meta": ParagraphStyle(
+            "m", parent=base["Normal"], fontSize=8, textColor=MUTED, spaceAfter=4
+        ),
+        "warn": ParagraphStyle(
+            "w", parent=base["Normal"], fontSize=8, textColor=STALE, spaceAfter=4
+        ),
         "body": ParagraphStyle("b", parent=base["Normal"], fontSize=9, leading=12),
     }
 
@@ -92,7 +113,9 @@ def _section_block(name: str, section: dict[str, Any], st: dict[str, ParagraphSt
         flow.append(Paragraph("Tidak ada data.", st["body"]))
         return flow
 
-    table_rows = [[Paragraph(k.replace("_", " "), st["body"]), Paragraph(v, st["body"])] for k, v in rows]
+    table_rows = [
+        [Paragraph(k.replace("_", " "), st["body"]), Paragraph(v, st["body"])] for k, v in rows
+    ]
     table = Table(table_rows, colWidths=[55 * mm, 115 * mm])
     table.setStyle(
         TableStyle(
@@ -139,7 +162,10 @@ def render_dossier_pdf(dossier: dict[str, Any]) -> bytes:
         scalar = [(k, v) for k, v in _scalar_rows(verdict)]
         story.append(
             Table(
-                [[Paragraph(k.replace("_", " "), st["body"]), Paragraph(v, st["body"])] for k, v in scalar],
+                [
+                    [Paragraph(k.replace("_", " "), st["body"]), Paragraph(v, st["body"])]
+                    for k, v in scalar
+                ],
                 colWidths=[55 * mm, 115 * mm],
             )
         )

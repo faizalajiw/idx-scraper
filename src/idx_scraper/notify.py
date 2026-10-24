@@ -65,7 +65,10 @@ class TelegramNotifier:
         try:
             r = cf_requests.post(url, json=payload, timeout=self.timeout)
             if r.status_code != 200:
-                print(f"[warn] telegram {method} status {r.status_code}: {r.text[:200]}", file=sys.stderr)
+                print(
+                    f"[warn] telegram {method} status {r.status_code}: {r.text[:200]}",
+                    file=sys.stderr,
+                )
                 return None
             return r.json()
         except Exception as e:  # jaringan/timeout — jangan bikin scraper mati
@@ -75,7 +78,10 @@ class TelegramNotifier:
     def send_message(self, text: str) -> bool:
         """Kirim 1 pesan (HTML). True kalau sukses."""
         if not self.enabled:
-            print("[info] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi — skip kirim", file=sys.stderr)
+            print(
+                "[info] TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID belum diisi — skip kirim",
+                file=sys.stderr,
+            )
             return False
         resp = self._post(
             "sendMessage",
@@ -104,11 +110,17 @@ def format_signal_message(signals: list[dict]) -> str:
 
     signals: list of {code, signal, close, rsi, ...} — lihat scan_signals().
     """
-    lines = ["<b>📡 IDX Signal Alert</b>", f"<i>{time.strftime('%Y-%m-%d %H:%M WIB', time.gmtime(time.time() + 7 * 3600))}</i>", ""]
+    lines = [
+        "<b>📡 IDX Signal Alert</b>",
+        f"<i>{time.strftime('%Y-%m-%d %H:%M WIB', time.gmtime(time.time() + 7 * 3600))}</i>",
+        "",
+    ]
     for s in signals:
         emoji = SIG_EMOJI.get(s["signal"], "")
         rsi = f"RSI {s['rsi']:.0f}" if s.get("rsi") is not None else "RSI -"
-        lines.append(f"{emoji} <b>{s['signal']}</b> <code>{s['code']}</code> @ {s['close']:,.0f} ({rsi})")
+        lines.append(
+            f"{emoji} <b>{s['signal']}</b> <code>{s['code']}</code> @ {s['close']:,.0f} ({rsi})"
+        )
     lines.append("")
     lines.append("<i>Rule-based (SMA20/50 + RSI). Bukan nasihat keuangan.</i>")
     return "\n".join(lines)
@@ -255,12 +267,14 @@ def scan_signals(storage, codes: list[str], min_days: int = 25) -> list[dict]:
                 continue
             last = df.iloc[-1]
             rsi = last.get("RSI")
-            out.append({
-                "code": code,
-                "signal": signal,
-                "close": float(last["close"]),
-                "rsi": float(rsi) if rsi is not None and pd.notna(rsi) else None,
-            })
+            out.append(
+                {
+                    "code": code,
+                    "signal": signal,
+                    "close": float(last["close"]),
+                    "rsi": float(rsi) if rsi is not None and pd.notna(rsi) else None,
+                }
+            )
         except Exception as e:
             print(f"[warn] scan signal {code}: {e}", file=sys.stderr)
     return out
@@ -298,7 +312,9 @@ class SignalState:
         return fresh
 
 
-def run_alert_check(storage, codes: list[str], notifier: TelegramNotifier, state: SignalState) -> int:
+def run_alert_check(
+    storage, codes: list[str], notifier: TelegramNotifier, state: SignalState
+) -> int:
     """Scan sinyal, kirim yang berubah via Telegram. Return jumlah alert terkirim."""
     signals = scan_signals(storage, codes)
     fresh = state.changed(signals)

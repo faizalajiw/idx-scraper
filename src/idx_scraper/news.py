@@ -37,6 +37,7 @@ alter table news_items drop column if exists topic_key;
 drop index if exists idx_news_items_topic;
 """
 
+
 def parse_date(raw: str | None) -> datetime | None:
     """Tanggal (`YYYY-MM-DD`) dari atribut `time[datetime]`. Snips tidak menyertakan
     jam, jadi dipatok tengah malam WIB lalu dikonversi ke UTC."""

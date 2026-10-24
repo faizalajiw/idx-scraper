@@ -190,11 +190,7 @@ def rank_in_peers(peers: list[dict[str, Any]]) -> dict[str, Any]:
     sums = sorted(p["net_sum"] for p in peers)
     count = len(sums)
     mid = count // 2
-    median = (
-        float(sums[mid])
-        if count % 2 == 1
-        else float((sums[mid - 1] + sums[mid]) / 2)
-    )
+    median = float(sums[mid]) if count % 2 == 1 else float((sums[mid - 1] + sums[mid]) / 2)
     pos = [i for i, p in enumerate(peers) if p.get("is_self")]
     return {
         "rank": (pos[0] + 1) if pos else None,

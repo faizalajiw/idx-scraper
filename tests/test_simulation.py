@@ -136,9 +136,7 @@ def test_buy_and_hold_benchmark_charges_entry_friction():
     series = make_series(A=[100.0, 100.0])
     days = [d for d, _ in series["A"]]
     free = sim._buy_and_hold_curve(series, days, 1000.0)
-    charged = sim._buy_and_hold_curve(
-        series, days, 1000.0, commission_pct=0.01, slippage_pct=0.01
-    )
+    charged = sim._buy_and_hold_curve(series, days, 1000.0, commission_pct=0.01, slippage_pct=0.01)
     assert free[0][1] == pytest.approx(1000.0)
     # 1% commission shrinks the deployed capital; 1% slippage raises the entry
     # price by the same factor, so the two cancel at a flat price.

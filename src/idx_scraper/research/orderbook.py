@@ -147,9 +147,8 @@ def compute_daily(
     # Absorption: butuh cukup interval naik DAN turun supaya "melawan arah"
     # punya makna; normalisasi jumlah interval yang bergerak -> skala (-1, 1).
     enough_moves = (agg["n_up"] >= min_moves) & (agg["n_dn"] >= min_moves)
-    agg["ob_absorption"] = (
-        (agg["signed_sum"] / agg["n_moves"].where(agg["n_moves"] > 0))
-        .where(enough_moves)
+    agg["ob_absorption"] = (agg["signed_sum"] / agg["n_moves"].where(agg["n_moves"] > 0)).where(
+        enough_moves
     )
 
     return agg.reset_index()[["code", "date", *OB_FACTOR_COLUMNS]]

@@ -260,9 +260,7 @@ def test_typical_day_value_median_lima_sesi():
 
 
 def test_typical_day_value_none_bila_tidak_ada():
-    frame = pd.DataFrame(
-        [{"code": "AAAA", "date": pd.Timestamp("2026-10-01"), "value": None}]
-    )
+    frame = pd.DataFrame([{"code": "AAAA", "date": pd.Timestamp("2026-10-01"), "value": None}])
     assert typical_day_value(frame, "AAAA") is None
 
 

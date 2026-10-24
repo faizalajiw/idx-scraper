@@ -162,19 +162,21 @@ def evaluate_health(
     if index_latest is None or index_latest < expected:
         missing.append(f"close IHSG (terbaru {index_latest or '-'})")
 
-    overdue = bool(missing) and now.weekday() < 5 and (now.hour, now.minute) >= (
-        deadline_hour,
-        deadline_minute,
+    overdue = (
+        bool(missing)
+        and now.weekday() < 5
+        and (now.hour, now.minute)
+        >= (
+            deadline_hour,
+            deadline_minute,
+        )
     )
     sesi_sebelumnya = expected_trading_date(now - timedelta(days=1))
     in_window = (
         bool(missing)
         and not overdue
         and now.date() == expected
-        and all(
-            x is not None and x >= sesi_sebelumnya
-            for x in (stocks_latest, index_latest)
-        )
+        and all(x is not None and x >= sesi_sebelumnya for x in (stocks_latest, index_latest))
     )
     return EodHealth(
         expected=expected,
@@ -224,9 +226,7 @@ def check_eod_health(dsn: str | None = None, now: datetime | None = None) -> Eod
     return evaluate_health(expected, stocks_latest, index_latest, now)
 
 
-def evaluate_field_coverage(
-    rows: list[tuple[date, int, int]], sessions: int = 30
-) -> FieldCoverage:
+def evaluate_field_coverage(rows: list[tuple[date, int, int]], sessions: int = 30) -> FieldCoverage:
     """Cari sesi yang kolom ``foreign_net``-nya bolong (murni, tanpa DB).
 
     ``rows`` = ``(trade_date, total_baris, foreign_terisi)``, urut naik per
@@ -364,9 +364,7 @@ def evaluate_row_counts(
         pct = round(100 * n / median, 1) if median else 100.0
         persentase.append(pct)
         if n < ambang:
-            troublemakers.append(
-                f"{trade_date} ({n}/{round(median)} baris, {pct:.1f}% median)"
-            )
+            troublemakers.append(f"{trade_date} ({n}/{round(median)} baris, {pct:.1f}% median)")
 
     return RowCountCoverage(
         checked=len(window),
@@ -611,7 +609,7 @@ def format_row_count_message(c: RowCountCoverage) -> str:
         f"<code>python -m scripts.backfill_raw_eod --start-date {tertua} "
         f"--end-date {terbaru} --ulang</code>\n"
         "<i>Tanpa <code>--ulang</code> backfill melewati tanggal yang sudah ada — "
-        "dan \"sesi separuh\" justru berarti tanggalnya sudah ada.</i>"
+        'dan "sesi separuh" justru berarti tanggalnya sudah ada.</i>'
     )
 
 

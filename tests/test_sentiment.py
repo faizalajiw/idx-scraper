@@ -137,19 +137,34 @@ def test_market_gauge_renormalizes_missing_component():
 def _rows():
     return [
         {
-            "code": "ACCS", "name": "Accumulation Co", "trade_date": "2026-09-24",
-            "close": 1000, "percent": 3.0, "value": 50_000_000_000,
-            "foreign_net": 10_000_000_000, "volume": 5_000_000,
+            "code": "ACCS",
+            "name": "Accumulation Co",
+            "trade_date": "2026-09-24",
+            "close": 1000,
+            "percent": 3.0,
+            "value": 50_000_000_000,
+            "foreign_net": 10_000_000_000,
+            "volume": 5_000_000,
         },
         {
-            "code": "MID", "name": "Middle Co", "trade_date": "2026-09-24",
-            "close": 1500, "percent": 0.5, "value": 30_000_000_000,
-            "foreign_net": 0.0, "volume": 2_000_000,
+            "code": "MID",
+            "name": "Middle Co",
+            "trade_date": "2026-09-24",
+            "close": 1500,
+            "percent": 0.5,
+            "value": 30_000_000_000,
+            "foreign_net": 0.0,
+            "volume": 2_000_000,
         },
         {
-            "code": "DIST", "name": "Distribution Co", "trade_date": "2026-09-24",
-            "close": 2000, "percent": -2.0, "value": 40_000_000_000,
-            "foreign_net": -8_000_000_000, "volume": 2_000_000,
+            "code": "DIST",
+            "name": "Distribution Co",
+            "trade_date": "2026-09-24",
+            "close": 2000,
+            "percent": -2.0,
+            "value": 40_000_000_000,
+            "foreign_net": -8_000_000_000,
+            "volume": 2_000_000,
         },
     ]
 
@@ -173,7 +188,9 @@ def test_build_foreign_rank_is_cross_sectional():
 
 
 def test_build_skips_rows_without_any_component():
-    rows = [{"code": "X", "name": None, "close": 100, "percent": 1.0, "value": 0, "foreign_net": None}]
+    rows = [
+        {"code": "X", "name": None, "close": 100, "percent": 1.0, "value": 0, "foreign_net": None}
+    ]
     out = build(rows, ob_by_code={})
     assert out["stats"]["analyzed"] == 0
     assert out["accumulation"] == [] and out["distribution"] == []
@@ -183,8 +200,13 @@ def test_build_min_value_filters_illiquid_from_lists():
     rows = _rows()
     rows.append(
         {
-            "code": "TINY", "name": "Tiny Co", "close": 50, "percent": 8.0,
-            "value": 2_000_000_000, "foreign_net": 1_900_000_000, "volume": 40_000,
+            "code": "TINY",
+            "name": "Tiny Co",
+            "close": 50,
+            "percent": 8.0,
+            "value": 2_000_000_000,
+            "foreign_net": 1_900_000_000,
+            "volume": 40_000,
         }
     )
     out = build(rows, ob_by_code={}, min_value=10_000_000_000)
@@ -221,7 +243,13 @@ def test_orderbook_stale_when_date_older_than_session():
 
 def test_orderbook_not_fresh_without_date_or_values():
     assert orderbook_fresh({"ACCS": {"ob_imbalance": 0.5}}, "2026-10-09") is False
-    assert orderbook_fresh({"ACCS": {"ob_imbalance": None, "ob_absorption": None, "ob_date": "2026-10-09"}}, "2026-10-09") is False
+    assert (
+        orderbook_fresh(
+            {"ACCS": {"ob_imbalance": None, "ob_absorption": None, "ob_date": "2026-10-09"}},
+            "2026-10-09",
+        )
+        is False
+    )
     assert orderbook_fresh({}, "2026-10-09") is False
     assert orderbook_fresh(None, "2026-10-09") is False
     assert orderbook_fresh({"ACCS": {"ob_imbalance": 0.5, "ob_date": "2026-10-09"}}, None) is False

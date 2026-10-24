@@ -190,7 +190,9 @@ def test_rank_ic_perfect_predictor():
 
 def test_summarize_newey_west_lag_semantics():
     # IC konstan 0.1 selama 10 hari -> mean 0.1, std 0, ICIR/t-stat = inf bermakna
-    ic_df = pd.DataFrame({"date": pd.date_range("2026-01-01", periods=10, freq="B"), "f": [0.1] * 10})
+    ic_df = pd.DataFrame(
+        {"date": pd.date_range("2026-01-01", periods=10, freq="B"), "f": [0.1] * 10}
+    )
     s = summarize(ic_df, ["f"])
     row = s.iloc[0]
     assert row["mean_ic"] == pytest.approx(0.1)

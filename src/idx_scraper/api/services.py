@@ -47,6 +47,7 @@ def _f(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
 def _is_market_hours() -> bool:
     """Sen–Jum, jam bursa WIB (default 09:00–16:00; override via env)."""
     import os
@@ -188,9 +189,7 @@ def _live_movers(cur: Any, limit: int = 5) -> dict[str, Any] | None:
 
     def _run(cmp_: str, order: str) -> list[Any]:
         cur.execute(
-            _LIVE_MOVERS_SQL.format(
-                day_start=_WIB_DAY_START_SQL, cmp=cmp_, order=order
-            ),
+            _LIVE_MOVERS_SQL.format(day_start=_WIB_DAY_START_SQL, cmp=cmp_, order=order),
             (limit,),
         )
         return cur.fetchall()
@@ -383,6 +382,7 @@ _LEADER_METRICS: dict[str, tuple[str | None, str]] = {
     "frequency": (None, "frequency"),
 }
 
+
 def _leaders_eod(cur: Any, metric: str, limit: int) -> dict[str, Any]:
     """Top-N emiten by metric from the latest EOD trade_date (raw_eod)."""
     col = _LEADER_METRICS[metric][1]
@@ -429,6 +429,7 @@ def _leaders_eod(cur: Any, metric: str, limit: int) -> dict[str, Any]:
             for r in rows
         ],
     }
+
 
 def _leaders_intraday(cur: Any, metric: str, limit: int) -> dict[str, Any] | None:
     """Top-N by cumulative day metric from the freshest intraday snapshot.
@@ -496,6 +497,7 @@ def _leaders_intraday(cur: Any, metric: str, limit: int) -> dict[str, Any] | Non
         ],
     }
 
+
 def get_market_leaders(metric: str, limit: int = 5) -> dict[str, Any]:
     """Top-N emiten by volume/value/frequency; realtime during market hours,
     else the latest EOD session. Frequency is EOD-only (no intraday source)."""
@@ -512,6 +514,7 @@ def get_market_leaders(metric: str, limit: int = 5) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------- top brokers
+
 
 def get_top_brokers(limit: int = 5) -> dict[str, Any]:
     """Top-N broker firms by traded value from the latest broker_daily session.
@@ -560,6 +563,7 @@ def get_top_brokers(limit: int = 5) -> dict[str, Any]:
 
 # --------------------------------------------------------------- broker concentration
 
+
 def get_broker_concentration(limit: int = 10) -> dict[str, Any]:
     """Konsentrasi broker pasar (CR1/CR3/CR5 + HHI) dari sesi broker_daily terakhir.
 
@@ -605,9 +609,7 @@ def get_broker_concentration(limit: int = 10) -> dict[str, Any]:
 
     from ..research.broker_activity import concentration
 
-    captured = max(
-        (r["captured_at"] for r in broker_rows if r["captured_at"]), default=None
-    )
+    captured = max((r["captured_at"] for r in broker_rows if r["captured_at"]), default=None)
     conc = concentration(
         [
             {
@@ -658,7 +660,12 @@ def _load_ohlc_by_date(cur: Any, code: str) -> dict[str, tuple]:
     )
     for r in cur.fetchall():
         by_date[_norm_date(r["trade_date"])] = (
-            r["trade_date"], r["open"], r["high"], r["low"], r["close"], r["volume"]
+            r["trade_date"],
+            r["open"],
+            r["high"],
+            r["low"],
+            r["close"],
+            r["volume"],
         )
     cur.execute(
         """select date, open, high, low, close, volume from stock_daily
@@ -706,19 +713,19 @@ def _merge_live_bar(df: pd.DataFrame, live: dict[str, Any] | None) -> pd.DataFra
     if "date" in df.columns and len(df):
         df["date"] = pd.to_datetime(df["date"])
         df = df[df["date"] != d]
-    row = pd.DataFrame([{
-        "date": d,
-        "open": live["open"],
-        "high": live["high"],
-        "low": live["low"],
-        "close": live["close"],
-        "volume": live["volume"],
-    }])
-    return (
-        pd.concat([df, row], ignore_index=True)
-        .sort_values("date")
-        .reset_index(drop=True)
+    row = pd.DataFrame(
+        [
+            {
+                "date": d,
+                "open": live["open"],
+                "high": live["high"],
+                "low": live["low"],
+                "close": live["close"],
+                "volume": live["volume"],
+            }
+        ]
     )
+    return pd.concat([df, row], ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
 def get_price_history(code: str, limit: int = 60) -> list[dict[str, Any]]:
@@ -755,8 +762,9 @@ def _build_frame(cur: Any, code: str) -> tuple[pd.DataFrame, bool]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     bar = _live_bar(cur, code)
     if bar is not None:
-        bar = {k: (float(v) if v is not None else None)
-               if k != "date" else v for k, v in bar.items()}
+        bar = {
+            k: (float(v) if v is not None else None) if k != "date" else v for k, v in bar.items()
+        }
     is_live = bar is not None
     df = _merge_live_bar(df, bar)
     return df, is_live
@@ -779,7 +787,7 @@ def _zscore_context(df: pd.DataFrame) -> dict[str, Any]:
 
 
 def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]:
-    """"Hold Check" verdicts: is each watched stock still worth holding?
+    """ "Hold Check" verdicts: is each watched stock still worth holding?
 
     Combines the technical signal (SMA20/50 + RSI rule) with the mean-reversion
     valuation context from get_valuation into one 0-100 score and a verdict:
@@ -939,10 +947,14 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                     # A dip only counts as healthy if the trend is still up.
                     if trend_up:
                         score += 5
-                        reasons.append(f"Harga di bawah band 60-hari (z {z:+.1f}) tapi tren masih naik — kualitas dip")
+                        reasons.append(
+                            f"Harga di bawah band 60-hari (z {z:+.1f}) tapi tren masih naik — kualitas dip"
+                        )
                     else:
                         score -= 5
-                        reasons.append(f"Harga di bawah band 60-hari (z {z:+.1f}) dengan tren melemah")
+                        reasons.append(
+                            f"Harga di bawah band 60-hari (z {z:+.1f}) dengan tren melemah"
+                        )
                 else:
                     reasons.append("Harga masih dalam band wajar 60-hari")
 
@@ -984,26 +996,28 @@ def get_hold_check(codes: list[str], min_days: int = 40) -> list[dict[str, Any]]
                 broker_validated,
             )
 
-            out.append({
-                "code": code,
-                "name": names.get(code),
-                "signal": signal,
-                "trend_up": trend_up,
-                "rsi": rsi,
-                "macd_bullish": macd_bullish,
-                "bb_position": bb_pos,
-                "z_score": z,
-                "below_target_pct": below_target,
-                "foreign_net": None,
-                "score": round(score),  # type: ignore[arg-type]
-                "base_score": round(base_score),  # type: ignore[arg-type]
-                "factor_adj": round(factor_adj, 1),
-                "factor_pct": base if base is not None else None,
-                "broker_score": broker_row["score"] if broker_row else None,
-                "broker_adj": round(broker_adj, 1),
-                "verdict": verdict,
-                "reasons": reasons,
-            })
+            out.append(
+                {
+                    "code": code,
+                    "name": names.get(code),
+                    "signal": signal,
+                    "trend_up": trend_up,
+                    "rsi": rsi,
+                    "macd_bullish": macd_bullish,
+                    "bb_position": bb_pos,
+                    "z_score": z,
+                    "below_target_pct": below_target,
+                    "foreign_net": None,
+                    "score": round(score),  # type: ignore[arg-type]
+                    "base_score": round(base_score),  # type: ignore[arg-type]
+                    "factor_adj": round(factor_adj, 1),
+                    "factor_pct": base if base is not None else None,
+                    "broker_score": broker_row["score"] if broker_row else None,
+                    "broker_adj": round(broker_adj, 1),
+                    "verdict": verdict,
+                    "reasons": reasons,
+                }
+            )
 
     # EOD foreign net for context (separate pass, keeps the main loop simple).
     with get_cursor() as cur:
@@ -1082,22 +1096,24 @@ def get_signals(codes: list[str], min_days: int = 25) -> list[dict[str, Any]]:
                 if hasattr(last_date, "strftime")
                 else _norm_date(last_date)
             )
-            out.append({
-                "code": code,
-                "signal": eff_signal,
-                "raw_signal": signal,
-                "div_cash": div_cash,
-                "div_adjusted": mech,
-                "close": _f(last["close"]),
-                "pct": _f(pct),
-                "rsi": _f(last.get("RSI")),
-                "sma20": _f(last.get("MA_Short")),
-                "macd": _f(last.get("MACD")),
-                "trend_up": bool((last.get("MA_Short") or 0) > (last.get("MA_Long") or 0)),
-                "live": is_live,
-                "as_of": as_of,
-                "generated_at": generated_at,
-            })
+            out.append(
+                {
+                    "code": code,
+                    "signal": eff_signal,
+                    "raw_signal": signal,
+                    "div_cash": div_cash,
+                    "div_adjusted": mech,
+                    "close": _f(last["close"]),
+                    "pct": _f(pct),
+                    "rsi": _f(last.get("RSI")),
+                    "sma20": _f(last.get("MA_Short")),
+                    "macd": _f(last.get("MACD")),
+                    "trend_up": bool((last.get("MA_Short") or 0) > (last.get("MA_Long") or 0)),
+                    "live": is_live,
+                    "as_of": as_of,
+                    "generated_at": generated_at,
+                }
+            )
     return out
 
 
@@ -1114,21 +1130,23 @@ def get_technical_chart(code: str) -> dict[str, Any]:
     bars: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         d = row["date"]
-        bars.append({
-            "date": d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else _norm_date(d),
-            "open": _f(row.get("open")),
-            "high": _f(row.get("high")),
-            "low": _f(row.get("low")),
-            "close": _f(row.get("close")),
-            "volume": _f(row.get("volume")),
-            "ma_short": _f(row.get("MA_Short")),
-            "ma_long": _f(row.get("MA_Long")),
-            "rsi": _f(row.get("RSI")),
-            "bb_upper": _f(row.get("BB_Upper")),
-            "bb_lower": _f(row.get("BB_Lower")),
-            "macd": _f(row.get("MACD")),
-            "macd_signal": _f(row.get("MACD_Signal")),
-        })
+        bars.append(
+            {
+                "date": d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else _norm_date(d),
+                "open": _f(row.get("open")),
+                "high": _f(row.get("high")),
+                "low": _f(row.get("low")),
+                "close": _f(row.get("close")),
+                "volume": _f(row.get("volume")),
+                "ma_short": _f(row.get("MA_Short")),
+                "ma_long": _f(row.get("MA_Long")),
+                "rsi": _f(row.get("RSI")),
+                "bb_upper": _f(row.get("BB_Upper")),
+                "bb_lower": _f(row.get("BB_Lower")),
+                "macd": _f(row.get("MACD")),
+                "macd_signal": _f(row.get("MACD_Signal")),
+            }
+        )
     return {"code": code, "signal": signal, "bars": bars}
 
 

@@ -213,7 +213,8 @@ def load_quarantined_codes(dsn: str, sessions: int = QUARANTINE_SESSIONS) -> set
     "kolam tanpa karantina lebih baik daripada job mati" adalah pemanggil yang
     tahu konteksnya (job harian / analytics), bukan modul ini.
     """
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         return quarantined_codes(cur, sessions=sessions)

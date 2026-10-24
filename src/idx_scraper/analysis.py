@@ -26,13 +26,14 @@ def is_mechanical_sell(df: pd.DataFrame, div_cash: float | None) -> bool:
     adj.iloc[-1, adj.columns.get_loc("close")] += float(div_cash)
     return generate_signal(calculate_indicators(adj)) != "SELL"
 
+
 # Regime thresholds (IHSG): ADX >= 25 tren kuat, < 20 ranging.
 ADX_TREND = 25.0
 ADX_RANGE = 20.0
 # Realized vol ter-annualisasi (%): IDX ~240 hari bursa/tahun.
 IDX_TRADING_DAYS = 240
-VOL_HIGH = 30.0   # >= 30% ann = VOLATILE
-VOL_LOW = 15.0    # <= 15% ann = QUIET
+VOL_HIGH = 30.0  # >= 30% ann = VOLATILE
+VOL_LOW = 15.0  # <= 15% ann = QUIET
 
 
 def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
@@ -64,7 +65,10 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
     ).max(axis=1)
 
     alpha = 1.0 / period
-    smooth = lambda s: s.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
+    def smooth(s: pd.Series) -> pd.Series:
+        return s.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
     tr_s = smooth(tr)
     plus_di = 100.0 * smooth(plus_dm) / tr_s.where(tr_s > 0)
     minus_di = 100.0 * smooth(minus_dm) / tr_s.where(tr_s > 0)
@@ -86,8 +90,12 @@ def classify_regime(df: pd.DataFrame) -> dict:
     last = df.iloc[-1] if not df.empty else None
     if last is None or pd.isna(last.get("ADX")):
         return {
-            "regime": None, "adx": None, "plus_di": None, "minus_di": None,
-            "realized_vol_annual": None, "vol_state": None,
+            "regime": None,
+            "adx": None,
+            "plus_di": None,
+            "minus_di": None,
+            "realized_vol_annual": None,
+            "vol_state": None,
         }
     adx = float(last["ADX"])
     pdi = float(last["DI_Plus"]) if pd.notna(last.get("DI_Plus")) else None
@@ -149,12 +157,14 @@ def signal_series(df: pd.DataFrame) -> pd.Series:
     return out
 
 
-def calculate_indicators(df: pd.DataFrame, short_ma: int = 20, long_ma: int = 50, rsi_period: int = 14) -> pd.DataFrame:
+def calculate_indicators(
+    df: pd.DataFrame, short_ma: int = 20, long_ma: int = 50, rsi_period: int = 14
+) -> pd.DataFrame:
     """Add technical indicators to a DataFrame using pure pandas/numpy (no pandas_ta)."""
     df = df.copy()
-    if 'date' in df.columns:
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date').reset_index(drop=True)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").reset_index(drop=True)
 
     # Short and long MA
     df["MA_Short"] = df["close"].rolling(short_ma).mean()

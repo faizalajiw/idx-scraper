@@ -43,17 +43,17 @@ from typing import Any
 # ------------------------------------------------------------------ konstanta
 
 # Ambang dari kalibrasi data (lihat docstring modul).
-FLAT_RANGE_MAX_PCT = 10.0      # range 10 sesi di bawah ini = harga "tenang"
-RISING_MIN_PCT = 8.0           # perubahan 10 sesi di atas ini = "naik jelas"
-VOL_SPIKE_RATIO = 2.0          # volume hari ini >= 2x rata20 = lonjakan
-MEANINGFUL_NETVAL_PCT = 5.0    # net asing jml / nilai jml >= 5% = bermakna
-LARGE_NETVAL_PCT = 16.0        # >= 16% = aliran besar (p90)
-INITIATION_NET_PCT = 2.0       # inisiasi: net hari ini >= 2% nilai hari itu
+FLAT_RANGE_MAX_PCT = 10.0  # range 10 sesi di bawah ini = harga "tenang"
+RISING_MIN_PCT = 8.0  # perubahan 10 sesi di atas ini = "naik jelas"
+VOL_SPIKE_RATIO = 2.0  # volume hari ini >= 2x rata20 = lonjakan
+MEANINGFUL_NETVAL_PCT = 5.0  # net asing jml / nilai jml >= 5% = bermakna
+LARGE_NETVAL_PCT = 16.0  # >= 16% = aliran besar (p90)
+INITIATION_NET_PCT = 2.0  # inisiasi: net hari ini >= 2% nilai hari itu
 
-PRICE_WINDOW = 10              # jendela "terakhir" utk verdict & pola (sesi)
-VOLUME_BASELINE_WINDOW = 20    # baseline volume utk rasio lonjakan
-RANGE_WINDOW = 10              # jendela range utk deteksi "flat"
-MIN_WINDOW_DAYS = 5            # min. hari ber-net di jendela agar boleh verdict
+PRICE_WINDOW = 10  # jendela "terakhir" utk verdict & pola (sesi)
+VOLUME_BASELINE_WINDOW = 20  # baseline volume utk rasio lonjakan
+RANGE_WINDOW = 10  # jendela range utk deteksi "flat"
+MIN_WINDOW_DAYS = 5  # min. hari ber-net di jendela agar boleh verdict
 
 VERDICT_ACCUMULATION = "akumulasi"
 VERDICT_DISTRIBUTION = "distribusi"
@@ -286,11 +286,7 @@ def pattern_flags(
     tidak pernah berbeda definisi. Input None -> kondisi terkait False (tanpa data
     = tanpa sinyal, bukan asumsi).
     """
-    flat = (
-        range_pct is not None
-        and netval10_pct is not None
-        and range_pct < FLAT_RANGE_MAX_PCT
-    )
+    flat = range_pct is not None and netval10_pct is not None and range_pct < FLAT_RANGE_MAX_PCT
     up = chg10_pct is not None and chg10_pct > RISING_MIN_PCT
     down_hard = chg10_pct is not None and chg10_pct < -3.0
     spike = vol_ratio is not None and vol_ratio >= VOL_SPIKE_RATIO
@@ -335,9 +331,7 @@ def detect_patterns(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if c is None or c["netval10_pct"] is None:
         return []
 
-    flags = pattern_flags(
-        c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"]
-    )
+    flags = pattern_flags(c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"])
 
     out: list[dict[str, Any]] = []
     if flags["silent_distribution"]:
@@ -434,9 +428,7 @@ def collect_pattern_episodes(panel: Mapping[str, Any]) -> list[dict[str, Any]]:
             c = _pattern_conditions(prefix)
             if c is None or c["netval10_pct"] is None:
                 continue
-            flags = pattern_flags(
-                c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"]
-            )
+            flags = pattern_flags(c["range_pct"], c["chg10_pct"], c["vol_ratio"], c["netval10_pct"])
             today = cleaned[i]["date"]
             for pid, hit in flags.items():
                 if not hit:
@@ -576,10 +568,7 @@ def pattern_track_record(
             # bila harga TURUN, jadi hit rate-nya = porsi fwd < 0, dan
             # alpha efektif dibalik tanda. Keduanya = "seberapa sering
             # pola ini bekerja sesuai ekspektasi", satu sumbu baca.
-            if hit is not None:
-                aligned = hit if direction == "buy-side" else 1.0 - hit
-            else:
-                aligned = None
+            aligned = (hit if direction == "buy-side" else 1.0 - hit) if hit is not None else None
             eff_alpha = None
             if abn:
                 eff_alpha = _mean(abn) if direction == "buy-side" else -_mean(abn)
@@ -799,9 +788,7 @@ def pattern_evidence_sentence(
     if rate is None or not days or not n:
         return None
     window = history.get("window_sessions")
-    head = (
-        f"Dalam {window} sesi terakhir" if window else "Secara historis"
-    )
+    head = f"Dalam {window} sesi terakhir" if window else "Secara historis"
     tail = "" if history.get("reliable", True) else " (sampel masih kecil — anggap indikatif)"
     if direction == "buy-side":
         hasil = "diikuti harga naik"
@@ -1007,8 +994,13 @@ def patterns_board(
         if (info or {}).get("rows")
     ]
     if not entries:
-        return {"date": None, "scanned": 0, "window_days": days,
-                "min_window_value": min_window_value, "groups": []}
+        return {
+            "date": None,
+            "scanned": 0,
+            "window_days": days,
+            "min_window_value": min_window_value,
+            "groups": [],
+        }
 
     latest = max(info["rows"][-1]["date"] for _, info in entries)
     usable = [(code, info) for code, info in entries if info["rows"][-1]["date"] == latest]
@@ -1128,8 +1120,18 @@ def _fmt_rp(v: float | None) -> str:
 #: Singkatan bulan Indonesia untuk tanggal di narasi (bukan locale OS — output
 #: harus sama di mesin mana pun).
 _MONTHS_ID = (
-    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
-    "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Mei",
+    "Jun",
+    "Jul",
+    "Agu",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Des",
 )
 
 
@@ -1187,10 +1189,7 @@ def build_narrative(
 
     if verdict.get("insufficient"):
         return [
-            (
-                f"{code} — Data aliran asing belum cukup untuk verdict "
-                "(butuh >= 5 sesi bernilai)."
-            )
+            (f"{code} — Data aliran asing belum cukup untuk verdict (butuh >= 5 sesi bernilai).")
         ]
 
     if side == VERDICT_ACCUMULATION:
@@ -1205,18 +1204,13 @@ def build_narrative(
 
     size = size_label(netval)
     size_txt = f", aliran {size}" if size else ""
-    sentences.append(
-        f"{code} — {head} (10 sesi terakhir): {money} pada nilai transaksi"
-        f"{size_txt}."
-    )
+    sentences.append(f"{code} — {head} (10 sesi terakhir): {money} pada nilai transaksi{size_txt}.")
 
     if streak >= 3 and side != VERDICT_NEUTRAL:
         arah = "net buy" if (side == VERDICT_ACCUMULATION) else "net sell"
         since = _fmt_date_short(verdict.get("streak_start_date"))
         since_txt = f", sejak {since}" if since else ""
-        sentences.append(
-            f"Terjadi {streak} sesi {arah} berturut-turut{since_txt}."
-        )
+        sentences.append(f"Terjadi {streak} sesi {arah} berturut-turut{since_txt}.")
 
     if patterns:
         sentences.append(patterns[0]["note"])
@@ -1226,7 +1220,9 @@ def build_narrative(
             head = patterns[0]
             evidence = pattern_evidence_sentence(
                 str(head.get("label") or ""),
-                pattern_history.get(str(head.get("id"))) if isinstance(pattern_history, Mapping) else None,
+                pattern_history.get(str(head.get("id")))
+                if isinstance(pattern_history, Mapping)
+                else None,
                 str(head.get("direction")) if head.get("direction") else None,
             )
             if evidence:

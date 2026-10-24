@@ -60,33 +60,25 @@ def test_ranks_from_rows_empty():
 
 def test_adjustment_zero_at_market_median():
     # Semua faktor di median (0.5) -> F=0 -> adjustment 0
-    adj, reasons = factor_adjustment(
-        {"vol_pct": 0.5, "turnover_pct": 0.5, "dist_52w_pct": 0.5}
-    )
+    adj, reasons = factor_adjustment({"vol_pct": 0.5, "turnover_pct": 0.5, "dist_52w_pct": 0.5})
     assert adj == pytest.approx(0.0)
     assert reasons == []
 
 
 def test_adjustment_most_negative_for_high_vol_liquid_far_from_high():
     # Kasus terburuk: vol & turnover persentil 1.0, jauh dari puncak 52w (0.0)
-    adj, _ = factor_adjustment(
-        {"vol_pct": 1.0, "turnover_pct": 1.0, "dist_52w_pct": 0.0}
-    )
+    adj, _ = factor_adjustment({"vol_pct": 1.0, "turnover_pct": 1.0, "dist_52w_pct": 0.0})
     assert adj == pytest.approx(-MAX_ADJUSTMENT)
 
 
 def test_adjustment_most_positive_for_low_vol_illiquid_at_high():
-    adj, _ = factor_adjustment(
-        {"vol_pct": 0.0, "turnover_pct": 0.0, "dist_52w_pct": 1.0}
-    )
+    adj, _ = factor_adjustment({"vol_pct": 0.0, "turnover_pct": 0.0, "dist_52w_pct": 1.0})
     assert adj == pytest.approx(+MAX_ADJUSTMENT)
 
 
 def test_adjustment_weights_are_respected():
     # Hanya vol di ekstrem atas; kontribusinya = -w_vol * MAX_ADJUSTMENT
-    adj, _ = factor_adjustment(
-        {"vol_pct": 1.0, "turnover_pct": 0.5, "dist_52w_pct": 0.5}
-    )
+    adj, _ = factor_adjustment({"vol_pct": 1.0, "turnover_pct": 0.5, "dist_52w_pct": 0.5})
     assert adj == pytest.approx(-FACTOR_WEIGHTS["vol"] * MAX_ADJUSTMENT)
 
 
@@ -97,16 +89,12 @@ def test_adjustment_missing_factor_gives_zero():
 
 
 def test_adjustment_reasons_fire_at_thresholds():
-    _, reasons = factor_adjustment(
-        {"vol_pct": 0.9, "turnover_pct": 0.1, "dist_52w_pct": 0.9}
-    )
+    _, reasons = factor_adjustment({"vol_pct": 0.9, "turnover_pct": 0.1, "dist_52w_pct": 0.9})
     assert any("Volatilitas" in r for r in reasons)
     assert any("Likuiditas rendah" in r for r in reasons)
     assert any("puncak 52-minggu" in r for r in reasons)
     # Tidak ada alasan di tengah
-    _, mid = factor_adjustment(
-        {"vol_pct": 0.5, "turnover_pct": 0.5, "dist_52w_pct": 0.5}
-    )
+    _, mid = factor_adjustment({"vol_pct": 0.5, "turnover_pct": 0.5, "dist_52w_pct": 0.5})
     assert mid == []
 
 

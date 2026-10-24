@@ -85,13 +85,9 @@ def load_panel(
         cur.execute(query, params)
         rows = cur.fetchall()
     if not rows:
-        return pd.DataFrame(
-            columns=["code", "date", "close", "volume", "value", "foreign_net"]
-        )
+        return pd.DataFrame(columns=["code", "date", "close", "volume", "value", "foreign_net"])
 
-    df = pd.DataFrame(
-        rows, columns=["code", "date", "close", "volume", "value", "foreign_net"]
-    )
+    df = pd.DataFrame(rows, columns=["code", "date", "close", "volume", "value", "foreign_net"])
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -148,7 +144,7 @@ def _shift_by_pos(df: pd.DataFrame, col: str, target_pos: pd.Series) -> pd.Serie
     # join strict on (code, pos == target_pos) tanpa melihat ke masa depan
     # di luar emiten masing-masing.
     lookup = tmp.set_index(["code", "pos"])["val"]
-    keys = list(zip(tmp["code"], target_pos.astype(int)))
+    keys = list(zip(tmp["code"], target_pos.astype(int), strict=True))
     vals = [lookup.get(k, np.nan) for k in keys]
     return pd.Series(vals, index=df.index, dtype=float)
 
@@ -219,9 +215,9 @@ def summarize(ic_df: pd.DataFrame, factors: list[str]) -> pd.DataFrame:
         lag = min(5, T - 1)
         gamma0 = (demeaned * demeaned).mean()
         nw_var = gamma0
-        for l in range(1, lag + 1):
-            cov = (demeaned.iloc[l:] * demeaned.iloc[:-l].values).mean()
-            w = 1.0 - l / (lag + 1.0)  # Bartlett kernel
+        for lag_i in range(1, lag + 1):
+            cov = (demeaned.iloc[lag_i:] * demeaned.iloc[:-lag_i].values).mean()
+            w = 1.0 - lag_i / (lag + 1.0)  # Bartlett kernel
             nw_var += 2.0 * w * cov
         nw_std = _nw_std(gamma0, nw_var, T)
         rows.append(
@@ -245,13 +241,11 @@ def summarize(ic_df: pd.DataFrame, factors: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("mean_ic", key=lambda s: s.abs(), ascending=False)
 
 
-def quintile_returns(
-    merged: pd.DataFrame, factor: str, horizon: int, q: int = 5
-) -> pd.DataFrame:
+def quintile_returns(merged: pd.DataFrame, factor: str, horizon: int, q: int = 5) -> pd.DataFrame:
     """Mean forward return per kuintil faktor (cross-sectional, per tanggal lalu rata)."""
     fwd = f"fwd_{horizon}"
     per_day = []
-    for d, day_df in merged.groupby("date"):
+    for _d, day_df in merged.groupby("date"):
         dd = day_df[[factor, fwd]].dropna()
         if len(dd) < 25:  # butuh cukup nama biar kuintil bermakna
             continue
@@ -277,8 +271,8 @@ def quintile_returns(
 @dataclass
 class ICReport:
     horizons: list[int]
-    summaries: dict[int, pd.DataFrame]      # horizon -> ringkasan agregat
-    daily_ic: dict[int, pd.DataFrame]       # horizon -> IC harian
+    summaries: dict[int, pd.DataFrame]  # horizon -> ringkasan agregat
+    daily_ic: dict[int, pd.DataFrame]  # horizon -> IC harian
     quintiles: dict[tuple[str, int], pd.DataFrame]  # (factor, horizon) -> kuintil
 
 

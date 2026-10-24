@@ -160,14 +160,34 @@ def test_entry_plan_pullback_zone_lies_below_close():
 
 
 def test_entry_plan_rejects_missing_or_invalid_close():
-    assert entry_plan(
-        close=None, signal="BUY", trend_up=True, rsi=60.0, bb_lower=None,
-        dist_52w_pct=None, vol_ratio=None, vol_daily=None, range_low_20=None,
-    ) is None
-    assert entry_plan(
-        close=-5.0, signal="BUY", trend_up=True, rsi=60.0, bb_lower=None,
-        dist_52w_pct=None, vol_ratio=None, vol_daily=None, range_low_20=None,
-    ) is None
+    assert (
+        entry_plan(
+            close=None,
+            signal="BUY",
+            trend_up=True,
+            rsi=60.0,
+            bb_lower=None,
+            dist_52w_pct=None,
+            vol_ratio=None,
+            vol_daily=None,
+            range_low_20=None,
+        )
+        is None
+    )
+    assert (
+        entry_plan(
+            close=-5.0,
+            signal="BUY",
+            trend_up=True,
+            rsi=60.0,
+            bb_lower=None,
+            dist_52w_pct=None,
+            vol_ratio=None,
+            vol_daily=None,
+            range_low_20=None,
+        )
+        is None
+    )
 
 
 # --------------------------------------------------------------- smart money
@@ -233,9 +253,7 @@ def test_score_candidate_horizon_dapat_dipilih():
     h21 = score_candidate(base_metrics(), horizon=21)
     assert h5 is not None and h21 is not None
     assert h5["horizon_days"] == 5 and h21["horizon_days"] == 21
-    assert h5["score"] == score_components(
-        candidate_features(base_metrics(), setup=h5["setup"]), 5
-    )
+    assert h5["score"] == score_components(candidate_features(base_metrics(), setup=h5["setup"]), 5)
     # Horizon tak dikenal jatuh ke default, bukan menghasilkan skor kosong.
     weird = score_candidate(base_metrics(), horizon=999)
     assert weird is not None and weird["horizon_days"] == DEFAULT_HORIZON
@@ -252,9 +270,7 @@ def test_pola_menjadi_alasan_tanpa_menggeser_skor():
         }
     }
     plain = score_candidate(base_metrics())
-    with_pattern = score_candidate(
-        base_metrics(pattern_buy=("initiation",)), histories=histories
-    )
+    with_pattern = score_candidate(base_metrics(pattern_buy=("initiation",)), histories=histories)
     assert plain is not None and with_pattern is not None
     assert with_pattern["score"] == plain["score"]
     assert with_pattern["horizon_days"] == DEFAULT_HORIZON
@@ -315,8 +331,8 @@ def make_rows(n: int) -> list[dict]:
 
 
 def test_tier_sizes_memberi_share_dan_minimal_satu():
-    assert tier_sizes(200) == (4, 20, 50)          # 2% / 10% / 25%
-    assert tier_sizes(1) == (1, 2, 3)              # pool kecil tetap terwakili
+    assert tier_sizes(200) == (4, 20, 50)  # 2% / 10% / 25%
+    assert tier_sizes(1) == (1, 2, 3)  # pool kecil tetap terwakili
     assert tier_sizes(0)[0] >= 1
 
 

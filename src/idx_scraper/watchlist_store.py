@@ -67,9 +67,7 @@ def write_watchlist(codes: list[str], path: Path | None = None) -> list[str]:
         p.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         return clean
     # No usable .env file: refuse silently? No — fail loudly, config is missing.
-    raise FileNotFoundError(
-        f"{p} not found and has no content; cannot persist IDX_WATCHLIST"
-    )
+    raise FileNotFoundError(f"{p} not found and has no content; cannot persist IDX_WATCHLIST")
 
 
 def update_watchlist(add: list[str], remove: list[str], path: Path | None = None) -> list[str]:

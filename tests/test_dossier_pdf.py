@@ -6,7 +6,9 @@ from idx_scraper.api.dossier_pdf import _scalar_rows, format_value, render_dossi
 
 
 def test_nested_object_is_flattened_not_dropped():
-    rows = dict(_scalar_rows({"regime": {"label": "TRENDING_UP", "adx": 28.5}, "events": [{"a": 1}]}))
+    rows = dict(
+        _scalar_rows({"regime": {"label": "TRENDING_UP", "adx": 28.5}, "events": [{"a": 1}]})
+    )
     assert rows["regime label"] == "TRENDING_UP"
     assert rows["regime adx"] == "28.50"
     assert rows["events"] == "1 item"

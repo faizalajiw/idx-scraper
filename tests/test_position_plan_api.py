@@ -106,10 +106,6 @@ def test_papan_dan_emiten_sepakat():
         "open_positions": 2,
         "exposure_pct": 40.0,
     }
-    panel = _with_position_plan(
-        {"rows": [pege_row()], "gate": None}, metrics=frame(), **state
-    )
-    stock = _with_position_plan(
-        {"candidate": pege_row(), "gate": None}, metrics=frame(), **state
-    )
+    panel = _with_position_plan({"rows": [pege_row()], "gate": None}, metrics=frame(), **state)
+    stock = _with_position_plan({"candidate": pege_row(), "gate": None}, metrics=frame(), **state)
     assert panel["rows"][0]["plan"] == stock["candidate"]["plan"]

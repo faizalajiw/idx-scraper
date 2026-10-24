@@ -13,10 +13,7 @@ from idx_scraper.watchlist_store import read_watchlist, update_watchlist, write_
 def env_file(tmp_path: Path) -> Path:
     p = tmp_path / ".env"
     p.write_text(
-        "# comment\n"
-        "IDX_STORAGE=sqlite\n"
-        "IDX_WATCHLIST=BBCA,BBRI,TLKM\n"
-        "IDX_MARKET_OPEN=09:00\n",
+        "# comment\nIDX_STORAGE=sqlite\nIDX_WATCHLIST=BBCA,BBRI,TLKM\nIDX_MARKET_OPEN=09:00\n",
         encoding="utf-8",
     )
     return p

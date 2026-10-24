@@ -11,6 +11,7 @@ sector_map.py and is intentionally data, not logic.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -51,6 +52,7 @@ def _research_cache_get(key: str) -> Any | None:
 def _research_cache_put(key: str, val: Any, ttl: float | None = None) -> None:
     """Simpan ke cache; ``ttl`` khusus untuk hitungan yang mahal & harian."""
     _RESEARCH_CACHE[key] = (time.monotonic(), ttl if ttl is not None else _RESEARCH_TTL, val)
+
 
 def clear_research_cache() -> int:
     """Kosongkan cache in-process supaya menu langsung menyajikan data terbaru.
@@ -151,7 +153,10 @@ def get_market_regime() -> dict[str, Any]:
             )
             rows = cur.fetchall()
         df = pd.DataFrame(
-            [(str(r["date"]), _f(r["close"]), _f(r["close"]), _f(r["close"]), _f(r["close"])) for r in rows],
+            [
+                (str(r["date"]), _f(r["close"]), _f(r["close"]), _f(r["close"]), _f(r["close"]))
+                for r in rows
+            ],
             columns=["date", "open", "high", "low", "close"],
         )
 
@@ -174,7 +179,9 @@ def get_market_regime() -> dict[str, Any]:
     out["dir_hint"] = (
         "up"
         if out["regime"] == "TRENDING_UP"
-        else "down" if out["regime"] == "TRENDING_DOWN" else None
+        else "down"
+        if out["regime"] == "TRENDING_DOWN"
+        else None
     )
     out["gate"] = _gate_for(out, datetime.now(WIB))
     return out
@@ -285,31 +292,35 @@ def get_broker_summary(code: str, date: str | None = None) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     if fbuy is not None:
-        rows.append({
-            "broker": "FOREIGN (aggregate)",
-            "code": None,
-            "buy_value": fbuy,
-            "sell_value": fsell or 0.0,
-            "net": fbuy - (fsell or 0.0),
-            "buy_rank": 1,
-            "sell_rank": 1 if fsell is not None else None,
-            "estimated": True,
-        })
+        rows.append(
+            {
+                "broker": "FOREIGN (aggregate)",
+                "code": None,
+                "buy_value": fbuy,
+                "sell_value": fsell or 0.0,
+                "net": fbuy - (fsell or 0.0),
+                "buy_rank": 1,
+                "sell_rank": 1 if fsell is not None else None,
+                "estimated": True,
+            }
+        )
     if avg_bid is not None or avg_offer is not None:
         # Rough IDR estimate using the day's close as reference price.
         ref = _f(eod["close"]) if eod else None
         b = avg_bid * ref if (avg_bid is not None and ref) else None
         o = avg_offer * ref if (avg_offer is not None and ref) else None
-        rows.append({
-            "broker": "DOMESTIC (bid/offer proxy)",
-            "code": None,
-            "buy_value": b or 0.0,
-            "sell_value": o or 0.0,
-            "net": (b or 0.0) - (o or 0.0),
-            "buy_rank": 2,
-            "sell_rank": 2,
-            "estimated": True,
-        })
+        rows.append(
+            {
+                "broker": "DOMESTIC (bid/offer proxy)",
+                "code": None,
+                "buy_value": b or 0.0,
+                "sell_value": o or 0.0,
+                "net": (b or 0.0) - (o or 0.0),
+                "buy_rank": 2,
+                "sell_rank": 2,
+                "estimated": True,
+            }
+        )
 
     buyers = sorted(rows, key=lambda r: r["buy_value"], reverse=True)
     sellers = sorted(rows, key=lambda r: r["sell_value"], reverse=True)
@@ -377,7 +388,12 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
     latest = days_list[-1] if days_list else None
 
     def _mover(r: Any) -> dict[str, Any]:
-        return {"code": r["code"], "name": r["name"], "net": _f(r["net_idr"]), "percent": _f(r["percent"])}
+        return {
+            "code": r["code"],
+            "name": r["name"],
+            "net": _f(r["net_idr"]),
+            "percent": _f(r["percent"]),
+        }
 
     return {
         "date": latest["date"] if latest else None,
@@ -393,7 +409,9 @@ def get_foreign_flow(days: int = 20) -> dict[str, Any]:
 # ------------------------------------------------------- foreign flow per emiten
 
 
-def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_limit: int = 10) -> dict[str, Any]:
+def get_stock_foreign_flow(
+    code: str, days: int = 30, peer_days: int = 10, peer_limit: int = 10
+) -> dict[str, Any]:
     """Aliran asing satu emiten: tren harian, flip, dan pembanding sektor.
 
     Sumber ``research.latest_pit`` (``foreign_net`` dalam SAHAM — dikali close
@@ -489,7 +507,12 @@ def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_
                 )
 
     self_rows = [
-        {"date": str(r["date"]), "net_idr": r["net_idr"], "buy_idr": r["buy_idr"], "sell_idr": r["sell_idr"]}
+        {
+            "date": str(r["date"]),
+            "net_idr": r["net_idr"],
+            "buy_idr": r["buy_idr"],
+            "sell_idr": r["sell_idr"],
+        }
         for r in rows
     ]
     if not self_rows:
@@ -501,11 +524,10 @@ def get_stock_foreign_flow(code: str, days: int = 30, peer_days: int = 10, peer_
     # Batasi daftar yang ditampilkan, tapi emiten sendiri harus tetap terlihat.
     shown = [p for p in peers if not p["is_self"]][:peer_limit]
     if any(p["is_self"] for p in peers):
-        shown = sorted([p for p in peers if p["is_self"]] + shown, key=lambda x: x["net_sum"], reverse=True)
-    shown = [
-        {**p, "code": code if p["is_self"] else p["code"]}
-        for p in shown
-    ]
+        shown = sorted(
+            [p for p in peers if p["is_self"]] + shown, key=lambda x: x["net_sum"], reverse=True
+        )
+    shown = [{**p, "code": code if p["is_self"] else p["code"]} for p in shown]
 
     latest_date = flow[-1]["date"] if flow else None
     out: dict[str, Any] = {
@@ -771,9 +793,7 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
         print(f"[warn] konteks pasar dilewati di smart-money: {e}", file=sys.stderr)
         breadth = None
 
-    narrative = build_narrative(
-        code, v, pats, rng, pattern_history=hist, market=breadth
-    )
+    narrative = build_narrative(code, v, pats, rng, pattern_history=hist, market=breadth)
 
     # Konteks sektor: verifikasi apakah emiten ini "janggal" dibanding
     # se-sektor (berapa yang akumulasi vs distribusi di jendela sama).
@@ -798,7 +818,9 @@ def get_stock_smart_money(code: str) -> dict[str, Any]:
             "sector": sector,
             "comparable": sector != FALLBACK_SECTOR,
             **sector_ctx,
-        } if sector_ctx is not None else None,
+        }
+        if sector_ctx is not None
+        else None,
         "market": (
             {**breadth, "position": market_context_sentence(v["side"], breadth)}
             if breadth
@@ -874,7 +896,7 @@ def _sector_flow_context(code: str, sector: str) -> dict[str, Any] | None:
         )
 
     acc = dist = 0
-    for c, rows in by_code.items():
+    for rows in by_code.values():
         if not rows:
             continue
         v = verdict(rows)
@@ -951,9 +973,7 @@ def get_smart_money_track_record() -> dict[str, Any]:
         for j, r in enumerate(rows):
             idx[(code, r["date"])] = j
 
-    closes: dict[str, list[dict[str, Any]]] = {
-        code: entry["rows"] for code, entry in panel.items()
-    }
+    closes: dict[str, list[dict[str, Any]]] = {code: entry["rows"] for code, entry in panel.items()}
 
     episodes = collect_pattern_episodes(panel)
 
@@ -1266,8 +1286,7 @@ def get_stock_decision(code: str) -> dict[str, Any]:
     try:
         ff = get_stock_foreign_flow(code, days=10, peer_days=10, peer_limit=3)
         foreign_10 = [
-            {"date": p["date"], "net": p["net"], "flip": p["flip"]}
-            for p in ff.get("flow", [])
+            {"date": p["date"], "net": p["net"], "flip": p["flip"]} for p in ff.get("flow", [])
         ]
         flip = ff.get("flip_summary", {}).get("last_flip")
     except Exception as e:
@@ -1369,18 +1388,22 @@ def get_sector_analysis(date: str | None = None) -> dict[str, Any]:
             key=lambda i: _f(i["percent"]) or 0,
             default=None,
         )
-        sectors.append({
-            "sector": sector,
-            "stock_count": len(items),
-            "avg_percent": round(sum(pcts) / len(pcts), 2) if pcts else None,
-            "total_value": sum(values) if values else None,
-            "total_foreign_net": sum(fnets) if fnets else None,
-            "gainers": sum(1 for p in pcts if p > 0),
-            "losers": sum(1 for p in pcts if p < 0),
-            "top_stock": {"code": top["code"], "percent": _f(top["percent"])} if top else None,
-        })
+        sectors.append(
+            {
+                "sector": sector,
+                "stock_count": len(items),
+                "avg_percent": round(sum(pcts) / len(pcts), 2) if pcts else None,
+                "total_value": sum(values) if values else None,
+                "total_foreign_net": sum(fnets) if fnets else None,
+                "gainers": sum(1 for p in pcts if p > 0),
+                "losers": sum(1 for p in pcts if p < 0),
+                "top_stock": {"code": top["code"], "percent": _f(top["percent"])} if top else None,
+            }
+        )
 
-    sectors.sort(key=lambda s: s["avg_percent"] if s["avg_percent"] is not None else -999, reverse=True)
+    sectors.sort(
+        key=lambda s: s["avg_percent"] if s["avg_percent"] is not None else -999, reverse=True
+    )
     return {"date": d, "sectors": sectors}
 
 
@@ -1398,6 +1421,7 @@ def _frame_from_rows(rows: list[dict[str, Any]]) -> pd.DataFrame:
     )
     df["close"] = pd.to_numeric(df["close"])
     return df
+
 
 def _valuation_frame(cur: Any, code: str) -> pd.DataFrame | None:
     cur.execute(
@@ -1454,9 +1478,13 @@ def get_valuation(min_days: int = 40) -> dict[str, Any]:
 
             # Momentum & RSI for context
             momo = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) > 21 else None
-            dfi = calculate_indicators(df.rename(columns={}).assign(open=df["close"], high=df["close"], low=df["close"]))
+            dfi = calculate_indicators(
+                df.rename(columns={}).assign(open=df["close"], high=df["close"], low=df["close"])
+            )
             rsi = _f(dfi["RSI"].iloc[-1])
-            trend_up = bool(dfi["MA_Short"].iloc[-1] > dfi["MA_Long"].iloc[-1]) if len(dfi) > 50 else None
+            trend_up = (
+                bool(dfi["MA_Short"].iloc[-1] > dfi["MA_Long"].iloc[-1]) if len(dfi) > 50 else None
+            )
 
             row = {
                 "code": code,
@@ -1635,9 +1663,7 @@ def _screener_rows() -> list[dict[str, Any]]:
             continue
         latest = hist[-1]
         df = _frame_from_rows(hist)
-        df = calculate_indicators(
-            df.assign(open=df["close"], high=df["close"], low=df["close"])
-        )
+        df = calculate_indicators(df.assign(open=df["close"], high=df["close"], low=df["close"]))
         sig = generate_signal(df)
         close = df["close"]
         momo = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) > 21 else None
@@ -1667,9 +1693,7 @@ def _screener_rows() -> list[dict[str, Any]]:
         # tidak selalu -100%).
         hi_252 = close.rolling(252, min_periods=63).max()
         dist_52w = (
-            float(close.iloc[-1] / hi_252.iloc[-1] - 1.0)
-            if pd.notna(hi_252.iloc[-1])
-            else None
+            float(close.iloc[-1] / hi_252.iloc[-1] - 1.0) if pd.notna(hi_252.iloc[-1]) else None
         )
         # Hari sejak sinyal BUY/SELL terakhir (rule = signal_series, sama
         # dengan generate_signal). None = belum pernah bersinyal non-HOLD.
@@ -1699,7 +1723,9 @@ def _screener_rows() -> list[dict[str, Any]]:
         }
         out.append(row)
 
-    out.sort(key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True)
+    out.sort(
+        key=lambda r: r["momentum_20d"] if r["momentum_20d"] is not None else -999, reverse=True
+    )
     _research_cache_put("screener_rows", out, ttl=600.0)
     return out
 
@@ -1728,8 +1754,12 @@ def _latest_orderbook_factors() -> dict[str, dict[str, float | None]]:
                 # groupby mengurutkan (code, date) asc -> okrurrence terakhir
                 # per kode = tanggal terbaru.
                 out[r.code] = {
-                    "ob_imbalance": None if pd.isna(r.ob_imbalance) else round(float(r.ob_imbalance), 4),
-                    "ob_absorption": None if pd.isna(r.ob_absorption) else round(float(r.ob_absorption), 4),
+                    "ob_imbalance": None
+                    if pd.isna(r.ob_imbalance)
+                    else round(float(r.ob_imbalance), 4),
+                    "ob_absorption": None
+                    if pd.isna(r.ob_absorption)
+                    else round(float(r.ob_absorption), 4),
                     "ob_date": str(pd.Timestamp(r.date).date()),
                 }
         except Exception as e:  # graceful degradation — screener tetap hidup
@@ -1793,22 +1823,16 @@ def get_stock_events(code: str) -> dict[str, Any] | None:
     out_events: list[dict[str, Any]] = []
     for name, res in bundle["events"].items():
         ev_rows = res.events
-        mine = (
-            ev_rows[ev_rows["code"] == code] if not ev_rows.empty else pd.DataFrame()
-        )
+        mine = ev_rows[ev_rows["code"] == code] if not ev_rows.empty else pd.DataFrame()
         out_events.append(
             {
                 "event": name,
                 "description": ev.EVENT_PRESETS[name]["description"],
                 "my_count": len(mine),
                 "my_last_date": (
-                    str(pd.Timestamp(mine["date"].max()).date())
-                    if not mine.empty
-                    else None
+                    str(pd.Timestamp(mine["date"].max()).date()) if not mine.empty else None
                 ),
-                "my_median_fwd": (
-                    float(mine["fwd"].median()) if not mine.empty else None
-                ),
+                "my_median_fwd": (float(mine["fwd"].median()) if not mine.empty else None),
                 "my_median_abnormal": (
                     float(mine["abnormal"].median()) if not mine.empty else None
                 ),
@@ -1883,13 +1907,15 @@ def get_factors_overview() -> dict[str, Any]:
 
     # Bobot komposit aktif: dari run terbaru utk horizon acuan (10), fallback
     # konstanta composite kalau tidak ada yang eligible.
-    weights = {
-        f["factor"]: f["weight"] for f in factors if f["horizon"] == 10 and f["weight"]
-    }
+    weights = {f["factor"]: f["weight"] for f in factors if f["horizon"] == 10 and f["weight"]}
     if not weights:
         from ..research.composite import FACTOR_WEIGHTS
 
-        weights = {"vol_21d": FACTOR_WEIGHTS["vol"], "turnover_21d": FACTOR_WEIGHTS["turnover"], "dist_52w_high": FACTOR_WEIGHTS["dist_52w"]}
+        weights = {
+            "vol_21d": FACTOR_WEIGHTS["vol"],
+            "turnover_21d": FACTOR_WEIGHTS["turnover"],
+            "dist_52w_high": FACTOR_WEIGHTS["dist_52w"],
+        }
 
     from ..research.factors import FACTOR_DEFINITIONS
 
@@ -1919,10 +1945,9 @@ def get_regime_history(days: int = 90) -> dict[str, Any]:
 
     # Idempoten & murah: backfill menghitung ulang dari index_summary_daily
     # (SQL window, sekilas saja) sehingga histori selalu terkini tanpa job.
-    try:
+    # Tabel belum siap -> tetap sajikan yang ada.
+    with contextlib.suppress(Exception):
         backfill(dsn)
-    except Exception:
-        pass  # tabel belum siap -> tetap sajikan yang ada
 
     with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
         cur.execute(
@@ -2347,9 +2372,7 @@ def get_broker_activity(limit: int = 25) -> dict[str, Any]:
             {
                 "code": code,
                 "name": m.get("name"),
-                "close": m.get("close")
-                if m.get("close") is not None
-                else _f(r["close"]),
+                "close": m.get("close") if m.get("close") is not None else _f(r["close"]),
                 "change": m.get("change"),
                 "percent": m.get("percent"),
                 "score": round(float(r["score"]), 1),
@@ -2585,9 +2608,7 @@ def get_stock_broker_activity(code: str, lookback: int = 60) -> dict[str, Any]:
         _research_cache_put(cache_key, out)
         return out
 
-    history = ba.composite_score_history(
-        snap["panel"], snap["factors"], code, lookback=lookback
-    )
+    history = ba.composite_score_history(snap["panel"], snap["factors"], code, lookback=lookback)
     out["history"] = [
         {
             "date": str(pd.Timestamp(r["date"]).date()),
@@ -2924,9 +2945,7 @@ def _with_position_plan(
 
     result: dict[str, Any] = {**out}
     if "rows" in result:
-        result["rows"] = [
-            {**row, "plan": plan_of(row)} for row in out.get("rows") or []
-        ]
+        result["rows"] = [{**row, "plan": plan_of(row)} for row in out.get("rows") or []]
     candidate = result.get("candidate")
     if isinstance(candidate, dict):
         result["candidate"] = {**candidate, "plan": plan_of(candidate)}
@@ -3164,16 +3183,26 @@ def get_recommendation_track() -> dict[str, Any]:
 
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
-        out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
-               "reason": "DATABASE_URL belum diisi."}
+        out = {
+            "candidates": 0,
+            "horizons": [5, 10, 21],
+            "by_grade": [],
+            "recent": [],
+            "reason": "DATABASE_URL belum diisi.",
+        }
         _research_cache_put(cache_key, out, ttl=600.0)
         return out
     try:
         out = evaluate(dsn)
     except Exception as e:
         print(f"[warn] track record rekomendasi dilewati: {e}", file=sys.stderr)
-        out = {"candidates": 0, "horizons": [5, 10, 21], "by_grade": [], "recent": [],
-               "reason": "Tabel research.recommendation_log belum ada / belum diisi."}
+        out = {
+            "candidates": 0,
+            "horizons": [5, 10, 21],
+            "by_grade": [],
+            "recent": [],
+            "reason": "Tabel research.recommendation_log belum ada / belum diisi.",
+        }
     if not out.get("candidates") and not out.get("reason"):
         out["reason"] = "Belum ada kandidat tercatat — jalankan `idx recommendations`."
     _research_cache_put(cache_key, out, ttl=3600.0)

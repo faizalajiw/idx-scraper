@@ -12,8 +12,14 @@ from pathlib import Path
 from idx_scraper.smart_money_state import SmartMoneyState
 
 
-def _v(side: str, netval: float = 10.0, net_sum: float = 1.0e10,
-       insufficient: bool = False, streak: int = 5, date: str = "2026-09-30") -> dict:
+def _v(
+    side: str,
+    netval: float = 10.0,
+    net_sum: float = 1.0e10,
+    insufficient: bool = False,
+    streak: int = 5,
+    date: str = "2026-09-30",
+) -> dict:
     return {
         "side": side,
         "strength": "menengah",
@@ -111,13 +117,16 @@ def test_acc_to_neutral_no_event_then_acc_again_fires():
 def test_multiple_codes_independent():
     s = _fresh_state()
     # Run pertama: semua di-seed, tak ada event.
-    assert s.evaluate(
-        [
-            {"code": "AAA", "verdict": _v("akumulasi")},
-            {"code": "BBB", "verdict": _v("distribusi", net_sum=-1.0e10)},
-            {"code": "CCC", "verdict": _v("netral", netval=0.0)},
-        ]
-    ) == []
+    assert (
+        s.evaluate(
+            [
+                {"code": "AAA", "verdict": _v("akumulasi")},
+                {"code": "BBB", "verdict": _v("distribusi", net_sum=-1.0e10)},
+                {"code": "CCC", "verdict": _v("netral", netval=0.0)},
+            ]
+        )
+        == []
+    )
     # Hanya BBB yang berbalik -> hanya BBB yang di-alert.
     ev = s.evaluate(
         [

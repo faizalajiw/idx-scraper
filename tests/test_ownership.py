@@ -27,10 +27,20 @@ def _h(name, category, pct, shares=None, ctrl=False):
 def test_parse_shareholders_from_payload():
     profile = {
         "PemegangSaham": [
-            {"Nama": "PT Contoh", "Kategori": "Lebih dari 5%", "Jumlah": 1000.0,
-             "Persentase": 60.0, "Pengendali": True},
-            {"Nama": "Masyarakat Non Warkat", "Kategori": "Masyarakat Non Warkat",
-             "Jumlah": 400.0, "Persentase": 40.0, "Pengendali": False},
+            {
+                "Nama": "PT Contoh",
+                "Kategori": "Lebih dari 5%",
+                "Jumlah": 1000.0,
+                "Persentase": 60.0,
+                "Pengendali": True,
+            },
+            {
+                "Nama": "Masyarakat Non Warkat",
+                "Kategori": "Masyarakat Non Warkat",
+                "Jumlah": 400.0,
+                "Persentase": 40.0,
+                "Pengendali": False,
+            },
             {"Nama": None, "Kategori": "x", "Jumlah": 0, "Persentase": 0},  # tanpa nama
             "bukan-dict",
         ]
@@ -42,10 +52,12 @@ def test_parse_shareholders_from_payload():
 
 
 def test_parse_shareholders_sorts_by_pct_desc():
-    profile = {"PemegangSaham": [
-        {"Nama": "Kecil", "Kategori": "Komisaris", "Jumlah": 1, "Persentase": 0.1},
-        {"Nama": "Besar", "Kategori": "Lebih dari 5%", "Jumlah": 100, "Persentase": 70.0},
-    ]}
+    profile = {
+        "PemegangSaham": [
+            {"Nama": "Kecil", "Kategori": "Komisaris", "Jumlah": 1, "Persentase": 0.1},
+            {"Nama": "Besar", "Kategori": "Lebih dari 5%", "Jumlah": 100, "Persentase": 70.0},
+        ]
+    }
     rows = parse_shareholders(profile)
     assert rows[0]["holder_name"] == "Besar"
 
@@ -126,10 +138,14 @@ def test_owner_changes_ignores_small_deltas():
 
 def test_owner_changes_excludes_public_and_treasury():
     # Bergesernya agregat masyarakat / treasury bukan "aksi pemilik" tertentu.
-    prev = [_h("Masyarakat Non Warkat", "Masyarakat Non Warkat", 40.0),
-            _h("Saham Treasury", "Saham Treasury", 5.0)]
-    curr = [_h("Masyarakat Non Warkat", "Masyarakat Non Warkat", 45.0),
-            _h("Saham Treasury", "Saham Treasury", 1.0)]
+    prev = [
+        _h("Masyarakat Non Warkat", "Masyarakat Non Warkat", 40.0),
+        _h("Saham Treasury", "Saham Treasury", 5.0),
+    ]
+    curr = [
+        _h("Masyarakat Non Warkat", "Masyarakat Non Warkat", 45.0),
+        _h("Saham Treasury", "Saham Treasury", 1.0),
+    ]
     assert owner_changes(prev, curr) == []
 
 

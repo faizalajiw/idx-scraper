@@ -21,7 +21,15 @@ from . import analytics
 from .database import get_cursor
 from .sector_map import sector_for
 
-SECTION_KEYS = ("profil", "valuasi", "faktor", "arus_asing", "aktivitas_broker", "sentimen", "catatan_risiko")
+SECTION_KEYS = (
+    "profil",
+    "valuasi",
+    "faktor",
+    "arus_asing",
+    "aktivitas_broker",
+    "sentimen",
+    "catatan_risiko",
+)
 
 
 def latest_session_date() -> str | None:
@@ -46,7 +54,11 @@ def _sentimen(code: str, latest: str | None) -> dict[str, Any]:
     ob = analytics._latest_orderbook_factors().get(code) or {}
     ob_date = ob.get("ob_date")
     d["orderbook_date"] = ob_date
-    d["orderbook_stale"] = mark_stale(ob_date, latest) if (ob.get("ob_imbalance") is not None or ob.get("ob_absorption") is not None) else True
+    d["orderbook_stale"] = (
+        mark_stale(ob_date, latest)
+        if (ob.get("ob_imbalance") is not None or ob.get("ob_absorption") is not None)
+        else True
+    )
     return d
 
 
@@ -63,7 +75,12 @@ def _section(
         print(f"[warn] dossier bagian {name} dilewati: {exc}", file=sys.stderr)
         return {"data": None, "session_date": None, "stale": True, "error": str(exc)}
     session = session_of(data) if data is not None else None
-    return {"data": data, "session_date": session, "stale": mark_stale(session, latest), "error": None}
+    return {
+        "data": data,
+        "session_date": session,
+        "stale": mark_stale(session, latest),
+        "error": None,
+    }
 
 
 def _profil(code: str) -> dict[str, Any]:
@@ -121,7 +138,9 @@ def build_dossier(code: str) -> dict[str, Any]:
             lambda _x: latest,
             latest,
         ),
-        "sentimen": _section("sentimen", lambda: _sentimen(code, latest), lambda x: x.get("orderbook_date"), latest),
+        "sentimen": _section(
+            "sentimen", lambda: _sentimen(code, latest), lambda x: x.get("orderbook_date"), latest
+        ),
         "catatan_risiko": _section(
             "catatan_risiko",
             lambda: {

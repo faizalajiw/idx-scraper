@@ -65,11 +65,11 @@ def main() -> int:
                     auto_adjust=False,
                 )
             except Exception as e:
-                print(f"[warn] chunk {start}-{start+len(chunk)} gagal: {e}", file=sys.stderr)
+                print(f"[warn] chunk {start}-{start + len(chunk)} gagal: {e}", file=sys.stderr)
                 continue
 
             single = len(tickers) == 1
-            for code, tk in zip(chunk, tickers):
+            for code, tk in zip(chunk, tickers, strict=True):
                 try:
                     sub = df if single else df[tk]
                 except Exception:  # ticker hilang dari batch -> skip senyap
@@ -106,7 +106,7 @@ def main() -> int:
                     "close": close,
                     "volume": int(vol) if vol is not None else None,
                 }
-            print(f"  chunk {start}-{start+len(chunk)}: {len(target_rows)} total ketemu 25 Sep")
+            print(f"  chunk {start}-{start + len(chunk)}: {len(target_rows)} total ketemu 25 Sep")
 
         if not target_rows:
             print("[abort] tidak ada bar 25 Sep dari Yahoo sama sekali.")
@@ -120,14 +120,16 @@ def main() -> int:
             meta = universe.get(code, {})
             prev_close = meta.get("prev_close")
             name = meta.get("name")
+
             # skip OHL yang 0/None untuk hari tanpa transaksi
             def _ohl(v):
                 return v if v else None
-            o, h, l = _ohl(bar["open"]), _ohl(bar["high"]), _ohl(bar["low"])
+
+            o, h, lo = _ohl(bar["open"]), _ohl(bar["high"]), _ohl(bar["low"])
             # quality gate — sama seperti _ingest_eod_research
             cur.execute(
                 "select research.eod_reject_reason(%s::numeric,%s::numeric,%s::numeric,%s::numeric,%s::bigint)",
-                (o, h, l, bar["close"], bar["volume"]),
+                (o, h, lo, bar["close"], bar["volume"]),
             )
             reason = cur.fetchone()[0]
             if reason is not None:
@@ -136,11 +138,15 @@ def main() -> int:
                        (code, trade_date, payload, reason)
                        values (%s,%s,%s,%s)""",
                     (
-                        code, TARGET,
+                        code,
+                        TARGET,
                         psycopg.types.json.Json(
                             {
-                                "open": o, "high": h, "low": l,
-                                "close": bar["close"], "volume": bar["volume"],
+                                "open": o,
+                                "high": h,
+                                "low": lo,
+                                "close": bar["close"],
+                                "volume": bar["volume"],
                                 "source": "Yahoo",
                             }
                         ),
@@ -156,9 +162,22 @@ def main() -> int:
                     name, foreign_buy, foreign_sell, foreign_net, ingested_at)
                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (
-                    code, TARGET, o, h, l,
-                    bar["close"], prev_close, bar["volume"], None, None, "Yahoo",
-                    name, None, None, None, knowledge,
+                    code,
+                    TARGET,
+                    o,
+                    h,
+                    lo,
+                    bar["close"],
+                    prev_close,
+                    bar["volume"],
+                    None,
+                    None,
+                    "Yahoo",
+                    name,
+                    None,
+                    None,
+                    None,
+                    knowledge,
                 ),
             )
             inserted += 1
@@ -177,11 +196,11 @@ def main() -> int:
                on conflict (code, trade_date, knowledge_date) do nothing""",
             (TARGET,),
         )
-        print(f"[done] raw_eod +{inserted} (source=Yahoo), quarantine +{quarantined}, prices_pit refreshed untuk {TARGET}")
-        # 5) verifikasi
-        cur.execute(
-            "select count(*) from research.latest_pit where trade_date=%s", (TARGET,)
+        print(
+            f"[done] raw_eod +{inserted} (source=Yahoo), quarantine +{quarantined}, prices_pit refreshed untuk {TARGET}"
         )
+        # 5) verifikasi
+        cur.execute("select count(*) from research.latest_pit where trade_date=%s", (TARGET,))
         print(f"latest_pit rows @ {TARGET}: {cur.fetchone()[0]}")
         cur.execute("select max(trade_date) from research.prices_pit")
         print(f"latest_pit max trade_date sekarang: {cur.fetchone()[0]}")

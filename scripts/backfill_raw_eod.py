@@ -91,19 +91,23 @@ def _prev_close(r):
         return r.close - r.change
     return None
 
+
 assert _prev_close(type("R", (), {"previous": None, "close": 110, "change": 10})) == 100
 assert _prev_close(type("R", (), {"previous": 95, "close": 110, "change": 10})) == 95
+
 
 def load_env() -> None:
     """Load .env file into os.environ if not already set."""
     env_path = pathlib.Path(__file__).parent.parent / ".env"
     if env_path.exists():
         import dotenv
+
         dotenv.load_dotenv(str(env_path), override=False)
     # Fallback: manual parse if python-dotenv not available
     if "DATABASE_URL" not in os.environ:
         try:
             import configparser
+
             config = configparser.ConfigParser()
             config.read(str(env_path))
             if "DATABASE_URL" in config and "DATABASE_URL" in config["DEFAULT"]:
@@ -112,7 +116,11 @@ def load_env() -> None:
             pass
 
 
-BLOCK_BACKOFF = (0, 30, 90)  # percobaan ulang saat IDX menolak; setelah itu BERHENTI dengan tanggal resume
+BLOCK_BACKOFF = (
+    0,
+    30,
+    90,
+)  # percobaan ulang saat IDX menolak; setelah itu BERHENTI dengan tanggal resume
 
 _INSERT_RAW_EOD = """
 insert into research.raw_eod
@@ -184,7 +192,7 @@ def backfill(
     if not dsn:
         print("[backfill] ERROR: DATABASE_URL not found in environment", file=sys.stderr)
         sys.exit(1)
-    
+
     if start_date is not None and end_date is not None:
         # Mode catch-up: jalankan untuk rentang tanggal tertentu
         start = start_date
@@ -196,7 +204,10 @@ def backfill(
         start = end - timedelta(days=round(365.25 * years))
         print(f"[backfill] MODE DEFAULT: {start} -> {end} ({years} tahun)")
     else:
-        print("[backfill] ERROR: neither --years nor --start-date/--end-date provided", file=sys.stderr)
+        print(
+            "[backfill] ERROR: neither --years nor --start-date/--end-date provided",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     client = IDXClient()
@@ -261,24 +272,40 @@ def backfill(
 
                         cur.execute(
                             _INSERT_RAW_EOD + on_conflict,
-                            (r.code, d, _ohl(r.open), _ohl(r.high), _ohl(r.low),
-                             _num(r.close), _num(_prev_close(r)), _num(r.volume),
-                             _num(r.value), _num(r.frequency), r.source,
-                             r.name, _num(r.foreign_buy), _num(r.foreign_sell),
-                             _num(r.foreign_net)),
+                            (
+                                r.code,
+                                d,
+                                _ohl(r.open),
+                                _ohl(r.high),
+                                _ohl(r.low),
+                                _num(r.close),
+                                _num(_prev_close(r)),
+                                _num(r.volume),
+                                _num(r.value),
+                                _num(r.frequency),
+                                r.source,
+                                r.name,
+                                _num(r.foreign_buy),
+                                _num(r.foreign_sell),
+                                _num(r.foreign_net),
+                            ),
                         )
                         inserted += 1
 
             if day_count % 20 == 0:
-                print(f"  .. {day_count}/{len(to_fetch)} | "
-                      f"raw+{inserted} karantina+{quarantined} libur={holidays} "
-                      f"luar-jendela={outside} gagal={gagal}")
+                print(
+                    f"  .. {day_count}/{len(to_fetch)} | "
+                    f"raw+{inserted} karantina+{quarantined} libur={holidays} "
+                    f"luar-jendela={outside} gagal={gagal}"
+                )
             time.sleep(pace)
 
     client.close()
     skipped = len(days) - day_count
-    print(f"[backfill] selesai. raw_eod +{inserted}, karantina +{quarantined}, libur {holidays}, "
-          f"luar jendela {outside}, gagal {gagal}, dilewati {skipped}")
+    print(
+        f"[backfill] selesai. raw_eod +{inserted}, karantina +{quarantined}, libur {holidays}, "
+        f"luar jendela {outside}, gagal {gagal}, dilewati {skipped}"
+    )
 
     refresh_prices_pit(dsn)
 
@@ -304,17 +331,37 @@ def refresh_prices_pit(dsn: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--years", type=float, default=None, help="years of history to backfill (default mode)")
-    ap.add_argument("--start-date", type=lambda s: date.fromisoformat(s), help="start date for catch-up mode (YYYY-MM-DD)")
-    ap.add_argument("--end-date", type=lambda s: date.fromisoformat(s), help="end date for catch-up mode (YYYY-MM-DD)")
-    ap.add_argument("--pace", type=float, default=SLEEP_SECONDS, help="jeda antar request IDX (detik, default 4.0)")
-    ap.add_argument("--ulang", action="store_true",
-                    help="tarik ulang tanggal yang sudah ada di raw_eod (upsert: perbarui semua kolom)")
+    ap.add_argument(
+        "--years", type=float, default=None, help="years of history to backfill (default mode)"
+    )
+    ap.add_argument(
+        "--start-date",
+        type=lambda s: date.fromisoformat(s),
+        help="start date for catch-up mode (YYYY-MM-DD)",
+    )
+    ap.add_argument(
+        "--end-date",
+        type=lambda s: date.fromisoformat(s),
+        help="end date for catch-up mode (YYYY-MM-DD)",
+    )
+    ap.add_argument(
+        "--pace",
+        type=float,
+        default=SLEEP_SECONDS,
+        help="jeda antar request IDX (detik, default 4.0)",
+    )
+    ap.add_argument(
+        "--ulang",
+        action="store_true",
+        help="tarik ulang tanggal yang sudah ada di raw_eod (upsert: perbarui semua kolom)",
+    )
     args = ap.parse_args()
 
     if args.start_date is not None and args.end_date is not None:
         # Mode catch-up: jalankan untuk rentang tanggal tertentu
-        backfill(start_date=args.start_date, end_date=args.end_date, pace=args.pace, ulang=args.ulang)
+        backfill(
+            start_date=args.start_date, end_date=args.end_date, pace=args.pace, ulang=args.ulang
+        )
     elif args.years is not None:
         # Mode default: backfill berdasarkan jumlah tahun dari hari ini
         backfill(years=args.years, pace=args.pace, ulang=args.ulang)

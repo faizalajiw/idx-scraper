@@ -66,7 +66,10 @@ def backfill_from_idx(dsn: str, date_strs: list[str]) -> tuple[int, int]:
                 time.sleep(_DELAY_BETWEEN_DAYS)
                 continue
             trade_date = f"{d[:4]}-{d[4:6]}-{d[6:]}"
-            with psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn, conn.cursor() as cur:
+            with (
+                psycopg.connect(dsn, autocommit=True, connect_timeout=10) as conn,
+                conn.cursor() as cur,
+            ):
                 upsert_day(cur, trade_date, aggregate_day(rows))
             days += 1
             rows_total += len(rows)

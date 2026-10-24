@@ -82,6 +82,7 @@ BUMN_BROKER_CODES: frozenset[str] = frozenset(
     }
 )
 
+
 def classify_broker(code: str | None) -> str:
     """Kode broker -> ``"asing"`` | ``"bumn"`` | ``"lokal"`` (pure).
 

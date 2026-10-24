@@ -58,7 +58,7 @@ def test_generated_layer_covers_the_broad_market() -> None:
 
 
 def test_coverage_counts_each_layer_separately() -> None:
-    codes = list(SECTOR_MAP)[:10] + ["ZZZZ", "ZZZY"]
+    codes = [*list(SECTOR_MAP)[:10], "ZZZZ", "ZZZY"]
     out = coverage(codes)
 
     assert out["total"] == 12

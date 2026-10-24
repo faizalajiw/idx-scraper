@@ -261,8 +261,7 @@ def position_plan(
         # urutan (mis. likuiditas juga membulat ke 0,0), dan "sudah penuh" adalah
         # sebab yang wajib terbaca (D14).
         notes.append(
-            f"Sudah penuh: {open_n} posisi terbuka dari batas "
-            f"{limits.max_open_positions}."
+            f"Sudah penuh: {open_n} posisi terbuka dari batas {limits.max_open_positions}."
         )
 
     if m is None:

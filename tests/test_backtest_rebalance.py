@@ -151,7 +151,11 @@ def test_less_frequent_rebalancing_cuts_turnover():
         )
         return run.turnover
 
-    daily, weekly, monthly = turnover(RebalanceFreq.DAILY), turnover(RebalanceFreq.WEEKLY), turnover(RebalanceFreq.MONTHLY)
+    daily, weekly, monthly = (
+        turnover(RebalanceFreq.DAILY),
+        turnover(RebalanceFreq.WEEKLY),
+        turnover(RebalanceFreq.MONTHLY),
+    )
     assert monthly <= weekly < daily
     # Daily churn on an alternating signal should dwarf a monthly schedule.
     assert daily > monthly * 5
@@ -164,9 +168,9 @@ def test_less_frequent_rebalancing_cuts_fees():
     costs = CostModel(commission_pct=0.002, sell_tax_pct=0.001)
 
     fees = {
-        freq: Backtester(reader).run(
-            strategy, days[0], days[-1], initial_cash=1000.0, costs=costs, rebalance=freq
-        ).total_fees
+        freq: Backtester(reader)
+        .run(strategy, days[0], days[-1], initial_cash=1000.0, costs=costs, rebalance=freq)
+        .total_fees
         for freq in (RebalanceFreq.DAILY, RebalanceFreq.WEEKLY, RebalanceFreq.MONTHLY)
     }
     assert fees[RebalanceFreq.MONTHLY] <= fees[RebalanceFreq.WEEKLY] < fees[RebalanceFreq.DAILY]
@@ -179,7 +183,10 @@ def test_ledger_records_exactly_one_event_per_schedule_day():
     days = weekdays(10)
     reader = FakeReader({code: {d: 100.0 for d in days} for code in ("AAAA", "BBBB")})
     result = Backtester(reader).run(
-        flip_flop_strategy(days), days[0], days[-1], initial_cash=1000.0,
+        flip_flop_strategy(days),
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
         rebalance=RebalanceFreq.WEEKLY,
     )
     assert len(result.rebalances) == result.rebalance_days == 2
@@ -191,8 +198,12 @@ def test_ledger_event_totals_add_up_to_the_run_totals():
     reader = FakeReader({code: {d: 100.0 for d in days} for code in ("AAAA", "BBBB")})
     costs = CostModel(commission_pct=0.002, sell_tax_pct=0.001, slippage_pct=0.001)
     result = Backtester(reader).run(
-        flip_flop_strategy(days), days[0], days[-1], initial_cash=1000.0,
-        costs=costs, rebalance=RebalanceFreq.WEEKLY,
+        flip_flop_strategy(days),
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
+        costs=costs,
+        rebalance=RebalanceFreq.WEEKLY,
     )
     assert sum(e.turnover for e in result.rebalances) == pytest.approx(result.turnover)
     assert sum(e.fees for e in result.rebalances) == pytest.approx(result.total_fees)
@@ -204,7 +215,10 @@ def test_ledger_positions_describe_the_book_after_each_rebalance():
     days = weekdays(10)
     reader = FakeReader({code: {d: 100.0 for d in days} for code in ("AAAA", "BBBB")})
     result = Backtester(reader).run(
-        flip_flop_strategy(days), days[0], days[-1], initial_cash=1000.0,
+        flip_flop_strategy(days),
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
         rebalance=RebalanceFreq.DAILY,
     )
 
@@ -225,8 +239,12 @@ def test_ledger_cash_reconciles_with_the_trades_it_reports():
     days = weekdays(6)
     reader = FakeReader({code: {d: 100.0 for d in days} for code in ("AAAA", "BBBB")})
     result = Backtester(reader).run(
-        flip_flop_strategy(days), days[0], days[-1], initial_cash=1000.0,
-        costs=CostModel(commission_pct=0.001), rebalance=RebalanceFreq.MONTHLY,
+        flip_flop_strategy(days),
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
+        costs=CostModel(commission_pct=0.001),
+        rebalance=RebalanceFreq.MONTHLY,
     )
     assert len(result.rebalances) == 1
     event = result.rebalances[0]
@@ -243,7 +261,10 @@ def test_ledger_reports_a_full_exit_when_the_strategy_goes_to_cash():
         return {"AAAA": 1.0} if d == days[0] else {}
 
     result = Backtester(reader).run(
-        strategy, days[0], days[-1], initial_cash=1000.0,
+        strategy,
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
         rebalance=RebalanceFreq.WEEKLY,
     )
     assert [h.code for h in result.rebalances[0].holdings] == ["AAAA"]
@@ -270,7 +291,10 @@ def test_targets_are_still_held_between_rebalance_days():
     days = weekdays(10)
     reader = FakeReader({code: {d: 100.0 for d in days} for code in ("AAAA", "BBBB")})
     result = Backtester(reader).run(
-        flip_flop_strategy(days), days[0], days[-1], initial_cash=1000.0,
+        flip_flop_strategy(days),
+        days[0],
+        days[-1],
+        initial_cash=1000.0,
         rebalance=RebalanceFreq.MONTHLY,
     )
     # One rebalance, then nothing traded: the whole curve is flat at the cost-free

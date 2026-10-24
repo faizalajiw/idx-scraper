@@ -1,4 +1,4 @@
-﻿"""Rolling per-emiten live capture from IDX ``GetTradingInfoDaily``.
+"""Rolling per-emiten live capture from IDX ``GetTradingInfoDaily``.
 
 IDX's whole-market ``GetStockSummary`` is EOD-only: while the market is open a
 request for today returns zero rows, and the dateless request returns the last
@@ -61,14 +61,18 @@ def load_universe(cur: Any, top_n: int, movers_n: int = 20) -> list[str]:
 
 class LiveCapture:
     def __init__(
-        self, client: Any, *, top_n: int | None = None,
+        self,
+        client: Any,
+        *,
+        top_n: int | None = None,
         delay_sec: float | None = None,
         should_run: Callable[[], bool] | None = None,
     ) -> None:
         self._client = client
         self._top_n = top_n if top_n is not None else _env_int("IDX_LIVE_TOP", 60)
         self._delay = (
-            max(_MIN_INTERVAL, delay_sec) if delay_sec is not None
+            max(_MIN_INTERVAL, delay_sec)
+            if delay_sec is not None
             else _env_int("IDX_LIVE_DELAY_MS", 1000) / 1000
         )
         self._should_run = should_run
@@ -91,7 +95,9 @@ class LiveCapture:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                if (self._should_run is None or self._should_run()) and self._throttle_run < len(_BACKOFF_STEPS):
+                if (self._should_run is None or self._should_run()) and self._throttle_run < len(
+                    _BACKOFF_STEPS
+                ):
                     self.sweep_once()
             except Exception as e:
                 print(f"[err] live capture: {e}", file=sys.stderr, flush=True)
@@ -104,7 +110,9 @@ class LiveCapture:
         import psycopg
         from psycopg.rows import dict_row
 
-        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(
+            os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row
+        ) as conn:
             with conn.cursor() as cur:
                 codes = load_universe(cur, self._top_n)
             if not codes:
@@ -112,7 +120,10 @@ class LiveCapture:
 
             if self._throttle_run:
                 cool = _BACKOFF_STEPS[min(self._throttle_run, len(_BACKOFF_STEPS)) - 1]
-                print(f"[{datetime.now(WIB).isoformat()}] live capture cooling down {cool}s", flush=True)
+                print(
+                    f"[{datetime.now(WIB).isoformat()}] live capture cooling down {cool}s",
+                    flush=True,
+                )
                 self._pause(cool)
 
             rows: list[tuple[Any, ...]] = []
@@ -134,7 +145,11 @@ class LiveCapture:
                         throttled += 1
                         misses = 0
                         if throttled >= _THROTTLE_ABORT_RUN:
-                            print(f"[warn] live capture throttled at {code}; aborting cycle", file=sys.stderr, flush=True)
+                            print(
+                                f"[warn] live capture throttled at {code}; aborting cycle",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                             break
                     else:
                         misses += 1
@@ -143,7 +158,9 @@ class LiveCapture:
 
             if rows:
                 with conn.cursor() as cur:
-                    cur.execute("select research.ensure_intraday_partition(%s)", (rows[0][1].date(),))
+                    cur.execute(
+                        "select research.ensure_intraday_partition(%s)", (rows[0][1].date(),)
+                    )
                     cur.executemany(
                         """insert into research.intraday_ticks (code, ts, last, volume, value)
                            values (%s, %s, %s, %s, %s) on conflict (code, ts) do nothing""",
@@ -154,5 +171,8 @@ class LiveCapture:
             self._throttle_run += 1
         else:
             self._throttle_run = 0
-        print(f"[{datetime.now(WIB).isoformat()}] live captured: {len(rows)}/{len(codes)} (untraded {misses})", flush=True)
+        print(
+            f"[{datetime.now(WIB).isoformat()}] live captured: {len(rows)}/{len(codes)} (untraded {misses})",
+            flush=True,
+        )
         return len(rows)

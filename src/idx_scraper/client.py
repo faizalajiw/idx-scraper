@@ -84,21 +84,27 @@ class IDXClient:
             code = item.get("IndexCode", "")
             if not code:
                 continue
-            results.append(IndexQuote(
-                source="IDX",
-                code=code,
-                close=_parse_float(item.get("Closing")),
-                change=_parse_float(item.get("Change")),
-                percent=_parse_pct(item.get("Percent")),
-                current=_parse_float(item.get("Current")),
-                captured_at=now,
-                metadata={"time": item.get("Time")},
-            ))
+            results.append(
+                IndexQuote(
+                    source="IDX",
+                    code=code,
+                    close=_parse_float(item.get("Closing")),
+                    change=_parse_float(item.get("Change")),
+                    percent=_parse_pct(item.get("Percent")),
+                    current=_parse_float(item.get("Current")),
+                    captured_at=now,
+                    metadata={"time": item.get("Time")},
+                )
+            )
         return results
 
-    def fetch_index_chart(self, index_code: str = "COMPOSITE", period: str = "1D") -> dict[str, Any] | None:
+    def fetch_index_chart(
+        self, index_code: str = "COMPOSITE", period: str = "1D"
+    ) -> dict[str, Any] | None:
         """Fetch intraday chart data for an index."""
-        return self._get_json(f"/primary/helper/GetIndexChart?indexCode={index_code}&period={period}")
+        return self._get_json(
+            f"/primary/helper/GetIndexChart?indexCode={index_code}&period={period}"
+        )
 
     # --- Per-emiten snapshot ---
 
@@ -143,35 +149,41 @@ class IDXClient:
             # is no ForeignNet field, so derive it in the same unit.
             fbuy = _pf(item.get("ForeignBuy"))
             fsell = _pf(item.get("ForeignSell"))
-            fnet = (fbuy - fsell) if (fbuy is not None and fsell is not None) else (fbuy if fsell is None else (None if fbuy is None else -fsell))
-            results.append(EodStockRow(
-                source="IDX",
-                date=date,
-                code=item.get("StockCode", ""),
-                name=item.get("StockName"),
-                board=item.get("BoardCode"),
-                previous=_pf(item.get("PreviousPrice")),
-                open=_pf(item.get("OpenPrice")),
-                high=_pf(item.get("High")),
-                low=_pf(item.get("Low")),
-                close=_pf(item.get("Close")),
-                change=_pf(item.get("Change")),
-                volume=_pi(item.get("Volume")),
-                value=_pf(item.get("Value")),
-                frequency=_pi(item.get("Frequency")),
-                bid=_pf(item.get("BestBidPrice")),
-                bid_volume=_pi(item.get("BestBidVolume")),
-                offer=_pf(item.get("BestOfferPrice")),
-                offer_volume=_pi(item.get("BestOfferVolume")),
-                foreign_buy=fbuy,
-                foreign_sell=fsell,
-                foreign_net=fnet,
-                individual_index=_pf(item.get("IndividualIndex")),
-                non_regular_volume=_pi(item.get("NonRegularVolume")),
-                non_regular_value=_pf(item.get("NonRegularValue")),
-                non_regular_frequency=_pi(item.get("NonRegularFrequency")),
-                captured_at=now,
-            ))
+            fnet = (
+                (fbuy - fsell)
+                if (fbuy is not None and fsell is not None)
+                else (fbuy if fsell is None else (None if fbuy is None else -fsell))
+            )
+            results.append(
+                EodStockRow(
+                    source="IDX",
+                    date=date,
+                    code=item.get("StockCode", ""),
+                    name=item.get("StockName"),
+                    board=item.get("BoardCode"),
+                    previous=_pf(item.get("PreviousPrice")),
+                    open=_pf(item.get("OpenPrice")),
+                    high=_pf(item.get("High")),
+                    low=_pf(item.get("Low")),
+                    close=_pf(item.get("Close")),
+                    change=_pf(item.get("Change")),
+                    volume=_pi(item.get("Volume")),
+                    value=_pf(item.get("Value")),
+                    frequency=_pi(item.get("Frequency")),
+                    bid=_pf(item.get("BestBidPrice")),
+                    bid_volume=_pi(item.get("BestBidVolume")),
+                    offer=_pf(item.get("BestOfferPrice")),
+                    offer_volume=_pi(item.get("BestOfferVolume")),
+                    foreign_buy=fbuy,
+                    foreign_sell=fsell,
+                    foreign_net=fnet,
+                    individual_index=_pf(item.get("IndividualIndex")),
+                    non_regular_volume=_pi(item.get("NonRegularVolume")),
+                    non_regular_value=_pf(item.get("NonRegularValue")),
+                    non_regular_frequency=_pi(item.get("NonRegularFrequency")),
+                    captured_at=now,
+                )
+            )
         return results
 
     def fetch_broker_summary(self, date: str) -> dict[str, Any] | None:
@@ -206,9 +218,7 @@ class IDXClient:
         jumlah lembar, persen, flag pengendali), ``Direktur``/``Komisaris``,
         ``Dividen``, dll. Parsing + storage ada di ``ownership_store``.
         """
-        raw = self._get_json(
-            f"/primary/ListedCompany/GetCompanyProfilesDetail?KodeEmiten={code}"
-        )
+        raw = self._get_json(f"/primary/ListedCompany/GetCompanyProfilesDetail?KodeEmiten={code}")
         return raw if isinstance(raw, dict) else None
 
     def close(self) -> None:
@@ -339,15 +349,25 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
     intr = None
     try:
         intr = yf.download(
-            tickers=" ".join(tickers), period="1d", interval="1m",
-            group_by="ticker", progress=False, threads=True, auto_adjust=False,
+            tickers=" ".join(tickers),
+            period="1d",
+            interval="1m",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            auto_adjust=False,
         )
     except Exception as e:
         print(f"[warn] yahoo intraday gagal: {e}", file=sys.stderr)
     try:
         day = yf.download(
-            tickers=" ".join(tickers), period="5d", interval="1d",
-            group_by="ticker", progress=False, threads=True, auto_adjust=False,
+            tickers=" ".join(tickers),
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            auto_adjust=False,
         )
     except Exception as e:
         print(f"[warn] yahoo daily gagal: {e}", file=sys.stderr)
@@ -364,7 +384,7 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
             return None
 
     results: list[StockQuote] = []
-    for code, tk in zip(codes, tickers):
+    for code, tk in zip(codes, tickers, strict=True):
         d = _frame(day, tk)
         if d is None:
             continue
@@ -404,22 +424,24 @@ def fetch_yahoo_quotes(codes: list[str]) -> list[StockQuote]:
             return int(v) if v is not None else None
 
         change = (last - prev) if prev is not None else None
-        results.append(StockQuote(
-            source="Yahoo",
-            code=code,
-            board=None,
-            previous=prev,
-            open=_f("Open"),
-            high=_f("High"),
-            low=_f("Low"),
-            close=last,
-            change=change,
-            volume=_i("Volume"),
-            value=None,
-            frequency=None,
-            captured_at=now,
-            metadata={"src": "yahoo", "ticker": tk},
-        ))
+        results.append(
+            StockQuote(
+                source="Yahoo",
+                code=code,
+                board=None,
+                previous=prev,
+                open=_f("Open"),
+                high=_f("High"),
+                low=_f("Low"),
+                close=last,
+                change=change,
+                volume=_i("Volume"),
+                value=None,
+                frequency=None,
+                captured_at=now,
+                metadata={"src": "yahoo", "ticker": tk},
+            )
+        )
     return results
 
 
@@ -444,16 +466,18 @@ def fetch_yahoo_indices(index_codes: list[str] | None = None) -> list[IndexQuote
         prev = float(df.iloc[-2]["Close"]) if len(df) >= 2 else None
         change = (last - prev) if prev is not None else None
         percent = (change / prev * 100) if (prev and change is not None) else None
-        results.append(IndexQuote(
-            source="Yahoo",
-            code=code.upper(),
-            close=last,
-            change=change,
-            percent=percent,
-            current=last,
-            captured_at=now,
-            metadata={"src": "yahoo", "ticker": yt},
-        ))
+        results.append(
+            IndexQuote(
+                source="Yahoo",
+                code=code.upper(),
+                close=last,
+                change=change,
+                percent=percent,
+                current=last,
+                captured_at=now,
+                metadata={"src": "yahoo", "ticker": yt},
+            )
+        )
     return results
 
 

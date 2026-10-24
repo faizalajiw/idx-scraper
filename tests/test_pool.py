@@ -79,9 +79,7 @@ def test_konsisten_tiga_dari_lima_masuk_kolam():
 
 
 def test_kolam_jatuh_ke_lantai_absolut_kalau_lintas_saham_terlalu_tipis():
-    m = _frame(
-        [{"code": f"C{i}", "date": _DATE, "value": MIN_DAY_VALUE + i} for i in range(5)]
-    )
+    m = _frame([{"code": f"C{i}", "date": _DATE, "value": MIN_DAY_VALUE + i} for i in range(5)])
     assert value_thresholds(m)[pd.Timestamp(_DATE)] == MIN_DAY_VALUE
     assert pool_members(m, _DATE) == {"C0", "C1", "C2", "C3", "C4"}
 
@@ -141,12 +139,19 @@ def test_ambang_satu_sesi_sama_dengan_yang_dihitung_lintas_sesi():
     """Satu aturan: ambang satu sesi tidak punya definisi kedua."""
     dates = _lima_sesi()
     m = _frame(
-        [{"code": f"C{i:03d}", "date": d, "value": float(i) + j} for j, d in enumerate(dates) for i in range(100)]
+        [
+            {"code": f"C{i:03d}", "date": d, "value": float(i) + j}
+            for j, d in enumerate(dates)
+            for i in range(100)
+        ]
     )
     per_sesi = value_thresholds(m)
     stamped = pd.to_datetime(m["date"])
     for d in dates:
-        assert value_threshold_for(m.loc[stamped == pd.Timestamp(d), "value"]) == per_sesi[pd.Timestamp(d)]
+        assert (
+            value_threshold_for(m.loc[stamped == pd.Timestamp(d), "value"])
+            == per_sesi[pd.Timestamp(d)]
+        )
 
 
 def test_index_kolam_sama_dengan_kolam_satu_tanggal():
@@ -168,7 +173,9 @@ def test_ambang_sesi_dihitung_sekali_untuk_banyak_tanggal(monkeypatch):
     from idx_scraper.research import pool as pool_module
 
     dates = _lima_sesi()
-    m = _frame([{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)])
+    m = _frame(
+        [{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)]
+    )
     calls: list[int] = []
     asli = pool_module.value_threshold_for
 
@@ -192,7 +199,9 @@ def test_build_records_tidak_menghitung_ambang_per_tanggal(monkeypatch):
     from idx_scraper.research.recommendation_log import build_records
 
     dates = list(pd.date_range("2026-09-25", periods=6, freq="B"))
-    m = _frame([{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)])
+    m = _frame(
+        [{"code": f"C{i:03d}", "date": d, "value": float(i)} for d in dates for i in range(60)]
+    )
     calls: list[int] = []
     asli = pool_module.value_threshold_for
 

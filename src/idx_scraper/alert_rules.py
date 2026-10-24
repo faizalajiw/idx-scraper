@@ -221,9 +221,7 @@ class RuleState:
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(
-            path or os.getenv("IDX_ALERT_STATE") or self._default_path()
-        )
+        self.path = Path(path or os.getenv("IDX_ALERT_STATE") or self._default_path())
         self._data: dict[str, bool] = {}
         self._load()
 

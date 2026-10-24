@@ -133,7 +133,7 @@ def test_candidates_for_date_ignores_unvalidated_layers():
 def test_build_records_covers_each_date():
     metrics = pd.concat(
         [
-            metrics_row( date=pd.Timestamp("2026-05-01")),
+            metrics_row(date=pd.Timestamp("2026-05-01")),
             metrics_row(date=pd.Timestamp("2026-05-04")),
         ],
         ignore_index=True,
@@ -150,28 +150,79 @@ def test_build_records_covers_each_date():
 def test_summarize_log_aggregates_by_grade_and_horizon():
     log = pd.DataFrame(
         [
-            {"code": "AAAA", "date": pd.Timestamp("2026-05-01"), "grade": "A",
-             "score": 80.0, "close": 1000.0},
-            {"code": "BBBB", "date": pd.Timestamp("2026-05-01"), "grade": "B",
-             "score": 60.0, "close": 500.0},
-            {"code": "CCCC", "date": pd.Timestamp("2026-05-04"), "grade": "C",
-             "score": 45.0, "close": 250.0},
+            {
+                "code": "AAAA",
+                "date": pd.Timestamp("2026-05-01"),
+                "grade": "A",
+                "score": 80.0,
+                "close": 1000.0,
+            },
+            {
+                "code": "BBBB",
+                "date": pd.Timestamp("2026-05-01"),
+                "grade": "B",
+                "score": 60.0,
+                "close": 500.0,
+            },
+            {
+                "code": "CCCC",
+                "date": pd.Timestamp("2026-05-04"),
+                "grade": "C",
+                "score": 45.0,
+                "close": 250.0,
+            },
         ]
     )
     outcomes = pd.DataFrame(
         [
-            {"code": "AAAA", "date": pd.Timestamp("2026-05-01"), "fwd_5": 0.04,
-             "abn_5": 0.02, "mfe_5": 0.06, "mae_5": -0.01, "fwd_10": 0.08,
-             "abn_10": 0.03, "mfe_10": 0.09, "mae_10": -0.02, "fwd_21": 0.1,
-             "abn_21": 0.04, "mfe_21": 0.12, "mae_21": -0.03},
-            {"code": "BBBB", "date": pd.Timestamp("2026-05-01"), "fwd_5": -0.02,
-             "abn_5": -0.01, "mfe_5": 0.01, "mae_5": -0.03, "fwd_10": None,
-             "abn_10": None, "mfe_10": None, "mae_10": None, "fwd_21": None,
-             "abn_21": None, "mfe_21": None, "mae_21": None},
-            {"code": "CCCC", "date": pd.Timestamp("2026-05-04"), "fwd_5": None,
-             "abn_5": None, "mfe_5": None, "mae_5": None, "fwd_10": None,
-             "abn_10": None, "mfe_10": None, "mae_10": None, "fwd_21": None,
-             "abn_21": None, "mfe_21": None, "mae_21": None},
+            {
+                "code": "AAAA",
+                "date": pd.Timestamp("2026-05-01"),
+                "fwd_5": 0.04,
+                "abn_5": 0.02,
+                "mfe_5": 0.06,
+                "mae_5": -0.01,
+                "fwd_10": 0.08,
+                "abn_10": 0.03,
+                "mfe_10": 0.09,
+                "mae_10": -0.02,
+                "fwd_21": 0.1,
+                "abn_21": 0.04,
+                "mfe_21": 0.12,
+                "mae_21": -0.03,
+            },
+            {
+                "code": "BBBB",
+                "date": pd.Timestamp("2026-05-01"),
+                "fwd_5": -0.02,
+                "abn_5": -0.01,
+                "mfe_5": 0.01,
+                "mae_5": -0.03,
+                "fwd_10": None,
+                "abn_10": None,
+                "mfe_10": None,
+                "mae_10": None,
+                "fwd_21": None,
+                "abn_21": None,
+                "mfe_21": None,
+                "mae_21": None,
+            },
+            {
+                "code": "CCCC",
+                "date": pd.Timestamp("2026-05-04"),
+                "fwd_5": None,
+                "abn_5": None,
+                "mfe_5": None,
+                "mae_5": None,
+                "fwd_10": None,
+                "abn_10": None,
+                "mfe_10": None,
+                "mae_10": None,
+                "fwd_21": None,
+                "abn_21": None,
+                "mfe_21": None,
+                "mae_21": None,
+            },
         ]
     )
     r = summarize_log(log, outcomes, horizons=(5, 10, 21), recent_limit=10)
@@ -195,7 +246,6 @@ def test_summarize_log_empty_is_safe():
     assert r["by_grade"] == []
     assert r["recent"] == []
     assert r["first_date"] is None
-
 
 
 def test_summarize_t_stat_uses_abnormal_not_raw_forward():

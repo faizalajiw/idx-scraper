@@ -290,9 +290,7 @@ def summarize_claims(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     rata_sesi = [hasil for _, hasil in sorted(per_sesi.items()) if hasil]
     mean = (
-        sum(sum(hasil) / len(hasil) for hasil in rata_sesi) / len(rata_sesi)
-        if rata_sesi
-        else None
+        sum(sum(hasil) / len(hasil) for hasil in rata_sesi) / len(rata_sesi) if rata_sesi else None
     )
 
     return {

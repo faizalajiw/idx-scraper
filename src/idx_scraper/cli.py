@@ -81,7 +81,7 @@ def fetch_and_store_indices(client: IDXClient, storage) -> int:
 
 def fetch_and_store_watchlist(client: IDXClient, storage, codes: list[str]) -> int:
     count = 0
-    for i, code in enumerate(codes):
+    for _i, code in enumerate(codes):
         q = client.fetch_trading_daily(code)
         if q is None:
             # Kemungkinan kena throttle IDX: beri jeda lebih lama lalu 1x retry.
@@ -186,11 +186,10 @@ def show_signals(storage, codes: list[str]) -> None:
         print("No signals (all HOLD)")
     print()
 
+
 def liquid_codes(client: IDXClient, top_n: int) -> list[str]:
     """Return the top-N most liquid tickers ranked by daily trading value."""
-    raw = client._get_json(
-        "/primary/TradingSummary/GetStockSummary?length=9999&start=0"
-    )
+    raw = client._get_json("/primary/TradingSummary/GetStockSummary?length=9999&start=0")
     if not raw or not isinstance(raw.get("data"), list):
         return []
 
@@ -346,10 +345,7 @@ def _job_health_eod() -> None:
         h = check_eod_health()
         if not h.ok:
             TelegramNotifier().send_message(format_health_message(h))
-            print(
-                f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — "
-                f"{', '.join(h.missing)}"
-            )
+            print(f"[{datetime.now(WIB).isoformat()}] health EOD TELAT — {', '.join(h.missing)}")
         elif h.missing:
             # Mis. `DATABASE_URL` tidak diset: bukan "telat", tapi bukan OK juga.
             bisu = _lapor_bisu("Kesegaran EOD", bisu)
@@ -502,9 +498,10 @@ def _last_session_date(dsn: str) -> str | None:
     import psycopg
     from psycopg.rows import dict_row
 
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         cur.execute("select max(trade_date) as tanggal from research.raw_eod")
         row = cur.fetchone() or {}
     tanggal = row.get("tanggal")
@@ -548,9 +545,10 @@ def _journal_gate_parts(dsn: str) -> tuple[dict, dict]:
     alasan_rezim: str | None = None
 
     try:
-        with psycopg.connect(
-            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
             kesegaran = str(freshness_current(cur).get("status") or "") or None
             try:
                 ringkas = journal_store.journal_summary(cur, rule=RULE_PAPAN)
@@ -594,9 +592,10 @@ def _journal_write(dsn: str, *, trade_date: str | None = None, cetak: bool = Tru
 
     sesi = _journal_session(dsn, trade_date)
     gerbang, konteks = _journal_gate_parts(dsn)
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         hasil = journal_store.write_session(
             dsn, cur, trade_date=sesi, gate=gerbang, konteks=konteks
         )
@@ -636,9 +635,10 @@ def _job_journal_outcomes() -> None:
 
         from .research import journal_store
 
-        with psycopg.connect(
-            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
             hitung = journal_store.fill_outcomes(cur)
         print(
             f"[{_now_wib().isoformat()}] buku klaim: diperiksa {hitung['diperiksa']} klaim "
@@ -661,9 +661,10 @@ def _job_journal_reminder() -> int:
 
         sesi = _journal_session(dsn)
         hits: list[dict] = []
-        with psycopg.connect(
-            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
             cur.execute(
                 "select code, status, outcome_abn from research.claim_journal"
                 " where touch_date = %s and status in ('kena_target','kena_stop')"
@@ -718,9 +719,10 @@ def cmd_journal(args) -> None:
         from psycopg.rows import dict_row
 
         sesi = _journal_session(dsn, getattr(args, "trade_date", None))
-        with psycopg.connect(
-            dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-        ) as conn, conn.cursor() as cur:
+        with (
+            psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+            conn.cursor() as cur,
+        ):
             if aksi == "outcomes":
                 hitung = journal_store.fill_outcomes(cur, trade_date=sesi)
                 print(
@@ -759,7 +761,8 @@ def cmd_journal(args) -> None:
             penolakan = [dict(r) for r in cur.fetchall()]
 
         print(
-            "halt: " + ("ya" if halt["halted"] else "tidak")
+            "halt: "
+            + ("ya" if halt["halted"] else "tidak")
             + (f" ({halt['reason']} · {halt['by']} {halt['at']})" if halt["halted"] else "")
         )
         if halt.get("note"):
@@ -807,8 +810,7 @@ def cmd_journal_resume(args) -> None:
 
 
 def cmd_signal_log(args) -> None:
-    """Backfill + tampilkan track record sinyal (jejak sinyal).
-    """
+    """Backfill + tampilkan track record sinyal (jejak sinyal)."""
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         print("[err] DATABASE_URL belum diisi", file=sys.stderr)
@@ -939,8 +941,7 @@ def _retry_step(label: str, step, *, percobaan: int | None = None) -> int:
         if i + 1 < percobaan:
             jeda = _EOD_RETRY_DELAYS[min(i, len(_EOD_RETRY_DELAYS) - 1)]
             print(
-                f"[warn] {label}: 0 baris — percobaan {i + 2}/{percobaan} "
-                f"dalam {jeda}s",
+                f"[warn] {label}: 0 baris — percobaan {i + 2}/{percobaan} dalam {jeda}s",
                 file=sys.stderr,
             )
             time.sleep(jeda)
@@ -989,6 +990,7 @@ def _job_eod_full(client: IDXClient, storage) -> int:
     print(f"[{datetime.now(WIB).isoformat()}] EOD full market: {count} stocks")
     return count
 
+
 def _clear_api_cache() -> None:
     """Flush the API in-process analytic cache so menus show fresh data at once.
 
@@ -1005,6 +1007,7 @@ def _clear_api_cache() -> None:
         print(f"[{datetime.now(WIB).isoformat()}] cache analitik dikosongkan")
     except Exception as e:
         print(f"[warn] gagal clear cache API: {e}", file=sys.stderr)
+
 
 # Kunci lintas-job: dua pipeline bersamaan (mis. rantai 16:10 yang molor bertemu
 # job ulang 16:30) berarti dua klien IDX berebut sumber yang sama — persis yang
@@ -1123,6 +1126,7 @@ def _ingest_eod_research(rows) -> None:
 
             def _ohl(v):  # null zeroed OHL from non-traded days
                 return v if v else None
+
             cur.execute(
                 """insert into research.raw_eod
                    (code, trade_date, open, high, low, close, prev_close,
@@ -1130,10 +1134,26 @@ def _ingest_eod_research(rows) -> None:
                     name, foreign_buy, foreign_sell, foreign_net,
                     nr_volume, nr_value, nr_freq)
                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (r.code, trade_date, _ohl(r.open), _ohl(r.high), _ohl(r.low),
-                 r.close, prev_close, r.volume, r.value, r.frequency, r.source,
-                 r.name, r.foreign_buy, r.foreign_sell, r.foreign_net,
-                 r.non_regular_volume, r.non_regular_value, r.non_regular_frequency),
+                (
+                    r.code,
+                    trade_date,
+                    _ohl(r.open),
+                    _ohl(r.high),
+                    _ohl(r.low),
+                    r.close,
+                    prev_close,
+                    r.volume,
+                    r.value,
+                    r.frequency,
+                    r.source,
+                    r.name,
+                    r.foreign_buy,
+                    r.foreign_sell,
+                    r.foreign_net,
+                    r.non_regular_volume,
+                    r.non_regular_value,
+                    r.non_regular_frequency,
+                ),
             )
             inserted += 1
 
@@ -1179,9 +1199,7 @@ def _upsert_segment_day(rows) -> None:
     by_date: dict[str, list] = {}
     for r in rows:
         try:
-            trade_date = (
-                datetime.strptime(r.date, "%Y%m%d").replace(tzinfo=WIB).date().isoformat()
-            )
+            trade_date = datetime.strptime(r.date, "%Y%m%d").replace(tzinfo=WIB).date().isoformat()
         except (TypeError, ValueError):
             continue
         by_date.setdefault(trade_date, []).append(r)
@@ -1314,8 +1332,7 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
         return (False, False)
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
-            "select 1 from research.latest_pit "
-            "where trade_date = %s limit 1",
+            "select 1 from research.latest_pit where trade_date = %s limit 1",
             (day,),
         )
         has_stocks = cur.fetchone() is not None
@@ -1330,8 +1347,7 @@ def _eod_fresh_for(day) -> tuple[bool, bool]:
         has_index = cur.fetchone() is not None
         if not has_index:
             cur.execute(
-                "select 1 from index_summary_daily "
-                "where code = 'COMPOSITE' and date = %s limit 1",
+                "select 1 from index_summary_daily where code = 'COMPOSITE' and date = %s limit 1",
                 (day,),
             )
             has_index = cur.fetchone() is not None
@@ -1464,9 +1480,7 @@ def _backfill_hari_lampau(
         # Tanpa EOD: tidak ada sesi pasar baru, yang perlu jalan hanya recompute
         # menu turunan. Lock lintas-job tetap dipakai — kalau rantai 16:10 masih
         # berjalan, recompute rantai itu sudah mencakup pekerjaan ini.
-        _job_pipeline_refresh(
-            client, storage, label=f"backfill {label}", do_eod=False
-        )
+        _job_pipeline_refresh(client, storage, label=f"backfill {label}", do_eod=False)
     return terisi
 
 
@@ -1487,9 +1501,7 @@ def _eod_catchup(
     ``indeks`` | ``lengkap``.
     """
     hasil = _eod_catchup_hari_ini(client, storage, label=label)
-    _backfill_hari_lampau(
-        client, storage, label=label, lapor_lubang_index=lapor_lubang_index
-    )
+    _backfill_hari_lampau(client, storage, label=label, lapor_lubang_index=lapor_lubang_index)
     return hasil
 
 
@@ -1560,9 +1572,7 @@ def cmd_refresh(args) -> None:
     client = IDXClient()
     storage = get_storage_from_env()
     try:
-        _job_pipeline_refresh(
-            client, storage, label="manual refresh (idx refresh)", do_eod=True
-        )
+        _job_pipeline_refresh(client, storage, label="manual refresh (idx refresh)", do_eod=True)
     finally:
         client.close()
         storage.close()
@@ -1572,7 +1582,7 @@ def cmd_seed(args) -> None:
     """Seed historical data for watchlist tickers."""
     storage = get_storage_from_env()
     tickers = _parse_watchlist(os.getenv("IDX_WATCHLIST"))
-    days = args.days if hasattr(args, 'days') and args.days else 180
+    days = args.days if hasattr(args, "days") and args.days else 180
     try:
         seed_historical_data(storage, tickers, days)
     finally:
@@ -1646,9 +1656,7 @@ def cmd_ownership(args) -> None:
     try:
         if getattr(args, "all", False):
             codes = [
-                str(s.get("Code")).upper()
-                for s in client.fetch_securities_stock()
-                if s.get("Code")
+                str(s.get("Code")).upper() for s in client.fetch_securities_stock() if s.get("Code")
             ]
         elif getattr(args, "codes", None):
             codes = [c.strip().upper() for c in args.codes.split(",") if c.strip()]
@@ -1988,6 +1996,7 @@ def _job_news_refresh() -> None:
     except Exception as e:
         print(f"[err] news job: {e}", file=sys.stderr)
 
+
 # --- penjaga satu instance ------------------------------------------------
 _SERVE_LOCK_FD: int | None = None
 
@@ -2061,6 +2070,7 @@ def cmd_serve(args) -> None:
             args=[client, storage, watchlist],
             id="wl",
         )
+
     # ------------------------------------------------------------------
     # Refresh pipeline 8 menu (Narasi/Screener/Valuasi/Hold Check/Jejak
     # Sinyal/Foreign Flow/Sentimen/Sektor) pada jadwal WIB yang diminta.
@@ -2101,8 +2111,10 @@ def cmd_serve(args) -> None:
 
     # Berita Snips 24/7 (tanpa gate jam bursa). Interval default 15 menit.
     scheduler.add_job(
-        _job_news_refresh, "interval",
-        seconds=int(os.getenv("NEWS_INTERVAL", "900")), id="news_refresh",
+        _job_news_refresh,
+        "interval",
+        seconds=int(os.getenv("NEWS_INTERVAL", "900")),
+        id="news_refresh",
     )
 
     # Pra-pembukaan Sen-Jum 08:50 - recompute + clear cache (belum ada EOD baru).
@@ -2112,21 +2124,33 @@ def cmd_serve(args) -> None:
     # (besok) dan recompute pra-buka hilang sehari tanpa alarm apa pun.
     scheduler.add_job(
         **_refresh("pra-buka Sen-Jum 08:50", do_eod=False),
-        day_of_week="mon-fri", hour=8, minute=50, id="refresh_preopen",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=50,
+        id="refresh_preopen",
     )
     # Close Sesi I: Sen-Kam 12:00, Jum 11:30 — tarik EOD + recompute.
     scheduler.add_job(
         **_refresh("close Sesi I Sen-Kam 12:00", do_eod=True),
-        day_of_week="mon-thu", hour=12, minute=0, id="refresh_s1",
+        day_of_week="mon-thu",
+        hour=12,
+        minute=0,
+        id="refresh_s1",
     )
     scheduler.add_job(
         **_refresh("close Sesi I Jum 11:30", do_eod=True),
-        day_of_week="fri", hour=11, minute=30, id="refresh_s1_fri",
+        day_of_week="fri",
+        hour=11,
+        minute=30,
+        id="refresh_s1_fri",
     )
     # Close Sesi II Sen-Jum 16:10 — offset 10 menit supaya Yahoo daily bar final.
     scheduler.add_job(
         **_refresh("close Sesi II Sen-Jum 16:10", do_eod=True),
-        day_of_week="mon-fri", hour=16, minute=10, id="refresh_s2",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=10,
+        id="refresh_s2",
     )
     # Jaring kedua EOD — Sen-Jum, tiap jam 16:30-20:30 WIB, DI DALAM serve.
     # 15 Okt 2026 task Windows `IDX-EOD` dihapus supaya penjadwalan sore hanya ada
@@ -2142,9 +2166,15 @@ def cmd_serve(args) -> None:
     # 20 menit setelah 16:10 = rantai terpanjang (~16:22 dengan retry) sudah
     # selesai; kalau toh belum, kunci `_PIPELINE_BUSY` mencegah tabrakan.
     scheduler.add_job(
-        _job_eod_fallback, "cron", day_of_week="mon-fri", hour="16-20", minute=30,
-        args=[client, storage], id="eod_fallback",
-        misfire_grace_time=7200, coalesce=True,
+        _job_eod_fallback,
+        "cron",
+        day_of_week="mon-fri",
+        hour="16-20",
+        minute=30,
+        args=[client, storage],
+        id="eod_fallback",
+        misfire_grace_time=7200,
+        coalesce=True,
     )
     # Health-check EOD — Sen-Jum 17:45 WIB. SENGAJA setelah eod_fallback (17:30):
     # alarm harus menilai hasil jaring kedua, bukan hasil percobaan pertama.
@@ -2161,17 +2191,29 @@ def cmd_serve(args) -> None:
     # dibuang begitu saja — padahal ceknya masih relevan begitu mesin bangun
     # (mis. 18:30, sebelum jendela tutup).
     scheduler.add_job(
-        _job_health_eod, "cron", day_of_week="mon-fri", hour=17, minute=45,
-        id="health_eod", misfire_grace_time=7200, coalesce=True,
+        _job_health_eod,
+        "cron",
+        day_of_week="mon-fri",
+        hour=17,
+        minute=45,
+        id="health_eod",
+        misfire_grace_time=7200,
+        coalesce=True,
     )
     # Akhir pekan Sab-Min 08:45 & 16:00 — recompute + clear cache (pasar tutup).
     scheduler.add_job(
         **_refresh("akhir pekan 08:45", do_eod=False),
-        day_of_week="sat,sun", hour=8, minute=45, id="refresh_weekend_am",
+        day_of_week="sat,sun",
+        hour=8,
+        minute=45,
+        id="refresh_weekend_am",
     )
     scheduler.add_job(
         **_refresh("akhir pekan 16:00", do_eod=False),
-        day_of_week="sat,sun", hour=16, minute=0, id="refresh_weekend_pm",
+        day_of_week="sat,sun",
+        hour=16,
+        minute=0,
+        id="refresh_weekend_pm",
     )
     # IC analysis HARIAN — 16:50 WIB, di ujung urutan sore. Sebelumnya bulanan
     # (tanggal 1); karena panel flow baru bertambah tiap hari dan gate IC tinggal
@@ -2180,7 +2222,11 @@ def cmd_serve(args) -> None:
     # Murni DB, tapi tetap ditaruh setelah rantai EOD supaya sore hari tidak ada
     # dua job yang hidup bersamaan sama sekali.
     scheduler.add_job(
-        _job_monthly_ic, "cron", day_of_week="mon-fri", hour=16, minute=50,
+        _job_monthly_ic,
+        "cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=50,
         id="daily_ic",
     )
     # Buku klaim (P6) — ditulis SESUDAH sinyal/IC selesai dan SEBELUM hasilnya
@@ -2192,16 +2238,28 @@ def cmd_serve(args) -> None:
     # 17:30, jadi tulisan 17:05 selalu menganggap sesi kemarin — lalu pengingat
     # 17:50 menemukan sesi hari ini bisu dan mengirim alarm palsu tiap hari bursa.
     scheduler.add_job(
-        _job_journal_claims, "cron", day_of_week="mon-fri", hour="17-21", minute=55,
-        id="journal_claims", misfire_grace_time=7200, coalesce=True,
+        _job_journal_claims,
+        "cron",
+        day_of_week="mon-fri",
+        hour="17-21",
+        minute=55,
+        id="journal_claims",
+        misfire_grace_time=7200,
+        coalesce=True,
     )
     # Isi hasil 18:10: mengukur klaim yang horizonnya sudah berjalan. Perpindahan
     # status tidak pernah dibatalkan, jadi job ini boleh jalan berkali-kali.
     # Menit :55, :10, dan :20 — tiap :30 ditempati `eod_fallback` dan :45 alarm
     # EOD; dua job cron di menit yang sama adalah pola yang dilarang di jadwal ini.
     scheduler.add_job(
-        _job_journal_outcomes, "cron", day_of_week="mon-fri", hour=18, minute=10,
-        id="journal_outcomes", misfire_grace_time=7200, coalesce=True,
+        _job_journal_outcomes,
+        "cron",
+        day_of_week="mon-fri",
+        hour=18,
+        minute=10,
+        id="journal_outcomes",
+        misfire_grace_time=7200,
+        coalesce=True,
     )
     # Pengingat 19:20: klaim yang levelnya tersentuh, ATAU alarm kalau sesi ini
     # tidak melahirkan klaim DAN tidak mencatat penolakan apa pun (job yang gagal
@@ -2209,8 +2267,14 @@ def cmd_serve(args) -> None:
     # tulis (17:55 dan 18:55), bukan setelah satu: sesi yang datanya baru masuk
     # sore tetap sempat direkam sebelum pengingat ini memvonisnya "bisu".
     scheduler.add_job(
-        _job_journal_reminder, "cron", day_of_week="mon-fri", hour=19, minute=20,
-        id="journal_reminder", misfire_grace_time=7200, coalesce=True,
+        _job_journal_reminder,
+        "cron",
+        day_of_week="mon-fri",
+        hour=19,
+        minute=20,
+        id="journal_reminder",
+        misfire_grace_time=7200,
+        coalesce=True,
     )
     # Snapshot pemegang saham — Senin 17:00 WIB. Job ini membuka klien IDX
     # sendiri, jadi jaraknya ke refresh_s2 (16:10) dijaga lebar: kalau IDX
@@ -2221,9 +2285,12 @@ def cmd_serve(args) -> None:
     # Interval 1 minggu dengan start_date Senin berikutnya; dengan begitu tetap
     # ada satu run saat boot tanpa menunggu cron harian.
     scheduler.add_job(
-        _job_ownership, "interval", weeks=1,
+        _job_ownership,
+        "interval",
+        weeks=1,
         start_date=_next_weekday_at(0, 17, 0),
-        id="ownership_weekly", replace_existing=True,
+        id="ownership_weekly",
+        replace_existing=True,
     )
     # Live per-emiten capture — GetStockSummary whole-market is EOD-only, so the
     # live feed is polled one code at a time. Runs as a rolling background sweep
@@ -2238,9 +2305,7 @@ def cmd_serve(args) -> None:
     )
     if live_top > 0:
         live_capture.start()
-        print(
-            f"live capture — {live_top} liquid + 20 movers, {live_delay_ms}ms/req, rolling sweep"
-        )
+        print(f"live capture — {live_top} liquid + 20 movers, {live_delay_ms}ms/req, rolling sweep")
     else:
         print("live capture OFF (IDX_LIVE_TOP=0)")
 
@@ -2260,19 +2325,28 @@ def cmd_serve(args) -> None:
 
     print(f"serving — index every {idx_interval}s, watchlist every {wl_interval}s")
     print(f"watchlist: {watchlist[:10]}...")
-    print(f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
-          f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)")
-    print("refresh pipeline 8 menu - Sen-Jum 08:50, Sen-Kam 12:00 / Jum 11:30, "
-          "Sen-Jum 16:10; akhir pekan 08:45 & 16:00 (recompute+clear cache)")
-    print("jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
-          "kalau EOD hari ini sudah lengkap); "
-          "health EOD 17:45; IC 16:50; ownership Senin 17:00")
-    print("buku klaim lapis 4 — tulis 17:55 lalu tiap jam sampai 21:55 (idempoten), "
-          "isi hasil 18:10, pengingat 19:20; gerbang penahan punya sebab sendiri")
-    print(f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
-          "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
-          "tidak bisa ditarik otomatis");
-
+    print(
+        f"live source: {current_source()} (auto-switch ke IDX saat probe 200; "
+        f"probe tiap {int(os.getenv('IDX_PROBE_INTERVAL', '900'))}s)"
+    )
+    print(
+        "refresh pipeline 8 menu - Sen-Jum 08:50, Sen-Kam 12:00 / Jum 11:30, "
+        "Sen-Jum 16:10; akhir pekan 08:45 & 16:00 (recompute+clear cache)"
+    )
+    print(
+        "jaring EOD sore — 16:30, diulang tiap jam sampai 20:30 (keluar cepat "
+        "kalau EOD hari ini sudah lengkap); "
+        "health EOD 17:45; IC 16:50; ownership Senin 17:00"
+    )
+    print(
+        "buku klaim lapis 4 — tulis 17:55 lalu tiap jam sampai 21:55 (idempoten), "
+        "isi hasil 18:10, pengingat 19:20; gerbang penahan punya sebab sendiri"
+    )
+    print(
+        f"catchup EOD — hari ini (startup + jaring sore) dan {_BACKFILL_HARI} hari "
+        "bursa terakhir yang bolong (IDX_BACKFILL_DAYS); close indeks lampau "
+        "tidak bisa ditarik otomatis"
+    )
     # --- Startup catchup: if today's EOD data is missing, run it now -------
     # Prevents missed refreshes when scheduler restarts after the cron window.
     # Logika yang sama dipakai job `eod_fallback` (16:30) lewat `_eod_catchup`,
@@ -2322,23 +2396,53 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     p_snap = sub.add_parser("snapshot", help="one-off fetch index + watchlist")
-    p_snap.add_argument("--top", type=int, metavar="N",
-                        help="scan N most liquid tickers instead of .env watchlist (e.g. --top 200)")
+    p_snap.add_argument(
+        "--top",
+        type=int,
+        metavar="N",
+        help="scan N most liquid tickers instead of .env watchlist (e.g. --top 200)",
+    )
     p_eod = sub.add_parser("eod", help="fetch entire market EOD data (optional: specify YYYYMMDD)")
     p_eod.add_argument("date", nargs="?", help="YYYYMMDD (optional, defaults to today)")
     p_seed = sub.add_parser("seed", help="seed historical data (yfinance) for watchlist tickers")
-    p_seed.add_argument("--days", type=int, default=180, help="number of days of historical data (default: 180)")
+    p_seed.add_argument(
+        "--days", type=int, default=180, help="number of days of historical data (default: 180)"
+    )
     sub.add_parser("signals", help="show buy/sell signals from stored EOD data")
-    p_alerts = sub.add_parser("alerts", help="kirim alert Telegram utk sinyal BUY/SELL yang berubah")
-    p_alerts.add_argument("--test", action="store_true", help="test koneksi bot (getMe) lalu keluar")
-    p_ic = sub.add_parser("ic", help="run IC analysis + simpan bobot faktor ke research.factor_ic_history")
-    p_ic.add_argument("--k", type=int, nargs="+", default=[5, 10], help="horizon hari bursa (default: 5 10)")
+    p_alerts = sub.add_parser(
+        "alerts", help="kirim alert Telegram utk sinyal BUY/SELL yang berubah"
+    )
+    p_alerts.add_argument(
+        "--test", action="store_true", help="test koneksi bot (getMe) lalu keluar"
+    )
+    p_ic = sub.add_parser(
+        "ic", help="run IC analysis + simpan bobot faktor ke research.factor_ic_history"
+    )
+    p_ic.add_argument(
+        "--k", type=int, nargs="+", default=[5, 10], help="horizon hari bursa (default: 5 10)"
+    )
     p_slog = sub.add_parser("signal-log", help="backfill + tampilkan track record sinyal BUY/SELL")
-    p_slog.add_argument("--months", type=int, default=18, help="panjang histori (default: 18 bulan)")
-    p_slog.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
-    p_rec = sub.add_parser("recommendations", help="backfill + tampilkan track record kandidat beli")
+    p_slog.add_argument(
+        "--months", type=int, default=18, help="panjang histori (default: 18 bulan)"
+    )
+    p_slog.add_argument(
+        "--k",
+        type=int,
+        nargs="+",
+        default=[5, 10, 21],
+        help="horizon hari bursa (default: 5 10 21)",
+    )
+    p_rec = sub.add_parser(
+        "recommendations", help="backfill + tampilkan track record kandidat beli"
+    )
     p_rec.add_argument("--months", type=int, default=6, help="panjang histori (default: 6 bulan)")
-    p_rec.add_argument("--k", type=int, nargs="+", default=[5, 10, 21], help="horizon hari bursa (default: 5 10 21)")
+    p_rec.add_argument(
+        "--k",
+        type=int,
+        nargs="+",
+        default=[5, 10, 21],
+        help="horizon hari bursa (default: 5 10 21)",
+    )
     sub.add_parser("watchlist", help="fetch watchlist tickers (default: from .env)")
     p_ts = sub.add_parser(
         "trade-summary",
@@ -2352,7 +2456,9 @@ def main() -> None:
     )
     p_own = sub.add_parser("ownership", help="snapshot komposisi pemegang saham (aksi pemilik)")
     p_own.add_argument("--codes", help="daftar kode dipisah koma (default: watchlist .env)")
-    p_own.add_argument("--all", action="store_true", help="semua emiten tercatat (berat, ±950 request)")
+    p_own.add_argument(
+        "--all", action="store_true", help="semua emiten tercatat (berat, ±950 request)"
+    )
     p_own.add_argument("--date", help="tanggal snapshot ISO YYYY-MM-DD (default: hari ini)")
     sub.add_parser(
         "health",
@@ -2370,8 +2476,12 @@ def main() -> None:
         help="lewati bila EOD saham + close indeks hari ini sudah ada",
     )
     p_source = sub.add_parser("source", help="show / set live data source (YAHOO|IDX)")
-    p_source.add_argument("set", nargs="?", choices=["YAHOO", "IDX", "yahoo", "idx"],
-                          help="force source (optional; omit to just show state)")
+    p_source.add_argument(
+        "set",
+        nargs="?",
+        choices=["YAHOO", "IDX", "yahoo", "idx"],
+        help="force source (optional; omit to just show state)",
+    )
 
     from .research.journal import RULE_PAPAN
 
@@ -2386,9 +2496,7 @@ def main() -> None:
     j_sum = jsub.add_parser("summary", help="ringkasan buku + kalimat rekaman aturan")
     j_sum.add_argument("--rule", default=RULE_PAPAN, help=f"aturan (default: {RULE_PAPAN})")
     j_sum.add_argument("--code", help="batasi ke satu emiten")
-    jsub.add_parser(
-        "state", help="keadaan gerbang: halt, verdict, penolakan terakhir, sesi bisu"
-    )
+    jsub.add_parser("state", help="keadaan gerbang: halt, verdict, penolakan terakhir, sesi bisu")
     j_halt = jsub.add_parser("halt", help="hentikan penulisan klaim baru (wajib --reason)")
     j_halt.add_argument("--reason", help="sebab halt; tercatat di berkas halt")
     j_halt.add_argument("--by", default="pemilik", help="pelaku (default: pemilik)")
@@ -2436,6 +2544,7 @@ def main() -> None:
         cmd_refresh(args)
     elif args.command == "source":
         from .source_state import force_source, get_state
+
         if getattr(args, "set", None):
             force_source(args.set)
             print(f"source di-set ke: {args.set.upper()}")
@@ -2443,6 +2552,7 @@ def main() -> None:
         print(f"source={st.source} probe_count={st.probe_count} idx_ok_count={st.idx_ok_count}")
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

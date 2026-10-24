@@ -71,7 +71,7 @@ def test_event_detection_no_lookahead():
     closes = [100.0] * 30 + [105.0] + [110.0, 90.0]
     vols = [1_000_000] * 30 + [3_000_000] * 3
     panel_a = make_panel({"AAA": closes}, {"AAA": vols})
-    panel_b = make_panel({"AAA": closes[:-2] + [500.0, 500.0]}, {"AAA": vols})
+    panel_b = make_panel({"AAA": [*closes[:-2], 500.0, 500.0]}, {"AAA": vols})
     ev_a = detect_events(panel_a, "jump_up", min_gap=1)
     ev_b = detect_events(panel_b, "jump_up", min_gap=1)
     pd.testing.assert_frame_equal(ev_a, ev_b)

@@ -7,6 +7,9 @@ env/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Secrets & data
 .env

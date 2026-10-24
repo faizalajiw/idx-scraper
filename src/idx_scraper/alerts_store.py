@@ -49,9 +49,7 @@ def write_rules(rules: list[dict[str, Any]], path: Path | None = None) -> list[d
     p = path or _default_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(
-        json.dumps(rules, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    tmp.write_text(json.dumps(rules, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(p)
     return rules
 
@@ -66,8 +64,7 @@ def add_rule(rule: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
     stored = {
         **rule,
         "id": rule.get("id") or new_rule_id(),
-        "created_at": rule.get("created_at")
-        or datetime.now(WIB).isoformat(timespec="seconds"),
+        "created_at": rule.get("created_at") or datetime.now(WIB).isoformat(timespec="seconds"),
     }
     rules.append(stored)
     write_rules(rules, path)

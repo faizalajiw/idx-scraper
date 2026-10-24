@@ -68,9 +68,7 @@ update research.raw_eod
  where code=%s and trade_date=%s and foreign_net is null
 """
 
-_HITUNG_NULL = (
-    "select count(*) from research.raw_eod where trade_date=%s and foreign_net is null"
-)
+_HITUNG_NULL = "select count(*) from research.raw_eod where trade_date=%s and foreign_net is null"
 
 
 def baris_perlu_tambal(rows, tanggal: date) -> list[tuple]:
@@ -115,8 +113,10 @@ def tambal(
             total_sebelum += sebelum
             if sebelum == 0:
                 # Sudah bersih: jangan buang request ke IDX (Step 5 tetap cetak 0/0).
-                print(f"  {i}/{len(days)} {d} -> terisi 0/0 (tak ada kolom NULL; 0 request)",
-                      flush=True)
+                print(
+                    f"  {i}/{len(days)} {d} -> terisi 0/0 (tak ada kolom NULL; 0 request)",
+                    flush=True,
+                )
                 continue
 
             rows, status = ambil_hari(client, d.strftime("%Y%m%d"))
@@ -136,8 +136,9 @@ def tambal(
             sesudah = conn.execute(_HITUNG_NULL, (d,)).fetchone()[0]
             terisi = sebelum - sesudah
             total_terisi += terisi
-            print(f"  {i}/{len(days)} {d} -> terisi {terisi}/{sebelum} (status {status})",
-                  flush=True)
+            print(
+                f"  {i}/{len(days)} {d} -> terisi {terisi}/{sebelum} (status {status})", flush=True
+            )
 
             time.sleep(pace)
 
@@ -151,7 +152,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--start-date", type=date.fromisoformat, required=True, help="YYYY-MM-DD")
     ap.add_argument("--end-date", type=date.fromisoformat, required=True, help="YYYY-MM-DD")
-    ap.add_argument("--pace", type=float, default=SLEEP_SECONDS, help="jeda antar request IDX (detik)")
+    ap.add_argument(
+        "--pace", type=float, default=SLEEP_SECONDS, help="jeda antar request IDX (detik)"
+    )
     ap.add_argument("--limit", type=int, default=0, help="proses N sesi pertama saja (uji cepat)")
     args = ap.parse_args()
 

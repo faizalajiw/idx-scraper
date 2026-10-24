@@ -224,9 +224,7 @@ def test_laporan_lubang_index_hanya_kalau_diminta(monkeypatch, beku, jalur, caps
     monkeypatch.setenv("IDX_HOLIDAYS", "")
     monkeypatch.setattr(cli, "_eod_fresh_for", lambda day: (True, False))
 
-    cli._backfill_hari_lampau(
-        object(), object(), label="startup", lapor_lubang_index=True
-    )
+    cli._backfill_hari_lampau(object(), object(), label="startup", lapor_lubang_index=True)
     out = capsys.readouterr().out
     assert "tanpa close indeks resmi" in out
     assert "2026-10-15" in out
@@ -256,9 +254,7 @@ def test_jaring_sore_ikut_menutup_lubang_kemarin(monkeypatch, beku, jalur):
 def test_startup_menyalakan_laporan(monkeypatch):
     """Jalur startup meminta laporan lubang indeks, jalur sore tidak."""
     dipanggil: dict = {}
-    monkeypatch.setattr(
-        cli, "_eod_catchup_hari_ini", lambda c, s, *, label: "lengkap"
-    )
+    monkeypatch.setattr(cli, "_eod_catchup_hari_ini", lambda c, s, *, label: "lengkap")
 
     def backfill(client, storage, *, label, lapor_lubang_index=False):
         dipanggil["lapor"] = lapor_lubang_index
@@ -275,12 +271,8 @@ def test_startup_menyalakan_laporan(monkeypatch):
 def test_cmd_eod_dan_job_full_memakai_jalur_yang_sama(monkeypatch):
     """Manual, close harian, dan backfill menulis lewat ``_simpan_eod_hari``."""
     dicatat: list = []
-    monkeypatch.setattr(
-        cli, "_simpan_eod_hari", lambda c, s, day: dicatat.append(day) or 963
-    )
-    monkeypatch.setattr(
-        cli, "IDXClient", lambda: type("C", (), {"close": lambda self: None})()
-    )
+    monkeypatch.setattr(cli, "_simpan_eod_hari", lambda c, s, day: dicatat.append(day) or 963)
+    monkeypatch.setattr(cli, "IDXClient", lambda: type("C", (), {"close": lambda self: None})())
     monkeypatch.setattr(
         cli,
         "get_storage_from_env",

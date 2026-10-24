@@ -258,8 +258,7 @@ def test_buku_klaim_sesudah_jendela_terbit(jobs):
     assert tulis > tenggat
     assert hasil > tulis
     slot_tulis = sorted(
-        jam * 60 + cron["journal_claims"][2]
-        for jam in _jam_aktif(cron["journal_claims"][1])
+        jam * 60 + cron["journal_claims"][2] for jam in _jam_aktif(cron["journal_claims"][1])
     )
     assert len([s for s in slot_tulis if s < ingat]) >= 2
 

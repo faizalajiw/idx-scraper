@@ -101,9 +101,7 @@ def test_verdict_neutral_small_flow():
 def test_verdict_insufficient_when_thin():
     # Hanya 4 hari ber-net dari 10 -> tidak boleh verdict (anti data tipis),
     # walau angka agregatnya "boleh-boleh saja".
-    rows = [
-        _row(d, None) for d in _dates(6)
-    ] + [
+    rows = [_row(d, None) for d in _dates(6)] + [
         _row(d, 500.0) for d in _dates(4, start="2026-09-07")
     ]
     v = verdict(rows)
@@ -160,9 +158,7 @@ def test_verdict_ignores_nan_and_unsorted():
 def test_verdict_window_only_uses_last_n_days():
     # 12 sesi: 2 pertama net BUY besar, 10 terakhir net SELL bermakna.
     # Verdict harus mengikuti 10 sesi terakhir (distribusi), bukan sejarah.
-    rows = [
-        _row(d, 500.0) for d in _dates(2)
-    ] + [
+    rows = [_row(d, 500.0) for d in _dates(2)] + [
         _row(d, -100.0) for d in _dates(10, start="2026-09-03")
     ]
     v = verdict(rows)
@@ -259,8 +255,7 @@ def test_pattern_initiation_blocked_on_panic_dump():
     # Turunkan close 4 hari terakhir ~5% (range tetap < 10%).
     for i in range(8, 12):
         rows[i] = _row(_dates(12)[i], net=100.0, close=95.0, low=94.5, high=95.5)
-    rows[-1] = _row(_dates(12)[-1], net=100.0, close=95.0, low=94.5, high=95.5,
-                    volume=5_000_000.0)
+    rows[-1] = _row(_dates(12)[-1], net=100.0, close=95.0, low=94.5, high=95.5, volume=5_000_000.0)
     assert "initiation" not in _pids(detect_patterns(rows))
 
 
@@ -306,9 +301,7 @@ def test_consolidation_range_bounds():
 
 
 def test_consolidation_range_too_short_returns_none():
-    rows = [
-        _row(d, 0.0, close=100.0, high=101.0, low=99.0) for d in _dates(4)
-    ]
+    rows = [_row(d, 0.0, close=100.0, high=101.0, low=99.0) for d in _dates(4)]
     assert consolidation_range(rows) is None
 
 
@@ -317,13 +310,17 @@ def test_consolidation_range_ignores_rows_without_price():
     from idx_scraper.smart_money import _clean_rows
 
     rows = [
-        {"date": d, "net_idr": 0.0, "value": 1000.0, "close": 100.0,
-         "high": None, "low": None, "volume": 1e6}
+        {
+            "date": d,
+            "net_idr": 0.0,
+            "value": 1000.0,
+            "close": 100.0,
+            "high": None,
+            "low": None,
+            "volume": 1e6,
+        }
         for d in _dates(6)
-    ] + [
-        _row(d, 0.0, close=100.0, high=105.0, low=95.0)
-        for d in _dates(5, "2026-09-07")
-    ]
+    ] + [_row(d, 0.0, close=100.0, high=105.0, low=95.0) for d in _dates(5, "2026-09-07")]
     rng = consolidation_range(rows)
     assert rng is not None
     assert rng["lookback"] == 5
@@ -340,19 +337,55 @@ def test_track_record_hit_rate_and_stats():
     occ = [
         # 5 kejadian silent_accumulation (n>=5 supaya tstat terhitung —
         # konvensi sama dengan events._nw_tstat); fwd5: 4 naik 1 turun.
-        {"code": "A", "date": "2026-01-01", "pattern": "silent_accumulation",
-         "fwd5": 2.0, "fwd10": None, "fwd21": None},
-        {"code": "B", "date": "2026-01-05", "pattern": "silent_accumulation",
-         "fwd5": 5.0, "fwd10": 1.0, "fwd21": None},
-        {"code": "C", "date": "2026-01-08", "pattern": "silent_accumulation",
-         "fwd5": -1.0, "fwd10": -2.0, "fwd21": 0.5},
-        {"code": "D", "date": "2026-01-12", "pattern": "silent_accumulation",
-         "fwd5": 3.0, "fwd10": None, "fwd21": None},
-        {"code": "F", "date": "2026-01-16", "pattern": "silent_accumulation",
-         "fwd5": 1.0, "fwd10": 0.5, "fwd21": -0.5},
+        {
+            "code": "A",
+            "date": "2026-01-01",
+            "pattern": "silent_accumulation",
+            "fwd5": 2.0,
+            "fwd10": None,
+            "fwd21": None,
+        },
+        {
+            "code": "B",
+            "date": "2026-01-05",
+            "pattern": "silent_accumulation",
+            "fwd5": 5.0,
+            "fwd10": 1.0,
+            "fwd21": None,
+        },
+        {
+            "code": "C",
+            "date": "2026-01-08",
+            "pattern": "silent_accumulation",
+            "fwd5": -1.0,
+            "fwd10": -2.0,
+            "fwd21": 0.5,
+        },
+        {
+            "code": "D",
+            "date": "2026-01-12",
+            "pattern": "silent_accumulation",
+            "fwd5": 3.0,
+            "fwd10": None,
+            "fwd21": None,
+        },
+        {
+            "code": "F",
+            "date": "2026-01-16",
+            "pattern": "silent_accumulation",
+            "fwd5": 1.0,
+            "fwd10": 0.5,
+            "fwd21": -0.5,
+        },
         # Pola lain -> tidak tercampur.
-        {"code": "E", "date": "2026-01-15", "pattern": "initiation",
-         "fwd5": 10.0, "fwd10": None, "fwd21": None},
+        {
+            "code": "E",
+            "date": "2026-01-15",
+            "pattern": "initiation",
+            "fwd5": 10.0,
+            "fwd10": None,
+            "fwd21": None,
+        },
     ]
     tr = pattern_track_record(occ)
     sa = next(t for t in tr if t["pattern"] == "silent_accumulation")
@@ -374,16 +407,20 @@ def test_track_record_hit_rate_and_stats():
 
 def test_track_record_empty_and_unknown_pattern():
     assert pattern_track_record([]) == []
-    tr = pattern_track_record([
-        {"pattern": "pola_gaib", "fwd5": 1.0, "fwd10": None, "fwd21": None},
-    ])
+    tr = pattern_track_record(
+        [
+            {"pattern": "pola_gaib", "fwd5": 1.0, "fwd10": None, "fwd21": None},
+        ]
+    )
     assert tr == []
 
 
 def test_track_record_none_horizons_are_safe():
-    tr = pattern_track_record([
-        {"pattern": "initiation", "fwd5": None, "fwd10": None, "fwd21": None},
-    ])
+    tr = pattern_track_record(
+        [
+            {"pattern": "initiation", "fwd5": None, "fwd10": None, "fwd21": None},
+        ]
+    )
     assert len(tr) == 1
     assert tr[0]["horizons"]["fwd5"]["n"] == 0
     assert tr[0]["horizons"]["fwd5"]["hit_rate"] is None
@@ -394,17 +431,13 @@ def test_track_record_direction_aware_interpretation():
     # Pola sell-side: aligned = 1 - hit_rate (pola "berfungsi" bila harga turun),
     # dan effective_alpha dibalik tanda.
     buy = [
-        {"code": "A", "date": "d1", "pattern": "silent_accumulation",
-         "fwd5": 2.0, "abn5": 1.0},
-        {"code": "B", "date": "d2", "pattern": "silent_accumulation",
-         "fwd5": -1.0, "abn5": -0.5},
+        {"code": "A", "date": "d1", "pattern": "silent_accumulation", "fwd5": 2.0, "abn5": 1.0},
+        {"code": "B", "date": "d2", "pattern": "silent_accumulation", "fwd5": -1.0, "abn5": -0.5},
     ]
     sell = [
         # Harga TURUN setelah distribusi -> pola sell-side "berfungsi".
-        {"code": "C", "date": "d1", "pattern": "silent_distribution",
-         "fwd5": -2.0, "abn5": -1.0},
-        {"code": "D", "date": "d2", "pattern": "silent_distribution",
-         "fwd5": -1.0, "abn5": -0.5},
+        {"code": "C", "date": "d1", "pattern": "silent_distribution", "fwd5": -2.0, "abn5": -1.0},
+        {"code": "D", "date": "d2", "pattern": "silent_distribution", "fwd5": -1.0, "abn5": -0.5},
     ]
     tr = pattern_track_record(buy + sell)
     b = next(t for t in tr if t["pattern"] == "silent_accumulation")
@@ -426,9 +459,11 @@ def test_track_record_direction_aware_interpretation():
 
 def test_track_record_alpha_none_when_absent():
     # Tanpa field abn -> alpha & effective_alpha None, tak error.
-    tr = pattern_track_record([
-        {"pattern": "initiation", "fwd5": 1.0, "fwd10": None, "fwd21": None},
-    ])
+    tr = pattern_track_record(
+        [
+            {"pattern": "initiation", "fwd5": 1.0, "fwd10": None, "fwd21": None},
+        ]
+    )
     h5 = tr[0]["horizons"]["fwd5"]
     assert h5["alpha"] is None
     assert h5["effective_alpha"] is None
@@ -516,11 +551,8 @@ def test_radar_excludes_neutral_insufficient_and_illiquid():
     }
     thin = {  # 2 hari bernilai dari 10 -> insufficient utk jendela 10
         "code": "THIN",
-        "rows": [
-            _row(d, None) for d in _dates(8)
-        ] + [
-            _row(d, 1.0e11, value=1.0e11) for d in _dates(2, start="2026-09-09")
-        ],
+        "rows": [_row(d, None) for d in _dates(8)]
+        + [_row(d, 1.0e11, value=1.0e11) for d in _dates(2, start="2026-09-09")],
     }
     illiquid = {  # netval 7,5% (akumulasi) tapi nilai transaksi cuma 20 M/hari
         "code": "ILLQ",
@@ -530,9 +562,7 @@ def test_radar_excludes_neutral_insufficient_and_illiquid():
         "code": "GOOD",
         "rows": _flat_rows(10, net=1.0e10, value=1.0e11),
     }
-    radar = build_radar(
-        {"NEUT": neutral, "THIN": thin, "ILLQ": illiquid, "GOOD": good}
-    )
+    radar = build_radar({"NEUT": neutral, "THIN": thin, "ILLQ": illiquid, "GOOD": good})
     assert [r["code"] for r in radar] == ["GOOD"]
 
 
@@ -618,7 +648,7 @@ def test_episodes_distribution_on_rally():
     base = 100.0
     for i, d in enumerate(_dates(25)):
         # tumbuh +1.5% per sesi -> +16.5% dalam 10 sesi (>= 8%)
-        close = base * (1.015 ** i)
+        close = base * (1.015**i)
         rows.append(_row(d, net=-100.0, value=1000.0, close=close))
     eps = collect_pattern_episodes({"RLY": {"rows": rows}})
     pats = {e["pattern"] for e in eps}
@@ -1132,6 +1162,9 @@ def test_patterns_board_empty_and_missing_rows_are_safe():
     assert b["date"] is None
     assert patterns_board({"X": {"name": "X", "rows": []}}, [])["groups"] == []
     # panel ber-baris tapi tak ada pola -> tidak ada kelompok
-    assert patterns_board({"Y": {"name": "Y", "rows": _flat_rows(20, net=10.0, value=1000.0)}}, [])[
-        "groups"
-    ] == []
+    assert (
+        patterns_board({"Y": {"name": "Y", "rows": _flat_rows(20, net=10.0, value=1000.0)}}, [])[
+            "groups"
+        ]
+        == []
+    )

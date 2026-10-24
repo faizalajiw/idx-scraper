@@ -89,6 +89,6 @@ def test_generate_signal_sell_in_downtrend():
 
 def test_generate_signal_hold_in_fresh_reversal():
     # Downtrend for 55 days then sharp bounce: SMA20 still below SMA50 but RSI very high
-    closes = list(np.linspace(120, 100, 55)) + [110, 115, 120, 125, 130]
+    closes = [*list(np.linspace(120, 100, 55)), 110, 115, 120, 125, 130]
     df = calculate_indicators(make_df(closes))
     assert generate_signal(df) == "HOLD"

@@ -34,8 +34,15 @@ jobs:
           ruff --version
           ruff check src tests scripts
 
-      - name: Tests (pytest)
-        run: pytest
+      - name: Format check (ruff format)
+        # `ruff check` tidak memeriksa format; tanpa langkah ini penyimpangan
+        # gaya lolos sampai ada yang menjalankan `ruff format` lokal.
+        run: ruff format --check src tests scripts
+
+      - name: Tests (pytest + coverage)
+        # Ambang coverage ada di [tool.coverage.report] fail_under: pytest-cov
+        # keluar non-zero kalau turun di bawahnya.
+        run: pytest --cov --cov-report=term
         env:
           # The unit suite must not need a live database; set a dummy so any
           # accidental DSN read fails loudly instead of silently skipping.

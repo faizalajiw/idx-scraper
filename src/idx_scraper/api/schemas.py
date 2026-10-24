@@ -72,6 +72,7 @@ class SessionMovers(BaseModel):
     top_gainers: list[Mover]
     top_losers: list[Mover]
 
+
 class LeaderRow(BaseModel):
     code: str
     name: str | None = None
@@ -81,12 +82,14 @@ class LeaderRow(BaseModel):
     value: float | None = None
     frequency: float | None = None
 
+
 class MarketLeaders(BaseModel):
     metric: str
     source: str  # "intraday" | "eod"
     date: str | None = None
     captured_at: str | None = None
     rows: list[LeaderRow]
+
 
 class BrokerLeaderRow(BaseModel):
     broker_code: str
@@ -96,6 +99,7 @@ class BrokerLeaderRow(BaseModel):
     frequency: float | None = None
     # Kategori bandarmologi dari map kurasi kode (asing/lokal/bumn).
     category: str | None = None
+
 
 class TopBrokers(BaseModel):
     date: str | None = None
@@ -874,7 +878,6 @@ class SectorRotation(BaseModel):
     sectors: list[SectorRotationRow]
 
 
-
 class MarketRegime(BaseModel):
     """Regime IHSG + volatilitas ter-annualisasi untuk banner konteks."""
 
@@ -889,7 +892,6 @@ class MarketRegime(BaseModel):
     dir_hint: str | None = None
     generated_at: str | None = None
     gate: RegimeGate | None = None
-
 
 
 class ValuationRow(BaseModel):
@@ -1667,4 +1669,3 @@ class DataHealth(BaseModel):
     field_coverage: CoverageCheck
     row_counts: RowCountCheck
     session_gaps: SessionGapsCheck
-

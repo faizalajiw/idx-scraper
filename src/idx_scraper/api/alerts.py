@@ -156,9 +156,7 @@ def delete_rule(rule_id: str) -> bool:
 # ------------------------------------------------------------------ status
 
 
-def _rule_status(
-    rule: dict[str, Any], snapshot: alert_rules.RuleSnapshot
-) -> dict[str, Any]:
+def _rule_status(rule: dict[str, Any], snapshot: alert_rules.RuleSnapshot) -> dict[str, Any]:
     base: dict[str, Any] = {
         "id": str(rule.get("id", "")),
         "code": str(rule.get("code", "")),

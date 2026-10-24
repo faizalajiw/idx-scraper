@@ -18,7 +18,14 @@ def test_parse_normal_payload():
                 "Value": 4351965300.0,
                 "Frequency": 461.0,
             },
-            {"No": 2, "IDFirm": "YP", "FirmName": "Valbury", "Volume": 100, "Value": 50, "Frequency": 3},
+            {
+                "No": 2,
+                "IDFirm": "YP",
+                "FirmName": "Valbury",
+                "Volume": 100,
+                "Value": 50,
+                "Frequency": 3,
+            },
         ],
     }
     rows = parse_broker_rows(payload)
@@ -33,7 +40,11 @@ def test_parse_normal_payload():
 
 
 def test_parse_string_numbers_with_thousand_separators():
-    payload = {"data": [{"IDFirm": "XX", "Volume": "1,234,567", "Value": "9,876,543.21", "Frequency": "42"}]}
+    payload = {
+        "data": [
+            {"IDFirm": "XX", "Volume": "1,234,567", "Value": "9,876,543.21", "Frequency": "42"}
+        ]
+    }
     r = parse_broker_rows(payload)[0]
     assert r["volume"] == 1234567
     assert r["value"] == 9876543.21
@@ -51,7 +62,9 @@ def test_missing_fields_become_none_not_zero():
 
 
 def test_rows_without_idfirm_are_skipped():
-    payload = {"data": [{"FirmName": "tanpa kode", "Volume": 1}, {"IDFirm": "OK"}, "bukan-dict", 42]}
+    payload = {
+        "data": [{"FirmName": "tanpa kode", "Volume": 1}, {"IDFirm": "OK"}, "bukan-dict", 42]
+    }
     rows = parse_broker_rows(payload)
     assert [r["broker_code"] for r in rows] == ["OK"]
 

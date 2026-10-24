@@ -90,6 +90,7 @@ def test_eod_derives_previous_and_percent_when_missing(tmp_path):
     finally:
         storage.close()
 
+
 def test_eod_legacy_yyyymmdd_dates_migrated(tmp_path):
     storage = make_storage(tmp_path)
     try:

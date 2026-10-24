@@ -57,12 +57,24 @@ def test_run_once_melewati_item_lebih_tua_dari_retensi(monkeypatch):
     from idx_scraper import news
 
     now = datetime(2026, 10, 17, 4, 0, tzinfo=UTC)  # cutoff = 2026-10-10 04:00 UTC
-    lama = {"url": "https://x/lama", "title": "Lama", "source": "Stockbit Snips",
-            "published_at": datetime(2026, 7, 8, 17, tzinfo=UTC)}
-    tepat_batas = {"url": "https://x/batas", "title": "Batas", "source": "Stockbit Snips",
-                   "published_at": datetime(2026, 10, 10, 4, tzinfo=UTC)}
-    baru = {"url": "https://x/baru", "title": "Baru", "source": "Stockbit Snips",
-            "published_at": datetime(2026, 10, 16, 17, tzinfo=UTC)}
+    lama = {
+        "url": "https://x/lama",
+        "title": "Lama",
+        "source": "Stockbit Snips",
+        "published_at": datetime(2026, 7, 8, 17, tzinfo=UTC),
+    }
+    tepat_batas = {
+        "url": "https://x/batas",
+        "title": "Batas",
+        "source": "Stockbit Snips",
+        "published_at": datetime(2026, 10, 10, 4, tzinfo=UTC),
+    }
+    baru = {
+        "url": "https://x/baru",
+        "title": "Baru",
+        "source": "Stockbit Snips",
+        "published_at": datetime(2026, 10, 16, 17, tzinfo=UTC),
+    }
 
     monkeypatch.setattr(news, "fetch_snips", lambda *a, **k: [lama, tepat_batas, baru])
     monkeypatch.setattr(news, "_dsn", lambda: "postgresql://fake/db")

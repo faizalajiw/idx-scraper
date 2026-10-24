@@ -39,7 +39,7 @@ def test_median_dan_sesi_normal_tidak_kena_alarm() -> None:
 
 
 def test_sesi_separuh_ditandai() -> None:
-    rows = _sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)]
+    rows = [*_sesi(date(2026, 10, 1), 9, baris=500), (date(2026, 10, 10), 120)]
 
     hasil = evaluate_row_counts(rows, sessions=30)
 
@@ -50,7 +50,7 @@ def test_sesi_separuh_ditandai() -> None:
 
 
 def test_tepat_di_ambang_belum_dianggap_bermasalah() -> None:
-    rows = _sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 250)]
+    rows = [*_sesi(date(2026, 10, 1), 9, baris=500), (date(2026, 10, 10), 250)]
 
     hasil = evaluate_row_counts(rows, sessions=30, threshold_pct=50.0)
 
@@ -59,7 +59,7 @@ def test_tepat_di_ambang_belum_dianggap_bermasalah() -> None:
 
 def test_sesi_lama_di_luar_jendela_tidak_ikut_menghidupkan_alarm() -> None:
     # Sesi pertama kecil (universe tumbuh), jendela hanya 3 sesi terakhir.
-    rows = [(date(2026, 9, 1), 20)] + _sesi(date(2026, 10, 1), 3, baris=500)
+    rows = [(date(2026, 9, 1), 20), *_sesi(date(2026, 10, 1), 3, baris=500)]
 
     hasil = evaluate_row_counts(rows, sessions=3)
 
@@ -87,7 +87,7 @@ def test_daftar_kosong_aman() -> None:
 
 def test_sesi_yang_masih_ditulis_dilewati() -> None:
     # Sesi hari ini baru terisi 120 baris (ingest jalan) -> jangan alarm sekarang.
-    rows = _sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)]
+    rows = [*_sesi(date(2026, 10, 1), 9, baris=500), (date(2026, 10, 10), 120)]
 
     hasil = evaluate_row_counts(rows, sessions=30, in_progress=date(2026, 10, 10))
 
@@ -95,9 +95,7 @@ def test_sesi_yang_masih_ditulis_dilewati() -> None:
     assert hasil.checked == 9
     # Tanpa sesi itu, hari yang sama juga tidak muncul di daftar bermasalah —
     # jadi alarm baru berbunyi setelah sesi itu tak lagi "in progress".
-    assert evaluate_row_counts(
-        rows, sessions=30, in_progress=date(2026, 10, 11)
-    ).troublemakers
+    assert evaluate_row_counts(rows, sessions=30, in_progress=date(2026, 10, 11)).troublemakers
 
 
 def test_median_nol_tidak_melempar() -> None:
@@ -181,7 +179,7 @@ def test_sesi_yang_masih_ditulis_bukan_lubang() -> None:
 
 
 def test_pesan_sesi_separuh_sebut_angka_dan_cara_memperbaiki() -> None:
-    c = evaluate_row_counts(_sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)])
+    c = evaluate_row_counts([*_sesi(date(2026, 10, 1), 9, baris=500), (date(2026, 10, 10), 120)])
 
     pesan = format_row_count_message(c)
 
@@ -198,7 +196,7 @@ def test_pesan_sesi_separuh_wajib_ulang() -> None:
     Perintah perbaikan yang tidak memperbaiki apa pun adalah alarm yang berbunyi
     lagi besok — persis mode "alarm diabaikan" yang mau dicegah.
     """
-    c = evaluate_row_counts(_sesi(date(2026, 10, 1), 9, baris=500) + [(date(2026, 10, 10), 120)])
+    c = evaluate_row_counts([*_sesi(date(2026, 10, 1), 9, baris=500), (date(2026, 10, 10), 120)])
 
     pesan = format_row_count_message(c)
 
@@ -233,9 +231,7 @@ def test_pesan_lubang_sebut_rentang_dan_perintah_penambal() -> None:
 
 
 def test_pesan_lubang_sebut_catatan_kalau_basis_lemah() -> None:
-    pendek = evaluate_session_gaps(
-        [date(2026, 10, 5), date(2026, 10, 9)], [date(2026, 10, 9)]
-    )
+    pendek = evaluate_session_gaps([date(2026, 10, 5), date(2026, 10, 9)], [date(2026, 10, 9)])
     hari_kerja = evaluate_session_gaps(
         [date(2026, 10, 5), date(2026, 10, 9)], bursa_dates=[], holidays=set()
     )
@@ -301,7 +297,7 @@ def test_baris_yahoo_yang_bocor_ke_akhir_pekan_tidak_menghidupkan_alarm() -> Non
     # Yahoo punya baris kolong (Sabtu 2026-10-10 di index_summary_daily nyata).
     # Bukan lubang: bursa tutup di akhir pekan, apa pun isi acuannya.
     eod = [date(2026, 10, 9), date(2026, 10, 12)]
-    bursa = eod + [date(2026, 10, 10)]
+    bursa = [*eod, date(2026, 10, 10)]
 
     assert find_missing_sessions(eod, bursa) == []
 
@@ -358,10 +354,15 @@ def test_hitung_sesi_tertinggal_tanpa_kalender_pakai_hari_kerja() -> None:
     assert count_sessions_between([], date(2026, 10, 14), date(2026, 10, 19), set()) == 3
     # Kalau 15 Okt & 16 Okt terdaftar libur, tinggal satu hari kerja.
     assert (
-        count_sessions_between([], date(2026, 10, 14), date(2026, 10, 19), {
-            date(2026, 10, 15),
-            date(2026, 10, 16),
-        })
+        count_sessions_between(
+            [],
+            date(2026, 10, 14),
+            date(2026, 10, 19),
+            {
+                date(2026, 10, 15),
+                date(2026, 10, 16),
+            },
+        )
         == 1
     )
 

@@ -32,6 +32,7 @@ api = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     # Ruff DIPIN persis (bukan >=). Set aturan bawaannya berubah antar rilis —
     # PYI041 & DTZ007 yang memerahkan CI 2026-10-09 sudah aktif di default
     # 0.16.8 (terbukti dengan `ruff check --isolated`), jadi `>=0.5` membuat
@@ -56,11 +57,39 @@ packages = ["src/idx_scraper"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint]
+# Himpunan aturan eksplisit. Sebelumnya tidak ada `select`, jadi hanya default
+# (E4/E7/E9/F) yang aktif dan `per-file-ignores` di bawah menunjuk kode yang
+# tidak pernah menyala — gerbang lint-nya tidak efektif.
+# ARG sengaja belum diambil: 185 argumen tak terpakai sebagian besar adalah
+# parameter callback/route yang harus tetap bernama; butuh rename massal tanpa
+# manfaat perilaku.
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    # Karakter tipografis (—, –, ×, →, ±) disengaja di docstring/komentar berbahasa
+    # Indonesia; RUF002/RUF003 akan memaksa ASCII dan membuat prosa lebih buruk.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # Lebar baris kode sudah ditegakkan `ruff format` (line-length 100). Sisa E501
+    # hanya string SQL panjang dan komentar yang tidak bisa dipotong tanpa
+    # menambah kebisingan; memotongnya mengubah teks SQL, bukan perilaku.
+    "E501",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # CLI loads dotenv before imports on purpose
 "src/idx_scraper/cli.py" = ["E402"]
-# Broad exception catches are deliberate: scraping must survive per-item failures
-"src/idx_scraper/*.py" = ["BLE001", "S110"]
-# Same reasoning for the one-off backfill/refresh jobs: silent per-item skip,
-# best-effort session close, and the `v != v` NaN guard are deliberate idioms.
-"scripts/*.py" = ["BLE001", "S110", "S112", "PLR0124"]
+# Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
+# bisa diimpor saat dijalankan langsung (`python scripts/check_eod_gaps.py`).
+"scripts/check_eod_gaps.py" = ["E402"]
+
+[tool.coverage.run]
+source = ["src/idx_scraper"]
+
+[tool.coverage.report]
+# Ambang lantai, bukan target: baseline saat gerbang dipasang 2026-10-25 adalah
+# 64% (10928 statement). Angka ini menahan penurunan, bukan memaksa setiap
+# perubahan menambah tes; naikkan hanya setelah baseline benar-benar naik.
+fail_under = 60
+skip_covered = true

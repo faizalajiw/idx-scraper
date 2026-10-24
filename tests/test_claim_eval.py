@@ -78,9 +78,7 @@ def test_stop_wins_when_both_touched_in_same_session():
     karena urutan intra-sesi tidak diketahui dari data harian."""
     raw = _quiet_raw([("2026-01-07", 111.0, 94.0, 100.0)])
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,))
 
     assert out.loc[0, "outcome"] == "stop"
     assert bool(out.loc[0, "hit_stop"]) is True
@@ -89,13 +87,9 @@ def test_stop_wins_when_both_touched_in_same_session():
 
 
 def test_target_hit_before_stop_is_target():
-    raw = _quiet_raw(
-        [("2026-01-07", 111.0, 99.0, 105.0), ("2026-01-08", 105.0, 90.0, 95.0)]
-    )
+    raw = _quiet_raw([("2026-01-07", 111.0, 99.0, 105.0), ("2026-01-08", 105.0, 90.0, 95.0)])
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,))
 
     assert out.loc[0, "outcome"] == "target"
     assert out.loc[0, "touch_date"] == "2026-01-07"
@@ -104,13 +98,9 @@ def test_target_hit_before_stop_is_target():
 
 
 def test_stop_hit_before_target_is_stop():
-    raw = _quiet_raw(
-        [("2026-01-07", 100.0, 90.0, 92.0), ("2026-01-08", 111.0, 92.0, 110.0)]
-    )
+    raw = _quiet_raw([("2026-01-07", 100.0, 90.0, 92.0), ("2026-01-08", 111.0, 92.0, 110.0)])
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,))
 
     assert out.loc[0, "outcome"] == "stop"
     assert out.loc[0, "touch_date"] == "2026-01-07"
@@ -159,9 +149,7 @@ def test_missing_raw_session_does_not_shift_the_window():
     raw = _quiet_raw()
     raw = raw[raw["date"] != "2026-01-07"]
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,))
 
     assert out.loc[0, "outcome"] == "unresolved"
 
@@ -172,9 +160,7 @@ def test_touch_before_a_missing_session_still_resolves():
     raw = _quiet_raw([("2026-01-08", 111.0, 99.0, 110.0)])
     raw = raw[raw["date"] != "2026-01-09"]
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=3), raw=raw, adj=_flat_adj(), horizons=(3,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=3), raw=raw, adj=_flat_adj(), horizons=(3,))
 
     assert out.loc[0, "outcome"] == "target"
     assert out.loc[0, "touch_date"] == "2026-01-08"
@@ -189,9 +175,7 @@ def test_touch_after_a_missing_session_does_not_resolve():
     raw = _quiet_raw([("2026-01-08", 111.0, 99.0, 110.0)])
     raw = raw[raw["date"] != "2026-01-07"]
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=2), raw=raw, adj=_flat_adj(), horizons=(2,))
 
     assert out.loc[0, "outcome"] == "unresolved"
 
@@ -202,9 +186,7 @@ def test_entry_session_low_does_not_trigger_stop():
     Entry di close T+1, jadi low sesi T+1 terjadi SEBELUM posisi ada."""
     raw = _quiet_raw([("2026-01-06", 101.0, 90.0, 100.0)])  # low 90 < stop 95
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=1), raw=raw, adj=_flat_adj(), horizons=(1,))
 
     assert bool(out.loc[0, "hit_stop"]) is False
     assert out.loc[0, "outcome"] == "timeout"
@@ -241,9 +223,7 @@ def test_abnormal_uses_adjusted_panel_while_levels_use_raw_panel():
         ignore_index=True,
     )
 
-    out = claim_outcomes(
-        _claim("2026-01-05", horizon=1), raw=raw, adj=adj, horizons=(1,)
-    )
+    out = claim_outcomes(_claim("2026-01-05", horizon=1), raw=raw, adj=adj, horizons=(1,))
 
     assert bool(out.loc[0, "hit_stop"]) is True
     assert out.loc[0, "abn_1"] > 0  # AAA +20% vs pasar +10% (dari panel terkoreksi)
@@ -271,7 +251,6 @@ def test_sell_direction_raises_value_error():
             adj=_flat_adj(),
             horizons=(1,),
         )
-
 
 
 # --- agregat per sesi (spec §6.1, R7) ---
@@ -381,7 +360,6 @@ def test_empty_claims_is_safe():
     assert out["median_session_abnormal"] is None
     assert out["session_dispersion"] is None
     assert out["per_session"] == []
-
 
 
 # --- verdict & baris rekaman (spec §6.1, §8 Q4) ---

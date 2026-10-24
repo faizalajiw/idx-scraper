@@ -123,7 +123,7 @@ def fetch_one(transport: Any, code: str) -> dict[str, Any]:
     last_status: int | None = None
     for ext in CANDIDATE_EXT:
         url = LOGO_URL.format(code=code, ext=ext)
-        for attempt in range(MAX_ATTEMPTS):
+        for _attempt in range(MAX_ATTEMPTS):
             time.sleep(RATE_LIMIT_S)
             try:
                 data = transport.get_bytes(url)
@@ -162,7 +162,9 @@ def fetch_one(transport: Any, code: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--force", action="store_true", help="unduh ulang kode yang sudah ok")
     parser.add_argument("--only", help="daftar kode dipisah koma, mis. YU,CC")
     args = parser.parse_args()
@@ -194,14 +196,20 @@ def main() -> int:
         for i, code in enumerate(todo, 1):
             entry = fetch_one(transport, code)
             manifest[code] = entry
-            print(f"[{i}/{len(todo)}] {code}: {entry['status']}" + (f" ({entry['reason']})" if entry["reason"] else ""))
+            print(
+                f"[{i}/{len(todo)}] {code}: {entry['status']}"
+                + (f" ({entry['reason']})" if entry["reason"] else "")
+            )
             if i % 10 == 0:
                 save_manifest(manifest)
     finally:
         transport.close()
 
     save_manifest(manifest)
-    counts = {s: sum(1 for e in manifest.values() if e["status"] == s) for s in ("ok", "fallback", "failed")}
+    counts = {
+        s: sum(1 for e in manifest.values() if e["status"] == s)
+        for s in ("ok", "fallback", "failed")
+    }
     print(f"Ringkasan: ok={counts['ok']} fallback={counts['fallback']} failed={counts['failed']}")
     return 0
 

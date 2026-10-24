@@ -45,8 +45,11 @@ def _morning(n: int = 10, day: str = "2026-09-25") -> list[pd.Timestamp]:
 def test_ob_imbalance_constant_thick_bid():
     # Bid selalu 3x offer -> imbalance +0.5; harga datar -> absorption NaN.
     snaps = _snaps(
-        "AAAA", _morning(10),
-        [150] * 10, [50] * 10, [100.0] * 10,
+        "AAAA",
+        _morning(10),
+        [150] * 10,
+        [50] * 10,
+        [100.0] * 10,
     )
     out = compute_daily(snaps)
     assert len(out) == 1
@@ -156,6 +159,8 @@ def test_attach_merge_and_nan_fill():
     assert pd.isna(merged.loc[2, "ob_imbalance"])  # kode tanpa data
 
     # ob_daily kosong -> kolom NaN ditambahkan, panel utuh.
-    empty = attach_orderbook_factors(panel, pd.DataFrame(columns=["code", "date", *OB_FACTOR_COLUMNS]))
+    empty = attach_orderbook_factors(
+        panel, pd.DataFrame(columns=["code", "date", *OB_FACTOR_COLUMNS])
+    )
     assert len(empty) == len(panel)
     assert empty["ob_absorption"].isna().all()

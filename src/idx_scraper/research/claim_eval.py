@@ -131,7 +131,9 @@ def claim_outcomes(
     for row in out.itertuples(index=False):
         code = str(row.code)
         sessions = sessions_by_code.get(code) or []
-        index = sessions.index(pd.Timestamp(row.date)) if pd.Timestamp(row.date) in sessions else None
+        index = (
+            sessions.index(pd.Timestamp(row.date)) if pd.Timestamp(row.date) in sessions else None
+        )
 
         horizon_days = int(row.horizon_days)
         expected: list[pd.Timestamp] = []
@@ -149,16 +151,16 @@ def claim_outcomes(
         resolved = _resolve(observed, float(row.stop), float(row.target)) if observed else None
         if resolved is None:
             complete = len(expected) == horizon_days and len(observed) == len(expected)
-            resolved = ("timeout", False, False, None) if complete else ("unresolved", False, False, None)
+            resolved = (
+                ("timeout", False, False, None) if complete else ("unresolved", False, False, None)
+            )
 
         outcomes.append(resolved[0])
         hit_stops.append(resolved[1])
         hit_targets.append(resolved[2])
         touches.append(resolved[3])
 
-    out = out.merge(
-        measured[["code", "date", *abn_cols]], on=["code", "date"], how="left"
-    )
+    out = out.merge(measured[["code", "date", *abn_cols]], on=["code", "date"], how="left")
     out["date"] = out["date"].dt.strftime("%Y-%m-%d")
     out["outcome"] = outcomes
     out["hit_stop"] = hit_stops
@@ -221,7 +223,11 @@ def session_aggregate(outcomes: pd.DataFrame, *, horizon: int) -> dict[str, Any]
     if len(session_means) >= 2:
         summary["session_dispersion"] = round(float(session_means.std(ddof=1)), 6)
     summary["per_session"] = [
-        {"date": str(date), "n": int(entry["size"]), "mean_abnormal": round(float(entry["mean"]), 6)}
+        {
+            "date": str(date),
+            "n": int(entry["size"]),
+            "mean_abnormal": round(float(entry["mean"]), 6),
+        }
         for date, entry in grouped.iterrows()
     ]
     return summary

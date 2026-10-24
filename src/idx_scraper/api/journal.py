@@ -142,10 +142,7 @@ def claims(
     except Exception:
         return []
 
-    return [
-        {k: _teks(v) if k in _TANGGAL_FIELDS else v for k, v in row.items()}
-        for row in rows
-    ]
+    return [{k: _teks(v) if k in _TANGGAL_FIELDS else v for k, v in row.items()} for row in rows]
 
 
 def state() -> dict[str, Any]:
@@ -195,8 +192,7 @@ def halt(*, reason: str, by: str = "pemilik") -> dict[str, Any]:
     alasan = str(reason or "").strip()
     if not alasan:
         raise ValueError(
-            "reason wajib diisi: halt tanpa sebab tidak bisa dibedakan dari "
-            "mesin yang rusak"
+            "reason wajib diisi: halt tanpa sebab tidak bisa dibedakan dari mesin yang rusak"
         )
     journal_halt.set_halt(reason=alasan, by=by or "pemilik")
     return state()

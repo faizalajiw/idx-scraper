@@ -77,9 +77,7 @@ def state(path: Path | None = None) -> dict[str, Any]:
     }
 
 
-def set_halt(
-    *, reason: str, by: str = "pemilik", path: Path | None = None
-) -> dict[str, Any]:
+def set_halt(*, reason: str, by: str = "pemilik", path: Path | None = None) -> dict[str, Any]:
     """Hentikan penulisan klaim baru. Sebab wajib.
 
     Halt tanpa sebab tidak bisa dibedakan dari mesin yang rusak, dan itu justru

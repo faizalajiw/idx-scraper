@@ -21,6 +21,7 @@ tidak pernah menyentuh Playwright sama sekali.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -125,10 +126,8 @@ class BrowserTransport:
         async def _reopen():
             # Tutup sisa context lama (kalau ada) sebelum buka yang baru.
             if self._context is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await self._context.close()
-                except Exception:
-                    pass
                 self._context = None
                 self._page = None
             await self._open_browser_async()
@@ -256,17 +255,13 @@ class BrowserTransport:
 
         async def _close():
             if self._context is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await self._context.close()
-                except Exception:
-                    pass
                 self._context = None
                 self._page = None
             if self._playwright is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await self._playwright.stop()
-                except Exception:
-                    pass
                 self._playwright = None
 
         try:
@@ -303,9 +298,7 @@ class HttpTransport:
 
     def get(self, path: str) -> Any | None:
         url = f"{IDX_BASE}{path}"
-        r = self._session.get(
-            url, impersonate=self.impersonate, headers=_HTTP_HEADERS, timeout=30
-        )
+        r = self._session.get(url, impersonate=self.impersonate, headers=_HTTP_HEADERS, timeout=30)
         self.last_status = r.status_code
         if r.status_code != 200:
             print(f"[warn] IDX {path} status {r.status_code}", file=sys.stderr)
@@ -330,10 +323,8 @@ class HttpTransport:
         return r.content
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._session.close()
-        except Exception:
-            pass
 
 
 class AutoTransport:
@@ -345,9 +336,7 @@ class AutoTransport:
     di BrowserTransport) supaya tiap request tidak membayar timeout + buka Chrome.
     """
 
-    def __init__(
-        self, http_factory: Any = None, browser_factory: Any = None
-    ) -> None:
+    def __init__(self, http_factory: Any = None, browser_factory: Any = None) -> None:
         self._http_factory = http_factory or HttpTransport
         self._browser_factory = browser_factory or BrowserTransport
         self._http: Any = None
@@ -400,10 +389,8 @@ class AutoTransport:
     def close(self) -> None:
         for t in (self._http, self._browser):
             if t is not None:
-                try:
+                with contextlib.suppress(Exception):
                     t.close()
-                except Exception:
-                    pass
 
 
 def make_transport() -> Any:
@@ -421,5 +408,3 @@ def make_transport() -> Any:
     if mode != "auto":
         print(f"[warn] IDX_TRANSPORT={mode!r} tidak dikenal — dipakai 'auto'", file=sys.stderr)
     return AutoTransport()
-
-

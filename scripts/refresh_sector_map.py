@@ -36,7 +36,9 @@ import yfinance as yf
 from idx_scraper.api.sector_map import BUCKETS, SECTOR_MAP
 
 SLEEP_SECONDS = 0.05  # Yahoo tolerates this easily; keeps the job ~2-4 min
-OUT_PATH = Path(__file__).resolve().parents[1] / "src" / "idx_scraper" / "api" / "sector_lookup.json"
+OUT_PATH = (
+    Path(__file__).resolve().parents[1] / "src" / "idx_scraper" / "api" / "sector_lookup.json"
+)
 
 # Yahoo `industry` -> our bucket. Checked first and in order, so put the
 # specific names ahead of the broad ones (e.g. "Coking Coal" before "Coal").

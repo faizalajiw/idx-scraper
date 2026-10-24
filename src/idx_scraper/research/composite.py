@@ -101,6 +101,7 @@ def ranks_from_rows(rows: list[Any]) -> dict[str, dict[str, float]]:
     (psycopg Row mendukung keduanya). Percentile = share emiten dengan nilai
     <= emiten itu (rank pct, 0..1).
     """
+
     def _get(r: Any, key: str, idx: int) -> Any:
         return r[key] if isinstance(r, dict) else r[idx]
 
@@ -121,17 +122,13 @@ def ranks_from_rows(rows: list[Any]) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     for i, key in enumerate(("vol", "turnover", "dist_52w")):
         vals = sorted((parsed[c][i], c) for c in codes)
-        pct_by_code = {
-            c: (rank + 1) / len(vals) for rank, (_, c) in enumerate(vals)
-        }
+        pct_by_code = {c: (rank + 1) / len(vals) for rank, (_, c) in enumerate(vals)}
         for c in codes:
             out.setdefault(c, {})[f"{key}_pct"] = pct_by_code[c]
     return out
 
 
-def market_factor_ranks(
-    cur: Any, use_cache: bool = True
-) -> dict[str, dict[str, float]]:
+def market_factor_ranks(cur: Any, use_cache: bool = True) -> dict[str, dict[str, float]]:
     """Percentile faktor seluruh emiten (butuh cursor dengan set time zone WIB).
 
     Hasil di-cache 30 menit — query menyapu ~18 bulan data seluruh pasar dan
@@ -156,9 +153,11 @@ def latest_weights(cur: Any) -> dict[str, float]:
     bersama cache ranking (siklus update sama-sama harian).
     """
     now = time.monotonic()
-    if use_cache_weights() and _WEIGHTS_CACHE["data"] is not None and (
-        now - _WEIGHTS_CACHE["at"]
-    ) < _CACHE_TTL_SECONDS:
+    if (
+        use_cache_weights()
+        and _WEIGHTS_CACHE["data"] is not None
+        and (now - _WEIGHTS_CACHE["at"]) < _CACHE_TTL_SECONDS
+    ):
         return _WEIGHTS_CACHE["data"]
 
     try:
@@ -215,8 +214,7 @@ def factor_adjustment(
     reasons: list[str] = []
     if vol >= REASON_THRESHOLD:
         reasons.append(
-            f"Volatilitas 21h di persentil pasar {vol:.0%} — riwayat return "
-            f"lebih lemah (IC -0.07)"
+            f"Volatilitas 21h di persentil pasar {vol:.0%} — riwayat return lebih lemah (IC -0.07)"
         )
     elif vol <= 1.0 - REASON_THRESHOLD:
         reasons.append(
@@ -235,13 +233,11 @@ def factor_adjustment(
         )
     if dist >= REASON_THRESHOLD:
         reasons.append(
-            f"Dekat puncak 52-minggu (persentil {dist:.0%}) — momentum posisi "
-            f"positif (IC +0.05)"
+            f"Dekat puncak 52-minggu (persentil {dist:.0%}) — momentum posisi positif (IC +0.05)"
         )
     elif dist <= 1.0 - REASON_THRESHOLD:
         reasons.append(
-            f"Jauh di bawah puncak 52-minggu (persentil {dist:.0%}) — momentum "
-            f"posisi lemah"
+            f"Jauh di bawah puncak 52-minggu (persentil {dist:.0%}) — momentum posisi lemah"
         )
     return adj, reasons
 

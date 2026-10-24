@@ -177,9 +177,7 @@ def emiten_sentiment(
             )
     if ob_absorption is not None:
         if ob_absorption <= -0.2:
-            reasons.append(
-                "Buku melawan arah harga — pembeli menyerap penawaran (absorption)"
-            )
+            reasons.append("Buku melawan arah harga — pembeli menyerap penawaran (absorption)")
         elif ob_absorption >= 0.2:
             reasons.append("Buku ikut arah harga — konfirmasi pergerakan")
 
@@ -272,11 +270,7 @@ def build(
             if foreign_f > 0:
                 foreign_pos += 1
 
-        ratio = (
-            foreign_f / value_f
-            if foreign_f is not None and value_f and value_f > 0
-            else None
-        )
+        ratio = foreign_f / value_f if foreign_f is not None and value_f and value_f > 0 else None
         if ratio is not None:
             ratios[code] = ratio
         prepared.append(

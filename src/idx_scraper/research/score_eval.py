@@ -80,19 +80,19 @@ from .signal_log import attach_outcomes
 
 # --- parameter walk-forward ------------------------------------------------- #
 
-TRAIN_SESSIONS = 100      # panjang jendela train (hari bursa)
-TEST_SESSIONS = 25        # panjang jendela test per fold (tidak tumpang tindih)
-STEP_SESSIONS = 25        # langkah antar fold
+TRAIN_SESSIONS = 100  # panjang jendela train (hari bursa)
+TEST_SESSIONS = 25  # panjang jendela test per fold (tidak tumpang tindih)
+STEP_SESSIONS = 25  # langkah antar fold
 
-MIN_NAMES_PER_DAY = 20    # sesi dengan kandidat lebih sedikit dari ini dilewati
-MIN_EDGE_DAYS = 20        # bendera harus terukur di >= N sesi agar boleh dapat bobot
-EDGE_GATE_T = 1.5         # |t| Newey-West minimum (di train) agar komponen dapat bobot
-MIN_EDGE = 0.0015         # |edge| minimum (0,15%) agar komponen dapat bobot
-EDGE_TO_POINTS = 600.0    # 1% edge -> 6 poin skor
+MIN_NAMES_PER_DAY = 20  # sesi dengan kandidat lebih sedikit dari ini dilewati
+MIN_EDGE_DAYS = 20  # bendera harus terukur di >= N sesi agar boleh dapat bobot
+EDGE_GATE_T = 1.5  # |t| Newey-West minimum (di train) agar komponen dapat bobot
+MIN_EDGE = 0.0015  # |edge| minimum (0,15%) agar komponen dapat bobot
+EDGE_TO_POINTS = 600.0  # 1% edge -> 6 poin skor
 MAX_COMPONENT_POINTS = 15.0
-SHRINK = 0.5              # pengecilan bobot train (sampel pendek)
-MIN_FOLD_CONSISTENCY = 2 / 3   # bagian fold minimum yang harus sependapat tanda
-BAND_SHARES = (0.75, 0.90, 0.98)   # bagian pool harian untuk band C / B / A
+SHRINK = 0.5  # pengecilan bobot train (sampel pendek)
+MIN_FOLD_CONSISTENCY = 2 / 3  # bagian fold minimum yang harus sependapat tanda
+BAND_SHARES = (0.75, 0.90, 0.98)  # bagian pool harian untuk band C / B / A
 
 _ABN = "abn"  # prefix kolom outcome di attach_outcomes
 
@@ -242,8 +242,17 @@ def edge_table(feats: pd.DataFrame, horizon: int) -> pd.DataFrame:
     HARI terukur (``MIN_EDGE_DAYS`` di ``weights_from_edges``), bukan jumlah nama
     per hari.
     """
-    cols = ["days", "flagged", "mean_abn_flagged", "mean_abn_universe", "edge",
-            "edge_pooled", "t_stat", "hit_rate", "coverage"]
+    cols = [
+        "days",
+        "flagged",
+        "mean_abn_flagged",
+        "mean_abn_universe",
+        "edge",
+        "edge_pooled",
+        "t_stat",
+        "hit_rate",
+        "coverage",
+    ]
     if feats.empty or f"{_ABN}_{horizon}" not in feats.columns:
         return pd.DataFrame(columns=cols, index=pd.Index([], name="component"))
 
@@ -293,10 +302,20 @@ def edge_table(feats: pd.DataFrame, horizon: int) -> pd.DataFrame:
     for name in _FEATURES:
         e = pd.Series(daily[name], dtype=float)
         if e.empty:
-            rows.append({"component": name, "days": 0, "flagged": flagged[name],
-                         "mean_abn_flagged": None, "mean_abn_universe": None,
-                         "edge": None, "edge_pooled": edge_pooled[name],
-                         "t_stat": None, "hit_rate": None, "coverage": None})
+            rows.append(
+                {
+                    "component": name,
+                    "days": 0,
+                    "flagged": flagged[name],
+                    "mean_abn_flagged": None,
+                    "mean_abn_universe": None,
+                    "edge": None,
+                    "edge_pooled": edge_pooled[name],
+                    "t_stat": None,
+                    "hit_rate": None,
+                    "coverage": None,
+                }
+            )
             continue
         rows.append(
             {
@@ -304,7 +323,9 @@ def edge_table(feats: pd.DataFrame, horizon: int) -> pd.DataFrame:
                 "days": len(e),
                 "flagged": int(flagged[name]),
                 "mean_abn_flagged": round(float(np.mean(daily_flagged[name])), 6),
-                "mean_abn_universe": round(float(np.mean(universe_abn)), 6) if universe_abn else None,
+                "mean_abn_universe": round(float(np.mean(universe_abn)), 6)
+                if universe_abn
+                else None,
                 "edge": round(float(e.mean()), 6),
                 "edge_pooled": edge_pooled[name],
                 "t_stat": _round_opt(_nw_tstat(e)),
@@ -376,7 +397,7 @@ def tier_mix(scores: pd.Series, shares: tuple[float, float, float] = BAND_SHARES
     if n == 0:
         return {"n": 0}
     out: dict[str, Any] = {"n": n}
-    for label, share in zip(("c", "b", "a"), shares):
+    for label, share in zip(("c", "b", "a"), shares, strict=True):
         cut = float(np.quantile(s, float(share)))
         rows = int((s >= cut).sum())
         out[label] = {"min_score": round(cut, 2), "rows": rows, "share": round(rows / n, 4)}
@@ -409,7 +430,9 @@ def _spearman(x: pd.Series, y: pd.Series) -> float | None:
     return float((dx * dy).sum() / denom)
 
 
-def score_ic(feats: pd.DataFrame, horizon: int, score: pd.Series, min_names: int = MIN_NAMES_PER_DAY) -> dict[str, Any]:
+def score_ic(
+    feats: pd.DataFrame, horizon: int, score: pd.Series, min_names: int = MIN_NAMES_PER_DAY
+) -> dict[str, Any]:
     """IC harian skor vs abnormal return, lalu mean/ICIR/t (Newey-West)."""
     abn_col = f"{_ABN}_{horizon}"
     if feats.empty or abn_col not in feats.columns:
@@ -470,8 +493,13 @@ def decile_table(
         return pd.DataFrame(columns=["decile", "n", "mean_abn"])
     means = pd.concat(per_day, axis=1).mean(axis=1)
     ns = pd.concat(counts, axis=1).sum(axis=1)
-    out = pd.DataFrame({"decile": means.index.astype(int) + 1, "n": ns.values.astype(int),
-                        "mean_abn": means.values})
+    out = pd.DataFrame(
+        {
+            "decile": means.index.astype(int) + 1,
+            "n": ns.values.astype(int),
+            "mean_abn": means.values,
+        }
+    )
     return out.reset_index(drop=True)
 
 
@@ -481,8 +509,10 @@ def monotonicity(deciles: pd.DataFrame) -> dict[str, Any]:
         return {"spearman": None, "top_minus_bottom": None}
     sp = _spearman(deciles["decile"].astype(float), deciles["mean_abn"].astype(float))
     spread = float(deciles.iloc[-1]["mean_abn"] - deciles.iloc[0]["mean_abn"])
-    return {"spearman": round(sp, 3) if sp is not None else None,
-            "top_minus_bottom": round(spread, 6)}
+    return {
+        "spearman": round(sp, 3) if sp is not None else None,
+        "top_minus_bottom": round(spread, 6),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -518,19 +548,31 @@ def stable_weights(
         neg = [v for v in nonzero if v < 0]
         if len(nonzero) < need:
             weights[name] = 0.0
-            verdict[name] = {"status": "dimatikan", "reason": "lolos gate di terlalu sedikit fold",
-                             "nonzero_folds": len(nonzero), "need": need}
+            verdict[name] = {
+                "status": "dimatikan",
+                "reason": "lolos gate di terlalu sedikit fold",
+                "nonzero_folds": len(nonzero),
+                "need": need,
+            }
             continue
         same = pos if len(pos) >= len(neg) else neg
         if len(same) < need:
             weights[name] = 0.0
-            verdict[name] = {"status": "dimatikan", "reason": "tanda bobot tidak konsisten antar fold",
-                             "nonzero_folds": len(nonzero), "need": need}
+            verdict[name] = {
+                "status": "dimatikan",
+                "reason": "tanda bobot tidak konsisten antar fold",
+                "nonzero_folds": len(nonzero),
+                "need": need,
+            }
             continue
         med = float(np.median(same))
         weights[name] = round(med * 2.0) / 2.0
-        verdict[name] = {"status": "dipakai", "median": med,
-                         "nonzero_folds": len(nonzero), "same_sign_folds": len(same)}
+        verdict[name] = {
+            "status": "dipakai",
+            "median": med,
+            "nonzero_folds": len(nonzero),
+            "same_sign_folds": len(same),
+        }
     return weights, verdict
 
 
@@ -574,8 +616,8 @@ def walk_forward(
 
         start = train
         while start + test <= len(dates):
-            train_dates = dates[start - train:start]
-            test_dates = dates[start:start + test]
+            train_dates = dates[start - train : start]
+            test_dates = dates[start : start + test]
             f_train = feats[pd.to_datetime(feats["date"]).isin(train_dates)]
             f_test = feats[pd.to_datetime(feats["date"]).isin(test_dates)]
 
@@ -607,16 +649,24 @@ def walk_forward(
             start += step
 
         pooled_feats = pd.concat(test_feats, ignore_index=True) if test_feats else pd.DataFrame()
-        pooled_scores = pd.concat(test_scores, ignore_index=True) if test_scores else pd.Series(dtype=float)
+        pooled_scores = (
+            pd.concat(test_scores, ignore_index=True) if test_scores else pd.Series(dtype=float)
+        )
         pooled_ic = score_ic(pooled_feats, k, pooled_scores) if not pooled_feats.empty else {}
-        pooled_dec = decile_table(pooled_feats, k, pooled_scores) if not pooled_feats.empty else pd.DataFrame()
+        pooled_dec = (
+            decile_table(pooled_feats, k, pooled_scores)
+            if not pooled_feats.empty
+            else pd.DataFrame()
+        )
 
         stable, verdict = stable_weights(weight_samples, len(fold_rows), min_ratio=min_consistency)
         mean_weights = {
             f: round(float(np.mean(weight_samples[f])), 2) if weight_samples[f] else 0.0
             for f in _FEATURES
         }
-        matrix = pd.DataFrame(weight_samples, index=[f"fold{i + 1}" for i in range(len(fold_rows))]).T
+        matrix = pd.DataFrame(
+            weight_samples, index=[f"fold{i + 1}" for i in range(len(fold_rows))]
+        ).T
         full_edges = edge_table(feats, k)
 
         out["by_horizon"][str(k)] = {
@@ -730,15 +780,21 @@ def print_report(report: dict[str, Any]) -> None:
             f"    IC={pic.get('mean_ic')} ICIR={pic.get('icir')} t={pic.get('t_stat')} "
             f"hit={pic.get('hit_rate')} hari={pic.get('days')}"
         )
-        print(f"    monotonisitas: rho={pmo.get('spearman')} spread Q10-Q1={pmo.get('top_minus_bottom')}")
+        print(
+            f"    monotonisitas: rho={pmo.get('spearman')} spread Q10-Q1={pmo.get('top_minus_bottom')}"
+        )
         for row in h["pooled_oos_deciles"]:
             print(f"      desil {row['decile']:<2} n={row['n']:<6} abn={row['mean_abn']:+.2%}")
         if h["fold_detail"]:
             mix = h["fold_detail"][-1].get("train_tier_mix") or {}
-            print(f"  sebaran tier di train fold terakhir (n={mix.get('n')}): " + ", ".join(
-                f"{lab.upper()} {mix[lab]['rows']} ({mix[lab]['share']:.0%} >= {mix[lab]['min_score']})"
-                for lab in ("c", "b", "a") if isinstance(mix.get(lab), dict)
-            ))
+            print(
+                f"  sebaran tier di train fold terakhir (n={mix.get('n')}): "
+                + ", ".join(
+                    f"{lab.upper()} {mix[lab]['rows']} ({mix[lab]['share']:.0%} >= {mix[lab]['min_score']})"
+                    for lab in ("c", "b", "a")
+                    if isinstance(mix.get(lab), dict)
+                )
+            )
         print("  bobot per fold (0 = tidak lolos gate di fold itu):")
         fw = h["fold_weights"]
         for name in _FEATURES:
@@ -811,7 +867,9 @@ def main() -> int:
         return 1
 
     horizons = tuple(args.horizons)
-    report = walk_forward(feats, horizons=horizons, train=args.train, test=args.test, step=args.step)
+    report = walk_forward(
+        feats, horizons=horizons, train=args.train, test=args.test, step=args.step
+    )
 
     weights_by_horizon = {
         int(k): {n: float(v) for n, v in h.get("weights_all", {}).items()}
@@ -828,8 +886,10 @@ def main() -> int:
         for k, v in report["frozen"].items():
             if k == "note":
                 continue
-            print(f"  horizon {k}: IC={v['ic'].get('mean_ic')} t={v['ic'].get('t_stat')} "
-                  f"rho={v['monotonicity'].get('spearman')}")
+            print(
+                f"  horizon {k}: IC={v['ic'].get('mean_ic')} t={v['ic'].get('t_stat')} "
+                f"rho={v['monotonicity'].get('spearman')}"
+            )
 
     print("\n" + "=" * 78)
     print("KONSTANTA SIAP-TEMPEL (recommend.py)")

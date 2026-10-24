@@ -118,9 +118,10 @@ def pool_counts(dsn: str, trade_date: str) -> tuple[int, int]:
     Dipakai hanya supaya penolakan "kolam kosong" bisa dibaca: angka ini yang
     membedakan "job rekomendasi belum jalan" dari "sesi ini memang tanpa nama".
     """
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         cur.execute(
             "select count(*) as semua,"
             " count(*) filter (where grade = 'A') as grade_a"
@@ -140,9 +141,10 @@ def candidates_for(
     tidak memegang angka modal yang diketik pemilik di browser, jadi lot dan
     rupiah sengaja dibiarkan kosong alih-alih diarang.
     """
-    with psycopg.connect(
-        dsn, autocommit=True, connect_timeout=15, row_factory=dict_row
-    ) as conn, conn.cursor() as cur:
+    with (
+        psycopg.connect(dsn, autocommit=True, connect_timeout=15, row_factory=dict_row) as conn,
+        conn.cursor() as cur,
+    ):
         cur.execute(
             """select r.code, r.trade_date, r.grade, r.score, r.entry_ref,
                       r.stop, r.target, r.horizon_days, a.adj_close as ref_adj
@@ -204,9 +206,7 @@ def record_claims(cur, claims: list[dict[str, Any]]) -> int:
     return masuk
 
 
-def record_refusal(
-    cur, *, trade_date: str, reason: str, detail: str | None = None
-) -> None:
+def record_refusal(cur, *, trade_date: str, reason: str, detail: str | None = None) -> None:
     """Catat satu sebab penolakan sesi itu; sebab yang sama tidak menumpuk."""
     cur.execute(
         "insert into research.claim_refusal (trade_date, reason, detail)"
@@ -235,7 +235,10 @@ def write_session(
     if gate is not None and not gate.get("allowed"):
         sebab = str(gate.get("reason") or "gerbang")
         record_refusal(
-            cur, trade_date=trade_date, reason=sebab, detail=str(gate.get("message") or "")[:500] or None
+            cur,
+            trade_date=trade_date,
+            reason=sebab,
+            detail=str(gate.get("message") or "")[:500] or None,
         )
         return {"written": 0, "refused": 0, "reason": sebab}
 
@@ -266,14 +269,17 @@ def write_session(
             # Sebab penolakan ditanyakan ke aturan yang sama yang menolaknya, bukan
             # disusun ulang di sini: dua definisi "klaim tidak lengkap" akan berbeda
             # diam-diam, dan yang muncul di buku jadi sebab yang bukan penyebabnya.
-            sebab = claim_reject_reason(
-                entry=k.get("entry_ref"),
-                stop=k.get("stop"),
-                target=k.get("target"),
-                size_pct=k.get("size_pct"),
-                size_lots=k.get("size_lots"),
-                horizon_days=k.get("horizon_days"),
-            ) or "tidak lengkap"
+            sebab = (
+                claim_reject_reason(
+                    entry=k.get("entry_ref"),
+                    stop=k.get("stop"),
+                    target=k.get("target"),
+                    size_pct=k.get("size_pct"),
+                    size_lots=k.get("size_lots"),
+                    horizon_days=k.get("horizon_days"),
+                )
+                or "tidak lengkap"
+            )
             ditolak.setdefault(sebab, []).append(str(k.get("code")))
             continue
         klaim.append(baris)
@@ -451,9 +457,7 @@ def fill_outcomes(cur, *, trade_date: str | None = None) -> dict[str, int]:
 # --------------------------------------------------------------------------- #
 
 
-def journal_summary(
-    cur, *, rule: str | None = None, code: str | None = None
-) -> dict[str, Any]:
+def journal_summary(cur, *, rule: str | None = None, code: str | None = None) -> dict[str, Any]:
     """Ringkasan buku + kalimat rekaman P3 + verdict P3.
 
     Penyaring dilakukan di Python setelah baca terbatas: bukunya kecil, dan satu

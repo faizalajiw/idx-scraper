@@ -42,10 +42,10 @@ from ..analysis import calculate_indicators, is_mechanical_sell, signal_series
 from .events import _nw_tstat
 
 # --- parameter default ------------------------------------------------------
-MIN_HISTORY_DEFAULT = 60   # warmup SMA50 + RSI; di bawah ini sinyal tidak stabil
+MIN_HISTORY_DEFAULT = 60  # warmup SMA50 + RSI; di bawah ini sinyal tidak stabil
 DEFAULT_HORIZONS: tuple[int, ...] = (5, 10, 21)
-NLAGS_DEFAULT = 1          # entry di close T+1 (disiplin backtest)
-DIV_GUARD_DAYS = 7         # window ex-dividend untuk menolak SELL palsu
+NLAGS_DEFAULT = 1  # entry di close T+1 (disiplin backtest)
+DIV_GUARD_DAYS = 7  # window ex-dividend untuk menolak SELL palsu
 BACKFILL_MONTHS_DEFAULT = 18
 
 SIGNAL_TYPES = ("BUY", "SELL")
@@ -93,8 +93,15 @@ order by trade_date, code
 """
 
 _LOG_COLUMNS = [
-    "code", "date", "signal", "close", "rsi", "sma_short", "sma_long",
-    "trend_up", "regime",
+    "code",
+    "date",
+    "signal",
+    "close",
+    "rsi",
+    "sma_short",
+    "sma_long",
+    "trend_up",
+    "regime",
 ]
 
 
@@ -187,8 +194,12 @@ def compute_signal_rows(
                     "signal": signal,
                     "close": float(row["close"]),
                     "rsi": None if pd.isna(row["RSI"]) else round(float(row["RSI"]), 2),
-                    "sma_short": None if pd.isna(row["MA_Short"]) else round(float(row["MA_Short"]), 4),
-                    "sma_long": None if pd.isna(row["MA_Long"]) else round(float(row["MA_Long"]), 4),
+                    "sma_short": None
+                    if pd.isna(row["MA_Short"])
+                    else round(float(row["MA_Short"]), 4),
+                    "sma_long": None
+                    if pd.isna(row["MA_Long"])
+                    else round(float(row["MA_Long"]), 4),
                     "trend_up": bool(row["MA_Short"] > row["MA_Long"]),
                 }
             )
@@ -259,7 +270,9 @@ def load_log(dsn: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 
 
-def backfill(dsn: str, months: int = BACKFILL_MONTHS_DEFAULT, min_history: int = MIN_HISTORY_DEFAULT) -> int:
+def backfill(
+    dsn: str, months: int = BACKFILL_MONTHS_DEFAULT, min_history: int = MIN_HISTORY_DEFAULT
+) -> int:
     """Hitung ulang histori sinyal dari layer PIT lalu tulis ulang (idempoten).
 
     Bersifat **recompute**: baris dalam rentang yang dihitung dihapus dulu lalu
@@ -502,8 +515,10 @@ def print_report(r: dict[str, Any]) -> None:
     if not r.get("signals"):
         print("  (belum ada sinyal tercatat — jalankan backfill)")
         return
-    print(f"  {r['signals']} sinyal ({r['buy']} BUY / {r['sell']} SELL)"
-          f"  {r['first_date']} -> {r['last_date']}")
+    print(
+        f"  {r['signals']} sinyal ({r['buy']} BUY / {r['sell']} SELL)"
+        f"  {r['first_date']} -> {r['last_date']}"
+    )
     for h in r["horizons"]:
         print(f"\n--- horizon {h} hari bursa ---")
         for row in r["overall"]:

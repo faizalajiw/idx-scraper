@@ -25,7 +25,9 @@ def main() -> int:
 
     # 2) Eksperimental: harapannya per-stock bila endpoint-nya masih hidup.
     try:
-        d2 = c._get_json("/primary/TradingSummary/GetStockBrokerSummary?date=20260925&start=0&length=5&stockCode=BBCA&board=RG&brokerTypes=ALL")
+        d2 = c._get_json(
+            "/primary/TradingSummary/GetStockBrokerSummary?date=20260925&start=0&length=5&stockCode=BBCA&board=RG&brokerTypes=ALL"
+        )
         results["stock_broker_keys"] = sorted(d2.keys()) if isinstance(d2, dict) else str(type(d2))
         if isinstance(d2, dict) and d2.get("data"):
             results["stock_broker_row"] = d2["data"][0]

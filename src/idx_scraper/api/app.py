@@ -231,9 +231,7 @@ def _parse_optional_date(value: str | None, field: str) -> date | None:
     try:
         return date.fromisoformat(value.strip())
     except ValueError:
-        raise HTTPException(
-            status_code=422, detail=f"{field} harus format YYYY-MM-DD"
-        ) from None
+        raise HTTPException(status_code=422, detail=f"{field} harus format YYYY-MM-DD") from None
 
 
 @app.get("/health")
@@ -247,7 +245,10 @@ def data_health(
         default=30, ge=1, le=250, description="Jumlah sesi terakhir yang dinilai tiap pemeriksa"
     ),
     row_threshold_pct: float = Query(
-        default=50.0, ge=1.0, le=100.0, description="Ambang baris vs median (%) di bawahnya sesi ditandai"
+        default=50.0,
+        ge=1.0,
+        le=100.0,
+        description="Ambang baris vs median (%) di bawahnya sesi ditandai",
     ),
 ) -> dict:
     """Kesegaran + cakupan data EOD: "boleh percaya angka di dashboard?".
@@ -298,6 +299,7 @@ def market_regime() -> dict:
 def session_movers() -> dict:
     return services.get_session_movers()
 
+
 @app.get("/api/market/leaders", response_model=MarketLeaders)
 def market_leaders(
     metric: str = Query(default="volume", description="volume | value | frequency"),
@@ -305,6 +307,7 @@ def market_leaders(
 ) -> dict:
     """Top emiten by volume/value/frequency — realtime saat jam bursa, else EOD."""
     return services.get_market_leaders(metric, limit)
+
 
 @app.get("/api/market/top-brokers", response_model=TopBrokers)
 def top_brokers(limit: int = Query(default=5, ge=1, le=50)) -> dict:
@@ -348,7 +351,11 @@ def search_stocks(
 
 
 @app.get("/api/watchlist", response_model=list[WatchlistRow])
-def watchlist(codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST")) -> list[dict]:
+def watchlist(
+    codes: str | None = Query(
+        default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"
+    ),
+) -> list[dict]:
     return services.get_watchlist(_resolve_codes(codes))
 
 
@@ -358,7 +365,7 @@ def add_to_watchlist(payload: WatchlistUpdate) -> list[dict]:
     try:
         codes = watchlist_store.update_watchlist(add=payload.codes, remove=[])
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}") from e
     settings.watchlist = codes  # keep the cached settings in sync
     return services.get_watchlist(codes)
 
@@ -372,7 +379,7 @@ def replace_watchlist(payload: WatchlistUpdate) -> list[dict]:
     try:
         codes = watchlist_store.write_watchlist(codes)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}") from e
     settings.watchlist = codes
     return services.get_watchlist(codes)
 
@@ -386,14 +393,16 @@ def remove_from_watchlist(code: str) -> list[dict]:
     try:
         codes = watchlist_store.update_watchlist(add=[], remove=[symbol])
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot persist watchlist: {e}") from e
     settings.watchlist = codes
     return services.get_watchlist(codes)
 
 
 @app.get("/api/hold-check", response_model=HoldCheckResponse)
 def hold_check(
-    codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"),
+    codes: str | None = Query(
+        default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"
+    ),
     min_days: int = Query(default=40, ge=1, le=500),
 ) -> dict:
     """Combined technical + valuation "still worth holding" verdict per ticker."""
@@ -403,13 +412,18 @@ def hold_check(
 
     with get_cursor() as cur:
         date = analytics._latest_eod_date(cur)
-    return {"date": date, "items": items,
-            "generated_at": datetime.now(timezone(timedelta(hours=7))).isoformat(timespec="seconds")}
+    return {
+        "date": date,
+        "items": items,
+        "generated_at": datetime.now(timezone(timedelta(hours=7))).isoformat(timespec="seconds"),
+    }
 
 
 @app.get("/api/signals", response_model=list[Signal])
 def signals(
-    codes: str | None = Query(default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"),
+    codes: str | None = Query(
+        default=None, description="Comma-separated tickers; defaults to IDX_WATCHLIST"
+    ),
     min_days: int = Query(default=25, ge=1, le=500),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
@@ -447,11 +461,21 @@ def stock_brokers(code: str, date: str | None = Query(default=None)) -> dict:
 @app.get("/api/recommendations", response_model=RecommendationResponse)
 def recommendations(
     limit: int = Query(default=20, ge=1, le=100, description="Jumlah kandidat yang ditampilkan"),
-    min_grade: str = Query(default="C", pattern="^[ABCabc]$", description="Grade terendah yang ditampilkan"),
-    modal: float | None = Query(default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"),
-    risk_pct: float | None = Query(default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"),
-    open_positions: int | None = Query(default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"),
-    exposure_pct: float | None = Query(default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"),
+    min_grade: str = Query(
+        default="C", pattern="^[ABCabc]$", description="Grade terendah yang ditampilkan"
+    ),
+    modal: float | None = Query(
+        default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"
+    ),
+    risk_pct: float | None = Query(
+        default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"
+    ),
+    open_positions: int | None = Query(
+        default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"
+    ),
+    exposure_pct: float | None = Query(
+        default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"
+    ),
 ) -> dict:
     """Papan kandidat beli se-pasar: skor, grade, dan level eksekusi per emiten.
 
@@ -478,10 +502,18 @@ def recommendations_track() -> dict:
 @app.get("/api/stocks/{code}/recommendation", response_model=StockRecommendation)
 def stock_recommendation(
     code: str,
-    modal: float | None = Query(default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"),
-    risk_pct: float | None = Query(default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"),
-    open_positions: int | None = Query(default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"),
-    exposure_pct: float | None = Query(default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"),
+    modal: float | None = Query(
+        default=None, gt=0, description="Modal rupiah; kosong = mode persen saja"
+    ),
+    risk_pct: float | None = Query(
+        default=None, gt=0, le=100, description="Risiko per transaksi (% modal)"
+    ),
+    open_positions: int | None = Query(
+        default=None, ge=0, description="Jumlah posisi terbuka (angka yang kamu isi)"
+    ),
+    exposure_pct: float | None = Query(
+        default=None, ge=0, le=100, description="Eksposur sekarang (% modal)"
+    ),
 ) -> dict:
     """Kandidat beli satu emiten (skor & level memakai mesin yang sama dengan papan)."""
     return analytics.get_stock_recommendation(
@@ -526,7 +558,9 @@ def foreign_flow(days: int = Query(default=20, ge=1, le=120)) -> dict:
 @app.get("/api/stocks/{code}/foreign-flow", response_model=StockForeignFlow)
 def stock_foreign_flow(
     code: str,
-    days: int = Query(default=30, ge=5, le=120, description="Jendela tren harian emiten (hari bursa)"),
+    days: int = Query(
+        default=30, ge=5, le=120, description="Jendela tren harian emiten (hari bursa)"
+    ),
     peer_days: int = Query(default=10, ge=1, le=60, description="Jendela pembanding sektor"),
     peer_limit: int = Query(default=10, ge=3, le=30, description="Maks peer yang ditampilkan"),
 ) -> dict:
@@ -536,7 +570,9 @@ def stock_foreign_flow(
     net berubah vs hari non-nol sebelumnya. Peer sektor dari map kurasi;
     ``comparable`` False menandakan bucket fallback "Lainnya".
     """
-    return analytics.get_stock_foreign_flow(code.upper(), days=days, peer_days=peer_days, peer_limit=peer_limit)
+    return analytics.get_stock_foreign_flow(
+        code.upper(), days=days, peer_days=peer_days, peer_limit=peer_limit
+    )
 
 
 @app.get("/api/smart-money/radar", response_model=SmartMoneyRadar)
@@ -645,7 +681,9 @@ def smart_money_verdicts(
 
 @app.get("/api/sectors/rotation", response_model=SectorRotation)
 def sectors_rotation(
-    lookback: int = Query(default=60, ge=5, le=250, description="Hari bursa riwayat median skor sektor"),
+    lookback: int = Query(
+        default=60, ge=5, le=250, description="Hari bursa riwayat median skor sektor"
+    ),
     min_names: int = Query(default=3, ge=2, le=50, description="Minimum emiten berskor per sektor"),
 ) -> dict:
     """Rotasi sektor dari skor aktivitas broker (proksi aliran dana).
@@ -711,6 +749,7 @@ def screener(
         min_days=min_days,
         limit=limit,
     )
+
 
 # --------------------------------------------------------------- research UI
 
