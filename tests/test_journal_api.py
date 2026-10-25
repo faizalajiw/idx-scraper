@@ -192,11 +192,12 @@ def test_claims_db_mati_fail_open(monkeypatch) -> None:
 def test_rute_halt_tanpa_sebab_menghasilkan_422(monkeypatch, tmp_path) -> None:
     from fastapi import HTTPException
 
-    from idx_scraper.api import app as app_mod
+    from idx_scraper.api.routes import operasional
+    from idx_scraper.api.schemas import JournalHaltRequest
 
     monkeypatch.setenv(HALT_PATH_ENV, str(tmp_path / "halt.json"))
     with pytest.raises(HTTPException) as e:
-        app_mod.journal_halt(app_mod.JournalHaltRequest(reason="  ", by="pemilik"))
+        operasional.journal_halt(JournalHaltRequest(reason="  ", by="pemilik"))
     assert e.value.status_code == 422
     assert "reason" in str(e.value.detail)
 
