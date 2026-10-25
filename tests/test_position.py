@@ -268,3 +268,88 @@ def test_adv_pct_sama_dengan_model_biaya_backtest():
     from idx_scraper.api.simulation import DEFAULT_COSTS
 
     assert DEFAULT_LIMITS.adv_pct == DEFAULT_COSTS["max_adv_pct"]
+
+
+# ------------------------------------------------- helper ekstraksi position_plan
+
+
+def test_normalize_position_inputs_applies_defaults():
+    from idx_scraper.research.position import _normalize_position_inputs
+
+    risk, m, open_n, expo = _normalize_position_inputs(
+        risk_pct=0.5,
+        modal=50_000_000.0,
+        open_positions=2,
+        exposure_pct=30.0,
+    )
+    assert risk == 0.5
+    assert m == 50_000_000.0
+    assert open_n == 2
+    assert expo == 30.0
+
+
+def test_normalize_position_inputs_rejects_negatif():
+    from idx_scraper.research.position import _normalize_position_inputs
+
+    risk, m, open_n, expo = _normalize_position_inputs(
+        risk_pct=-1.0,  # negatif -> None (default)
+        modal=-100.0,  # negatif -> None
+        open_positions=-1,  # negatif -> None
+        exposure_pct=None,
+    )
+    from idx_scraper.research.recommend import DEFAULT_RISK_PCT
+
+    assert risk == float(DEFAULT_RISK_PCT)
+    assert m is None
+    assert open_n is None
+    assert expo is None
+
+
+def test_normalize_position_inputs_none_is_passed_through():
+    from idx_scraper.research.position import _normalize_position_inputs
+
+    risk, m, open_n, expo = _normalize_position_inputs(
+        risk_pct=None,
+        modal=None,
+        open_positions=None,
+        exposure_pct=None,
+    )
+    from idx_scraper.research.recommend import DEFAULT_RISK_PCT
+
+    assert risk == float(DEFAULT_RISK_PCT)
+    assert m is None
+    assert open_n is None
+    assert expo is None
+
+
+def test_resolve_position_caps_gives_binding():
+    from idx_scraper.research.position import DEFAULT_LIMITS, _resolve_position_caps
+
+    _, pct, binding = _resolve_position_caps(
+        15.0,
+        m=50_000_000.0,
+        typical_day_value=1e9,
+        vol_state="VOLATILE",
+        open_n=None,
+        expo=None,
+        limits=DEFAULT_LIMITS,
+    )
+    assert "per_name" in _
+    assert 5.0 <= pct <= 15.0  # volatile cuts it in half
+    assert binding in ("regime", "per_name")
+
+
+def test_resolve_position_caps_portfolio_full_gives_room_zero():
+    from idx_scraper.research.position import DEFAULT_LIMITS, _resolve_position_caps
+
+    caps, _, binding = _resolve_position_caps(
+        10.0,
+        m=50_000_000.0,
+        typical_day_value=1e9,
+        vol_state="NORMAL",
+        open_n=10,
+        expo=80.0,
+        limits=DEFAULT_LIMITS,
+    )
+    assert binding == "portfolio"
+    assert caps["portfolio"] == 0.0

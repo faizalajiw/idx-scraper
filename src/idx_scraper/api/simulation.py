@@ -531,27 +531,22 @@ def _metrics_dict(metrics: Metrics) -> dict[str, Any]:
 # ------------------------------------------------------------------ entrypoint
 
 
-def run_backtest(
+def _validate_run_backtest(
     *,
     strategy_id: str,
     codes: list[str],
-    start: date | None = None,
-    end: date | None = None,
-    initial_cash: float = 100_000_000.0,
+    initial_cash: float,
     params: dict[str, float] | None = None,
     costs: dict[str, float | None] | None = None,
     rebalance: str = DEFAULT_REBALANCE,
-) -> dict[str, Any]:
-    """Simulate one strategy over a universe and compare it to buy & hold.
+) -> tuple[Any, dict[str, float], dict[str, float], Any, list[str], Any]:
+    """Validasi permintaan backtest sebelum menyentuh database.
 
-    The result carries both the realistic (after-cost) metrics and the
-    frictionless counterfactual, so the caller can see the cost drag.
-
-    Raises ``ValueError`` with a user-facing message for anything invalid, so
-    the HTTP layer can turn it into a 422.
+    Mengembalikan ``(spec, resolved, resolved_costs, cost_model, universe,
+    frequency)``. Semua input tidak sah melempar ``ValueError`` dengan pesan
+    siap-HTTP (layer HTTP mengubahnya menjadi 422).
     """
-    from ..backtest import Backtester, CostModel, PITReader, RebalanceFreq
-    from .config import get_settings
+    from ..backtest import CostModel, RebalanceFreq
 
     spec = STRATEGIES.get(strategy_id)
     if spec is None:
@@ -574,73 +569,84 @@ def run_backtest(
         valid = ", ".join(o["id"] for o in REBALANCE_OPTIONS)
         raise ValueError(f"frekuensi rebalance tidak dikenal: {rebalance!r} ({valid})") from None
 
-    settings = get_settings()
-    if not settings.database_url:
-        raise ValueError("DATABASE_URL belum diset — backtest membutuhkan Postgres")
+    return spec, resolved, resolved_costs, cost_model, universe, frequency
 
-    reader = PITReader(settings.database_url)
-    try:
-        first_all, last_all = reader.first_last()
-        if not first_all:
-            raise ValueError("belum ada data harga di research.prices_pit")
 
-        end_day = end or last_all
-        start_day = start or first_all
-        if start_day > end_day:
-            raise ValueError("tanggal mulai tidak boleh setelah tanggal akhir")
+def _trading_days(reader: Any, start: date | None, end: date | None) -> list[date]:
+    """Rentang hari bursa tervalidasi (potongan MAX_DAYS terakhir bila lebih)."""
+    first_all, last_all = reader.first_last()
+    if not first_all:
+        raise ValueError("belum ada data harga di research.prices_pit")
 
-        # Jika start_day == first_all dan end_day == last_all (tidak ada input user),
-        # tetap perlu seluruh trading_days -> unavoidable DISTINCT scan, tapi ini kasus
-        # yang jarang (hanya backtest untuk seluruh window tanpa filter).
-        # Jika user input start/end (atau subset dari first/last), panggil
-        # trading_days dengan filter sempit yang sudah index-driven.
-        if start_day == first_all and end_day == last_all:
-            days = reader.trading_days(first_all, last_all)
-        else:
-            days = reader.trading_days(start_day, end_day)
-        if len(days) > MAX_DAYS:
-            days = days[-MAX_DAYS:]
-        if len(days) < 2:
-            raise ValueError("rentang terlalu pendek — butuh minimal 2 hari bursa")
+    end_day = end or last_all
+    start_day = start or first_all
+    if start_day > end_day:
+        raise ValueError("tanggal mulai tidak boleh setelah tanggal akhir")
 
-        series = _build_series(reader, universe, days[-1])
-        if not series:
-            raise ValueError("tidak ada harga untuk emiten terpilih pada rentang ini")
+    # Jika start_day == first_all dan end_day == last_all (tidak ada input user),
+    # tetap perlu seluruh trading_days -> unavoidable DISTINCT scan, tapi ini kasus
+    # yang jarang (hanya backtest untuk seluruh window tanpa filter).
+    # Jika user input start/end (atau subset dari first/last), panggil
+    # trading_days dengan filter sempit yang sudah index-driven.
+    if start_day == first_all and end_day == last_all:
+        days = reader.trading_days(first_all, last_all)
+    else:
+        days = reader.trading_days(start_day, end_day)
+    if len(days) > MAX_DAYS:
+        days = days[-MAX_DAYS:]
+    if len(days) < 2:
+        raise ValueError("rentang terlalu pendek — butuh minimal 2 hari bursa")
+    return days
 
-        strategy = _make_strategy(spec.select, series, resolved)
-        runner = Backtester(reader)
-        result = runner.run(
+
+def _run_passes(
+    runner: Any,
+    strategy: Callable[[Any], dict[str, Any]] | Any,
+    days: list[date],
+    initial_cash: float,
+    cost_model: Any,
+    frequency: Any,
+) -> tuple[Any, Any]:
+    """Dua lintasan: realistis (dengan biaya) dan frictionless (pembanding)."""
+    result = runner.run(
+        strategy,
+        days[0],
+        days[-1],
+        initial_cash=initial_cash,
+        costs=cost_model,
+        rebalance=frequency,
+    )
+    # Frictionless counterfactual. The strategy closure is pure, so the extra
+    # pass is deterministic; skip it entirely when there is nothing to model.
+    gross = (
+        result
+        if cost_model.is_frictionless
+        else runner.run(
             strategy,
             days[0],
             days[-1],
             initial_cash=initial_cash,
-            costs=cost_model,
             rebalance=frequency,
+            record_ledger=False,
         )
-        # Frictionless counterfactual. The strategy closure is pure, so the extra
-        # pass is deterministic; skip it entirely when there is nothing to model.
-        gross = (
-            result
-            if cost_model.is_frictionless
-            else runner.run(
-                strategy,
-                days[0],
-                days[-1],
-                initial_cash=initial_cash,
-                rebalance=frequency,
-                record_ledger=False,
-            )
-        )
-        benchmark_curve = _buy_and_hold_curve(
-            series,
-            days,
-            initial_cash,
-            commission_pct=cost_model.commission_pct,
-            slippage_pct=cost_model.slippage_pct,
-        )
-    finally:
-        reader.close()
+    )
+    return result, gross
 
+
+def _backtest_payload(
+    *,
+    spec: Any,
+    resolved: dict[str, float],
+    resolved_costs: dict[str, float],
+    series: Any,
+    days: list[date],
+    initial_cash: float,
+    frequency: Any,
+    result: Any,
+    gross: Any,
+    benchmark_curve: list[tuple[date, float]],
+) -> dict[str, Any]:
+    """Bentuk akhir respons API: metrik realistis, frictionless, dan benchmark."""
     benchmark_by_date = dict(benchmark_curve)
     equity_curve = [
         {
@@ -687,3 +693,72 @@ def run_backtest(
         "equity_curve": equity_curve,
         "disclaimer": DISCLAIMER,
     }
+
+
+def run_backtest(
+    *,
+    strategy_id: str,
+    codes: list[str],
+    start: date | None = None,
+    end: date | None = None,
+    initial_cash: float = 100_000_000.0,
+    params: dict[str, float] | None = None,
+    costs: dict[str, float | None] | None = None,
+    rebalance: str = DEFAULT_REBALANCE,
+) -> dict[str, Any]:
+    """Simulate one strategy over a universe and compare it to buy & hold.
+
+    The result carries both the realistic (after-cost) metrics and the
+    frictionless counterfactual, so the caller can see the cost drag.
+
+    Raises ``ValueError`` with a user-facing message for anything invalid, so
+    the HTTP layer can turn it into a 422.
+    """
+    from ..backtest import Backtester, PITReader
+    from .config import get_settings
+
+    spec, resolved, resolved_costs, cost_model, universe, frequency = _validate_run_backtest(
+        strategy_id=strategy_id,
+        codes=codes,
+        initial_cash=initial_cash,
+        params=params,
+        costs=costs,
+        rebalance=rebalance,
+    )
+
+    settings = get_settings()
+    if not settings.database_url:
+        raise ValueError("DATABASE_URL belum diset — backtest membutuhkan Postgres")
+
+    reader = PITReader(settings.database_url)
+    try:
+        days = _trading_days(reader, start, end)
+
+        series = _build_series(reader, universe, days[-1])
+        if not series:
+            raise ValueError("tidak ada harga untuk emiten terpilih pada rentang ini")
+        strategy = _make_strategy(spec.select, series, resolved)
+        runner = Backtester(reader)
+        result, gross = _run_passes(runner, strategy, days, initial_cash, cost_model, frequency)
+        benchmark_curve = _buy_and_hold_curve(
+            series,
+            days,
+            initial_cash,
+            commission_pct=cost_model.commission_pct,
+            slippage_pct=cost_model.slippage_pct,
+        )
+    finally:
+        reader.close()
+
+    return _backtest_payload(
+        spec=spec,
+        resolved=resolved,
+        resolved_costs=resolved_costs,
+        series=series,
+        days=days,
+        initial_cash=initial_cash,
+        frequency=frequency,
+        result=result,
+        gross=gross,
+        benchmark_curve=benchmark_curve,
+    )

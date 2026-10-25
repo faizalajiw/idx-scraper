@@ -320,6 +320,89 @@ def test_overextended_price_is_flagged_tanpa_mengarang_poin():
     assert any("overbought" in w.lower() or "waspada" in w.lower() for w in stretched["warnings"])
 
 
+# ------------------------------------------------- helper ekstraksi score_candidate
+
+
+def test_layer_points_hanya_dari_lapisan_tervalidasi():
+    from idx_scraper.research.recommend.skor import _layer_points
+
+    assert _layer_points(3.0, True, -8.0, True) == -5.0
+    assert _layer_points(10.0, False, -8.0, True) == -8.0
+    assert _layer_points(10.0, True, -8.0, False) == 10.0
+    assert _layer_points(0.0, True, 0.0, True) == 0.0
+    assert _layer_points(5.0, False, 5.0, False) == 0.0
+
+
+def test_layer_notes_positif_ke_reasons_negatif_ke_warnings():
+    from idx_scraper.research.recommend.skor import _layer_notes
+
+    reasons, warnings = _layer_notes(3.0, True, -8.0, True)
+    assert len(reasons) == 1 and len(warnings) == 1
+    assert "faktor IC" in reasons[0]
+    assert "broker" in warnings[0]
+    assert _layer_notes(3.0, False, -8.0, False) == ([], [])
+
+
+def test_layer_notes_angka_ditulis_bertanda():
+    from idx_scraper.research.recommend.skor import _layer_notes
+
+    reasons, _ = _layer_notes(2.5, True, 0.0, True)
+    assert "+2.5" in reasons[0]
+
+
+def test_risk_notes_z_score_dan_atr():
+    from idx_scraper.research.recommend.skor import _risk_notes
+
+    assert _risk_notes(base_metrics()) == []
+    assert any("overbought" in n.lower() for n in _risk_notes(base_metrics(z_score=2.2)))
+    assert any("waspada" in n.lower() for n in _risk_notes(base_metrics(z_score=1.6)))
+    assert any("ATR" in n for n in _risk_notes(base_metrics(atr_pct=9.0)))
+    assert _risk_notes(base_metrics(z_score=1.0, atr_pct=5.0)) == []
+
+
+def test_candidate_inputs_menolak_kandidat_tak_layak():
+    from idx_scraper.research.recommend.skor import _candidate_inputs
+
+    assert _candidate_inputs(base_metrics(code="  ")) is None
+    assert _candidate_inputs(base_metrics(hist_days=30)) is None
+    assert _candidate_inputs(base_metrics(signal="SELL")) is None
+    got = _candidate_inputs(base_metrics())
+    assert got is not None
+    code, _, _, _, _, plan = got
+    assert code == "TEST"
+    assert plan is not None and plan["setup"]
+
+
+def test_candidate_payload_membawa_level_dan_jejak():
+    from idx_scraper.research.recommend.skor import _candidate_inputs, _candidate_payload
+
+    got = _candidate_inputs(base_metrics())
+    assert got is not None
+    code, _, _, _, _, plan = got
+    ev = smart_money_evidence(buy_patterns=[], sell_patterns=[], histories=None)
+    payload = _candidate_payload(
+        code,
+        base_metrics(),
+        plan,
+        ev,
+        score=71.25,
+        h=DEFAULT_HORIZON,
+        layers={"factor": False, "broker": False, "smart_money": False},
+        reasons=["ada alasan"],
+        warnings=["ada peringatan"],
+    )
+    assert payload["code"] == "TEST"
+    assert isinstance(payload["score"], float)
+    assert payload["entry_low"] == plan["entry_low"]
+    assert payload["entry_note"] == plan["note"]
+    assert payload["horizon_days"] == DEFAULT_HORIZON
+    assert payload["confidence"] == ev["best_confidence"]
+    assert payload["reasons"] == ["ada alasan"]
+    assert payload["warnings"] == ["ada peringatan"]
+    assert payload["metrics"]["close"] == 1000.0
+    assert payload["metrics"]["hist_days"] == 200
+
+
 # --------------------------------------------------------------- grade = peringkat pool
 
 

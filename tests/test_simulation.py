@@ -232,3 +232,46 @@ def test_metrics_dict_serializes_none():
         "volatility",
         "sharpe",
     }
+
+
+# ------------------------------------------------- helper ekstraksi run_backtest
+
+
+def test_validate_run_backtest_raises_unknown_strategy():
+    from idx_scraper.api import simulation as sim_mod
+
+    with pytest.raises(ValueError, match="tidak dikenal"):
+        sim_mod._validate_run_backtest(
+            strategy_id="TIDAK ADA", codes=["BBCA"], initial_cash=100_000_000.0
+        )
+
+
+def test_validate_run_backtest_raises_empty_universe():
+    from idx_scraper.api import simulation as sim_mod
+
+    with pytest.raises(ValueError, match="kosong"):
+        sim_mod._validate_run_backtest(strategy_id="ma_cross", codes=[], initial_cash=100_000_000.0)
+
+
+def test_validate_run_backtest_raises_negative_cash():
+    from idx_scraper.api import simulation as sim_mod
+
+    with pytest.raises(ValueError, match="lebih besar dari 0"):
+        sim_mod._validate_run_backtest(strategy_id="ma_cross", codes=["BBCA"], initial_cash=0.0)
+    with pytest.raises(ValueError, match="lebih besar dari 0"):
+        sim_mod._validate_run_backtest(strategy_id="ma_cross", codes=["BBCA"], initial_cash=-1.0)
+
+
+def test_validate_run_backtest_returns_validated_tuple():
+    from idx_scraper.api import simulation as sim_mod
+
+    result = sim_mod._validate_run_backtest(
+        strategy_id="ma_cross",
+        codes=["bbca", "  BBCA  "],  # dedup + strip test
+        initial_cash=50_000_000.0,
+        costs={"commission_pct": 0.001},
+    )
+    assert isinstance(result, tuple)
+    assert result[0].id == "ma_cross"  # spec
+    assert result[3].commission_pct == 0.001  # cost_model
+    assert result[4] == ["BBCA"]  # universe cleaned

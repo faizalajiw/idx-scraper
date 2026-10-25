@@ -155,23 +155,19 @@ def _empty_plan(limits: PositionLimits, note: str, concurrent: float | None) -> 
     }
 
 
-def position_plan(
+def _normalize_position_inputs(
     *,
-    entry: float | None,
-    stop: float | None,
-    modal: float | None = None,
-    risk_pct: float | None = None,
-    typical_day_value: float | None = None,
-    vol_state: str | None = None,
-    open_positions: int | None = None,
-    exposure_pct: float | None = None,
-    limits: PositionLimits = DEFAULT_LIMITS,
-) -> dict[str, Any]:
-    """Rencana posisi satu nama: persen modal, rupiah, lot, dan rugi di stop.
+    risk_pct: float | None,
+    modal: float | None,
+    open_positions: int | None,
+    exposure_pct: float | None,
+) -> tuple[float, float | None, int | None, float | None]:
+    """Normalisasi parameter posisi: terapkan default, tolak nilai tidak sah.
 
-    Parameter ``typical_day_value`` sengaja bernama sama dengan fungsi modul ini
-    (spec memakai nama itu): di dalam badan fungsi ini yang dimaksud selalu nilai
-    yang sudah dihitung pemanggil, bukan fungsinya.
+    ``risk`` kosong atau <= 0 jatuh ke ``DEFAULT_RISK_PCT``; modal <= 0 dianggap
+    belum diisi; ``open_n`` dan eksposur negatif dianggap belum diisi — rute
+    sudah menolaknya, tetapi fungsi murni tetap tidak boleh menghasilkan risiko
+    negatif atau ruang eksposur di atas 100% untuk pemanggil berikutnya.
     """
     risk = _num(risk_pct)
     if risk is None or risk <= 0:
@@ -183,22 +179,24 @@ def position_plan(
 
     open_n = _int_of(open_positions)
     if open_n is not None and open_n < 0:
-        # Keadaan tidak sah diperlakukan "belum diisi": rute sudah menolaknya,
-        # tetapi fungsi murni tetap tidak boleh menghasilkan risiko negatif atau
-        # ruang eksposur di atas 100% untuk pemanggil berikutnya.
         open_n = None
     expo = _num(exposure_pct)
     if expo is not None and expo < 0:
         expo = None
 
-    pct_raw = position_size_pct(entry=entry, stop=stop, risk_pct=risk, max_pct=math.inf)
-    if pct_raw is None:
-        return _empty_plan(
-            limits,
-            "Stop tidak valid: rencana ukuran tidak bisa dihitung.",
-            _concurrent_risk(risk, open_n),
-        )
+    return risk, m, open_n, expo
 
+
+def _position_caps(
+    pct_raw: float,
+    m: float | None,
+    typical_day_value: float | None,
+    vol_state: str | None,
+    open_n: int | None,
+    expo: float | None,
+    limits: PositionLimits,
+) -> dict[str, float | None]:
+    """Empat plafon porsi (spec bagian 4): per nama, likuiditas, rezim, portofolio."""
     caps: dict[str, float | None] = {"per_name": float(limits.max_position_pct)}
 
     adv = _num(typical_day_value)
@@ -219,20 +217,34 @@ def position_plan(
     if count_full:
         room = 0.0
     caps["portfolio"] = round(room, 1) if room is not None else None
+    return caps
 
-    pct = round(min([pct_raw] + [v for v in caps.values() if v is not None]), 1)
 
-    binding: str | None = None
-    # Yang benar-benar memotong = plafon yang angkanya sama dengan hasil akhir.
-    # Dua plafon bisa sama-sama memotong (mis. VOLATILE lalu buku penuh): yang
-    # dipanggil harus yang menyentuh angka akhir, bukan yang kebetulan pertama
-    # lebih kecil dari porsi mentah.
+def _position_binding(
+    caps: dict[str, float | None],
+    pct_raw: float,
+    pct: float,
+) -> str | None:
+    """Plafon yang benar-benar memotong: angkanya sama dengan hasil akhir.
+
+    Dua plafon bisa sama-sama memotong (mis. VOLATILE lalu buku penuh): yang
+    dipanggil harus yang menyentuh angka akhir, bukan yang kebetulan pertama
+    lebih kecil dari porsi mentah. Urutan ``CAP_ORDER`` menentukan pemenang.
+    """
     for name in CAP_ORDER:
         value = caps.get(name)
         if value is not None and value < pct_raw and round(value, 1) == pct:
-            binding = name
-            break
+            return name
+    return None
 
+
+def _position_lots(
+    m: float | None,
+    entry: float | None,
+    stop: float | None,
+    pct: float,
+) -> tuple[int | None, float | None, float | None]:
+    """Konversi porsi ke lot BEI: dibulatkan ke bawah, plus rupiah dan rugi di stop."""
     lots: int | None = None
     rupiah: float | None = None
     risk_rupiah: float | None = None
@@ -244,7 +256,37 @@ def position_plan(
             lots = int(budget // (ONE_LOT * e))
             rupiah = round(lots * ONE_LOT * e, 2)
             risk_rupiah = round(lots * ONE_LOT * (e - s), 2)
+    return lots, rupiah, risk_rupiah
 
+
+def _resolve_position_caps(
+    pct_raw: float,
+    *,
+    m: float | None,
+    typical_day_value: float | None,
+    vol_state: str | None,
+    open_n: int | None,
+    expo: float | None,
+    limits: PositionLimits,
+) -> tuple[dict[str, float | None], float, str | None]:
+    """Plafon + porsi akhir + plafon yang memotong, dalam satu panggilan."""
+    caps = _position_caps(pct_raw, m, typical_day_value, vol_state, open_n, expo, limits)
+    pct = round(min([pct_raw] + [v for v in caps.values() if v is not None]), 1)
+    return caps, pct, _position_binding(caps, pct_raw, pct)
+
+
+def _position_notes(
+    *,
+    binding: str | None,
+    count_full: bool,
+    open_n: int | None,
+    expo: float | None,
+    m: float | None,
+    lots: int | None,
+    pct: float,
+    limits: PositionLimits,
+) -> list[str]:
+    """Catatan untuk pembaca: plafon yang memotong, buku penuh, bidang kosong."""
     notes: list[str] = []
     if binding == "liquidity":
         notes.append("Dipotong plafon likuiditas (2% nilai transaksi harian).")
@@ -282,6 +324,65 @@ def position_plan(
         notes.append("Posisi terbuka belum diisi: batas jumlah posisi dilewati.")
     elif expo is None:
         notes.append("Eksposur belum diisi: batas eksposur dilewati.")
+    return notes
+
+
+def position_plan(
+    *,
+    entry: float | None,
+    stop: float | None,
+    modal: float | None = None,
+    risk_pct: float | None = None,
+    typical_day_value: float | None = None,
+    vol_state: str | None = None,
+    open_positions: int | None = None,
+    exposure_pct: float | None = None,
+    limits: PositionLimits = DEFAULT_LIMITS,
+) -> dict[str, Any]:
+    """Rencana posisi satu nama: persen modal, rupiah, lot, dan rugi di stop.
+
+    Parameter ``typical_day_value`` sengaja bernama sama dengan fungsi modul ini
+    (spec memakai nama itu): di dalam badan fungsi ini yang dimaksud selalu nilai
+    yang sudah dihitung pemanggil, bukan fungsinya.
+    """
+    risk, m, open_n, expo = _normalize_position_inputs(
+        risk_pct=risk_pct,
+        modal=modal,
+        open_positions=open_positions,
+        exposure_pct=exposure_pct,
+    )
+
+    pct_raw = position_size_pct(entry=entry, stop=stop, risk_pct=risk, max_pct=math.inf)
+    if pct_raw is None:
+        return _empty_plan(
+            limits,
+            "Stop tidak valid: rencana ukuran tidak bisa dihitung.",
+            _concurrent_risk(risk, open_n),
+        )
+
+    caps, pct, binding = _resolve_position_caps(
+        pct_raw,
+        m=m,
+        typical_day_value=typical_day_value,
+        vol_state=vol_state,
+        open_n=open_n,
+        expo=expo,
+        limits=limits,
+    )
+    count_full = open_n is not None and open_n >= limits.max_open_positions
+
+    lots, rupiah, risk_rupiah = _position_lots(m, entry, stop, pct)
+
+    notes = _position_notes(
+        binding=binding,
+        count_full=count_full,
+        open_n=open_n,
+        expo=expo,
+        m=m,
+        lots=lots,
+        pct=pct,
+        limits=limits,
+    )
 
     return {
         "pct": pct,
