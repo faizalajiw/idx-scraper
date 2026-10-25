@@ -78,9 +78,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Facade paket analytics: semua impor di sini adalah re-export sengaja
-# supaya nama lama tetap tersedia untuk app.py/dossier.py/services.py.
+# Facade paket schemas & analytics: semua impor di sini adalah re-export
+# sengaja supaya nama lama tetap tersedia untuk app.py/services.py/tes.
 "src/idx_scraper/api/analytics/__init__.py" = ["F401"]
+"src/idx_scraper/api/schemas/__init__.py" = ["F401"]
 # CLI loads dotenv before imports on purpose
 "src/idx_scraper/cli.py" = ["E402"]
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
