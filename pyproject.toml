@@ -40,6 +40,11 @@ dev = [
     # disetujui. Versi naik lewat commit yang sengaja (bump + jalankan
     # `ruff check src tests scripts`), bukan lewat resolusi otomatis.
     "ruff==0.16.8",
+    # mypy dipin juga: hasil pemeriksaannya berubah antar rilis, jadi gerbang
+    # tipe di CI harus memakai versi yang sama dengan lokal. 1.19.1 (bukan
+    # 1.14) karena stub numpy memakai PEP 695 `type` alias yang butuh parser
+    # mypy baru (lihat [tool.mypy] python_version di bawah).
+    "mypy==1.19.1",
     "numpy>=1.26",
 ]
 
@@ -147,6 +152,22 @@ ignore = [
 "src/idx_scraper/api/analytics/screener.py" = ["BLE001"]
 "src/idx_scraper/api/services/inti.py" = ["BLE001"]
 "src/idx_scraper/api/services/sinyal.py" = ["BLE001"]
+
+# [tool.mypy] — bertahap: hanya modul hasil pecahan yang diperiksa di CI,
+# modul lama belum. Versi mypy dipin di extra ``dev`` (lihat atas).
+[tool.mypy]
+# 3.12 (bukan 3.11): stub numpy/pandas memakai PEP 695 `type` alias yang hanya
+# bisa diparse dengan target 3.12+. Kode proyek kompatibel keduanya.
+python_version = "3.12"
+check_untyped_defs = false
+ignore_missing_imports = true
+warn_unused_ignores = false
+show_error_codes = true
+
+# Bila stub pihak ketiga bermasalah lagi, tambahkan di sini.
+[[tool.mypy.overrides]]
+module = ["pandas.*"]
+follow_imports = "skip"
 
 [tool.coverage.run]
 source = ["src/idx_scraper"]

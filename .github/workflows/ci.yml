@@ -39,6 +39,11 @@ jobs:
         # gaya lolos sampai ada yang menjalankan `ruff format` lokal.
         run: ruff format --check src tests scripts
 
+      - name: Type check (mypy, modul ter-migrasi)
+        # Bertahap: hanya modul yang sudah dimigrasikan ke anotasi tipe yang
+        # diblokir. Daftarnya membesar seiring migrasi (tiket FAI-26).
+        run: mypy src/idx_scraper/cf_transport.py src/idx_scraper/client.py src/idx_scraper/api/analytics/_common.py
+
       - name: Tests (pytest + coverage)
         # Ambang coverage ada di [tool.coverage.report] fail_under: pytest-cov
         # keluar non-zero kalau turun di bawahnya.

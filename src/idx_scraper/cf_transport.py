@@ -27,9 +27,19 @@ import logging
 import os
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from curl_cffi import requests as cf_requests
+
+if TYPE_CHECKING:
+    # Playwright hanya diimpor runtime di dalam BrowserTransport (lihat docstring
+    # modul); untuk anotasi cukup tipe saat mengetik saja.
+    from playwright.async_api import Page
+
+logger = logging.getLogger(__name__)
+
+#: Bentuk nilai JSON apa pun yang dikembalikan endpoint IDX (json.loads).
+JSONValue: TypeAlias = dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +116,7 @@ class BrowserTransport:
                 break
         self._context, self._page = context, page
 
-    def _revive_if_dead(self) -> Any:
+    def _revive_if_dead(self) -> Page | None:
         """Pastikan halaman hidup; bangun ulang bila tertutup/crash.
 
         Transport headful gampang mati karena user tidak sengaja menutup
@@ -147,6 +157,8 @@ class BrowserTransport:
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is not None and self._loop.is_running():
             return self._loop
+        # Selanjutnya pasti mengisi self._loop (thread bootstrap menunggu
+        # ``_ready``); assert di bawah menenangkan type checker, bukan guard baru.
 
         async def _run():
             await self._open_browser_async()
@@ -174,6 +186,7 @@ class BrowserTransport:
         self._thread = threading.Thread(target=_bootstrap, daemon=True)
         self._thread.start()
         self._ready.wait(timeout=180)
+        assert self._loop is not None
         return self._loop
 
     def _call(self, coro):
@@ -183,10 +196,10 @@ class BrowserTransport:
 
     # ---------------- public API ----------------
 
-    def ensure_open(self) -> Any:
+    def ensure_open(self) -> Page | None:
         return self._revive_if_dead()
 
-    def get(self, path: str) -> Any | None:
+    def get(self, path: str) -> JSONValue | None:
         """Fetch an IDX JSON endpoint from inside the cleared page."""
         page = self.ensure_open()
 
@@ -291,14 +304,14 @@ class HttpTransport:
 
     def __init__(self, impersonate: str | None = None) -> None:
         self.impersonate = impersonate or IMPERSONATE
-        self._session = cf_requests.Session()
+        self._session: cf_requests.Session = cf_requests.Session()
         self.last_status: int | None = None
 
-    def ensure_open(self) -> Any:
+    def ensure_open(self) -> HttpTransport:
         """Tidak ada yang perlu dibuka — ada agar API-nya seragam."""
         return self
 
-    def get(self, path: str) -> Any | None:
+    def get(self, path: str) -> JSONValue | None:
         url = f"{IDX_BASE}{path}"
         r = self._session.get(url, impersonate=self.impersonate, headers=_HTTP_HEADERS, timeout=30)
         self.last_status = r.status_code
@@ -347,22 +360,22 @@ class AutoTransport:
         self.last_status: int | None = None
 
     @property
-    def http(self) -> Any:
+    def http(self) -> HttpTransport:
         if self._http is None:
             self._http = self._http_factory()
         return self._http
 
     @property
-    def browser(self) -> Any:
+    def browser(self) -> BrowserTransport:
         if self._browser is None:
             self._browser = self._browser_factory()
         return self._browser
 
-    def ensure_open(self) -> Any:
+    def ensure_open(self) -> HttpTransport:
         # Hanya menyiapkan HTTP; Chrome tidak dibuka sampai memang dibutuhkan.
         return self.http.ensure_open()
 
-    def get(self, path: str) -> Any | None:
+    def get(self, path: str) -> JSONValue | None:
         if time.monotonic() >= self._http_blocked_until:
             raw = None
             try:
@@ -394,7 +407,7 @@ class AutoTransport:
                     t.close()
 
 
-def make_transport() -> Any:
+def make_transport() -> HttpTransport | BrowserTransport | AutoTransport:
     """Pilih transport dari env ``IDX_TRANSPORT``.
 
     - ``auto`` (default) — HTTP dulu, browser hanya bila IDX menolak

@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 
@@ -26,7 +26,7 @@ WIB = timezone(timedelta(hours=7))
 
 # Cache in-process untuk event study & factors overview: query panel + compute
 # butuh detik-an; data harian tidak berubah intraday. Key -> (monotonic_ts, val).
-_RESEARCH_CACHE: dict[str, tuple[float, Any]] = {}
+_RESEARCH_CACHE: dict[str, tuple[float, float, Any]] = {}
 _RESEARCH_TTL = 3600.0  # 1 jam
 
 
@@ -64,9 +64,12 @@ def clear_research_cache() -> int:
     return n
 
 
+T = TypeVar("T")
+
+
 def research_cache_once(
-    key: str, compute: Callable[[], Any], ttl: float | None = None, wait: float = 180.0
-) -> Any:
+    key: str, compute: Callable[[], T], ttl: float | None = None, wait: float = 180.0
+) -> T | None:
     """Hitung ``compute()`` sekali untuk satu key, walau banyak pemanggil bersamaan.
 
     Permintaan yang menemukan key sedang dihitung menunggu hasilnya, bukan

@@ -10,7 +10,7 @@ import logging
 import math
 import threading
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yfinance as yf
 from curl_cffi import requests as cf_requests
@@ -18,6 +18,12 @@ from pydantic import BaseModel
 
 from .cf_transport import make_transport
 from .models import EodStockRow, IndexQuote, StockQuote
+
+if TYPE_CHECKING:
+    # Hanya untuk anotasi: tiga bentuk transport yang bisa dipakai sesi.
+    from .cf_transport import AutoTransport, BrowserTransport, HttpTransport
+
+    Transport = AutoTransport | BrowserTransport | HttpTransport
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +41,7 @@ class IDXClient:
         # dua thread bisa membangun transport dua kali.
         self._lock = threading.Lock()
 
-    def _ensure_session(self) -> Any:
+    def _ensure_session(self) -> Transport:
         if self.session is None:
             with self._lock:
                 if self.session is None:
@@ -62,11 +68,13 @@ class IDXClient:
             return False
         return isinstance(raw, (list, dict)) and bool(raw)
 
-    def _get_json(self, path: str) -> Any | None:
+    def _get_json(self, path: str) -> dict[str, Any] | list[Any] | None:
         self.warmup()
         try:
             r = self._ensure_session().get(path)
-            if r is None:
+            # Endpoint IDX selalu balik object/array; string/angka berarti
+            # respons rusak — perlakukan sama seperti None.
+            if not isinstance(r, (dict, list)):
                 return None
             return r
         except Exception as e:
@@ -104,16 +112,17 @@ class IDXClient:
         self, index_code: str = "COMPOSITE", period: str = "1D"
     ) -> dict[str, Any] | None:
         """Fetch intraday chart data for an index."""
-        return self._get_json(
+        raw = self._get_json(
             f"/primary/helper/GetIndexChart?indexCode={index_code}&period={period}"
         )
+        return raw if isinstance(raw, dict) else None
 
     # --- Per-emiten snapshot ---
 
     def fetch_trading_daily(self, code: str) -> StockQuote | None:
         """Near-real-time price snapshot for a single ticker."""
         raw = self._get_json(f"/primary/ListedCompany/GetTradingInfoDaily?code={code}")
-        if not raw or not raw.get("SecurityCode"):
+        if not isinstance(raw, dict) or not raw.get("SecurityCode"):
             return None
         now = datetime.now(WIB)
         return StockQuote(
@@ -142,7 +151,7 @@ class IDXClient:
     def fetch_stock_summary(self, date: str) -> list[EodStockRow]:
         """EOD OHLC for all tickers on a given date (YYYYMMDD)."""
         raw = self._get_json(f"/primary/TradingSummary/GetStockSummary?date={date}")
-        if not raw or not isinstance(raw.get("data"), list):
+        if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
             return []
         now = datetime.now(WIB)
         results: list[EodStockRow] = []
@@ -208,7 +217,7 @@ class IDXClient:
 
     def fetch_securities_stock(self, start: int = 0, length: int = 9999) -> list[dict[str, Any]]:
         raw = self._get_json(f"/primary/StockData/GetSecuritiesStock?start={start}&length={length}")
-        if not raw or not isinstance(raw.get("data"), list):
+        if not isinstance(raw, dict) or not isinstance(raw.get("data"), list):
             return []
         return raw["data"]
 

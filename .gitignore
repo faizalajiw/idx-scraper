@@ -47,3 +47,6 @@ scripts/_*.py
 /_restart-api.flag
 /_restart-api.log
 .superpowers/
+
+# mypy cache
+.mypy_cache/
