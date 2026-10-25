@@ -64,7 +64,7 @@ target-version = "py311"
 # ARG sengaja belum diambil: 185 argumen tak terpakai sebagian besar adalah
 # parameter callback/route yang harus tetap bernama; butuh rename massal tanpa
 # manfaat perilaku.
-select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "T20"]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "T20", "BLE001", "S110"]
 ignore = [
     # Karakter tipografis (—, –, ×, →, ±) disengaja di docstring/komentar berbahasa
     # Indonesia; RUF002/RUF003 akan memaksa ASCII dan membuat prosa lebih buruk.
@@ -88,16 +88,65 @@ ignore = [
 "src/idx_scraper/research/recommend/__init__.py" = ["F401"]
 "src/idx_scraper/cli/__init__.py" = ["F401"]
 # CLI loads dotenv before imports on purpose
-"src/idx_scraper/cli/*.py" = ["E402"]
+"src/idx_scraper/cli/*.py" = ["E402", "BLE001"]
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
 # bisa diimpor saat dijalankan langsung (`python scripts/check_eod_gaps.py`).
 "scripts/check_eod_gaps.py" = ["E402"]
 # `scripts/` = skrip operasional satu-pakai yang dijalankan manual; keluarannya
 # memang print, bukan log terstruktur. `print` hanya boleh hidup di
 # `logging_setup.say` di dalam paket.
-"scripts/*.py" = ["T201"]
+"scripts/*.py" = ["T201", "BLE001"]
 # Pintu keluaran tunggal: satu-satunya `print` di `src/` ada di sini.
-"src/idx_scraper/logging_setup.py" = ["T201"]
+# BLE001 juga di-ignore di sini: ini handler log terakhir yang tidak boleh
+# melempar saat konsol rusak (lihat kelompok 3 di bawah).
+"src/idx_scraper/logging_setup.py" = ["T201", "BLE001"]
+
+# BLE001 — catch luas yang disengaja di lapisan batas. Dikelompokkan per
+# peran, bukan per situs: setiap kelompok punya alasan yang sama.
+#
+# 1. Transport jaringan & notifikasi: kode di bawah try berbicara dengan
+#    IDX/Cloudflare, Playwright, Yahoo, Telegram, dan WebSocket. Kegagalannya
+#    beragam (curl_cffi, playwright.async_api, socket.timeout, json,
+#    httpx, SSL, DNS) dan tiap kegagalan didegradasi menjadi None/False
+#    plus logger.warning, bukan crash scheduler. Tipe spesifik hanya
+#    menggeser risiko melewatkan kegagalan Cloudflare/timeout yang belum
+#    dikenal, jadi dibiarkan luas secara sengaja.
+"src/idx_scraper/cf_transport.py" = ["BLE001"]
+"src/idx_scraper/client.py" = ["BLE001"]
+"src/idx_scraper/news.py" = ["BLE001"]
+"src/idx_scraper/live_capture.py" = ["BLE001"]
+"src/idx_scraper/notify.py" = ["BLE001"]
+#
+# 2. Persistensi & state: koneksi Postgres bisa diputus pooler di tengah
+#    jalan (storage.py: probe `select 1` + reconnect), tabel riset boleh
+#    belum ada (signal_log, recommendation_log: `except Exception: return
+#    {}` yang didokumentasikan "kosong OK"), dan probe reachability
+#    (source_state) sengaja menganggap pengecualian apa pun = IDX down.
+"src/idx_scraper/storage.py" = ["BLE001"]
+"src/idx_scraper/source_state.py" = ["BLE001"]
+"src/idx_scraper/research/signal_log.py" = ["BLE001"]
+"src/idx_scraper/research/recommendation_log.py" = ["BLE001"]
+"src/idx_scraper/research/composite.py" = ["BLE001"]
+"src/idx_scraper/research/ic.py" = ["BLE001"]
+#
+# 3. CLI & job loop: satu perintah/satu job tidak boleh mati karena satu
+#    simbol atau satu endpoint; kegagalan diberitahu lewat `say(..., err=True)`
+#    lalu loop lanjut. (BLE001 untuk cli/*.py, scripts/*.py, dan
+#    logging_setup.py digabung ke entri wildcard/T201 di atas.)
+#
+# 4. Guard endpoint API: tiap handler membungkus query DB/pemanggilan service
+#    dengan try/except yang mengembalikan payload kosong/None supaya satu
+#    tabel rusak tidak meruntuhkan seluruh respons endpoint.
+"src/idx_scraper/api/app.py" = ["BLE001"]
+"src/idx_scraper/api/journal.py" = ["BLE001"]
+"src/idx_scraper/api/dossier.py" = ["BLE001"]
+"src/idx_scraper/api/analytics/decision.py" = ["BLE001"]
+"src/idx_scraper/api/analytics/recommendation.py" = ["BLE001"]
+"src/idx_scraper/api/analytics/smart_money.py" = ["BLE001"]
+"src/idx_scraper/api/analytics/factors.py" = ["BLE001"]
+"src/idx_scraper/api/analytics/screener.py" = ["BLE001"]
+"src/idx_scraper/api/services/inti.py" = ["BLE001"]
+"src/idx_scraper/api/services/sinyal.py" = ["BLE001"]
 
 [tool.coverage.run]
 source = ["src/idx_scraper"]

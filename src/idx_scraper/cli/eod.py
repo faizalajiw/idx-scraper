@@ -163,8 +163,8 @@ def _simpan_eod_hari(client: IDXClient, storage, day: date) -> int:
         try:
             storage.insert_eod_stock(r)
             count += 1
-        except Exception:
-            pass
+        except Exception as e:
+            say(f"[err] simpan EOD baris: {e}", err=True)
     _ingest_eod_research(rows)
     try:
         _upsert_segment_day(rows)

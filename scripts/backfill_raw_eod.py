@@ -26,6 +26,8 @@ Run (bash):
 from __future__ import annotations
 
 import argparse
+import configparser
+import contextlib
 import json
 import os
 import pathlib
@@ -104,15 +106,13 @@ def load_env() -> None:
         dotenv.load_dotenv(str(env_path), override=False)
     # Fallback: manual parse if python-dotenv not available
     if "DATABASE_URL" not in os.environ:
-        try:
-            import configparser
-
+        # Best-effort baca .env manual; kalau rusak, biarkan DATABASE_URL kosong
+        # dan biarkan db yang melapor DSN hilang.
+        with contextlib.suppress(configparser.Error):
             config = configparser.ConfigParser()
             config.read(str(env_path))
             if "DATABASE_URL" in config and "DATABASE_URL" in config["DEFAULT"]:
                 os.environ["DATABASE_URL"] = config["DEFAULT"]["DATABASE_URL"]
-        except Exception:
-            pass
 
 
 BLOCK_BACKOFF = (

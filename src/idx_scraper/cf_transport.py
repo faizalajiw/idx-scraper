@@ -266,9 +266,10 @@ class BrowserTransport:
                 self._playwright = None
 
         try:
-            self._call(_close())
-        except Exception:
-            pass
+            # Cleanup best-effort: penutupan browser yang gagal jangan menghalangi
+            # shutdown loop (pola sama dengan suppress di _close()).
+            with contextlib.suppress(Exception):
+                self._call(_close())
         finally:
             loop = self._loop
             if loop is not None:
