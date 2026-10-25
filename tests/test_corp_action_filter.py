@@ -111,8 +111,10 @@ class _FakeCursor:
 
 
 def _patch_market(monkeypatch, closes: list[float], div_row: dict | None) -> None:
-    monkeypatch.setattr(services, "get_cursor", lambda: _FakeCursor(div_row))
-    monkeypatch.setattr(services, "_build_frame", lambda cur, code: (_raw(closes), False))
+    # patch ke modul pemilik fungsi (bukan facade) supaya lookup global fungsi
+    # yang diuji juga ter-patch
+    monkeypatch.setattr(services.sinyal, "get_cursor", lambda: _FakeCursor(div_row))
+    monkeypatch.setattr(services.sinyal, "_build_frame", lambda cur, code: (_raw(closes), False))
 
 
 def test_get_signals_neutralizes_mechanical_sell(monkeypatch):

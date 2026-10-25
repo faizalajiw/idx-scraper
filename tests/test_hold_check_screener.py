@@ -128,7 +128,7 @@ def test_lolos_screener_gabungan_dan(monkeypatch):
 
 def test_hold_baris_golden(monkeypatch):
     """Satu baris hold-check: kunci & tipe, tanpa dependensi ranking/broker aktual."""
-    import idx_scraper.api.services as svc
+    import idx_scraper.api.services.sinyal as svc
     import idx_scraper.research.broker_activity as ba
     import idx_scraper.research.composite as comp
 
@@ -185,7 +185,7 @@ def test_hold_baris_golden(monkeypatch):
 
 
 def test_hold_baris_riwayat_kurang_mengembalikan_none(monkeypatch):
-    import idx_scraper.api.services as svc
+    import idx_scraper.api.services.sinyal as svc
 
     monkeypatch.setattr(svc, "_hold_metrics", lambda cur, code, min_days: None)
     assert svc._hold_baris(None, "AAAA", {}, {}, None, {}, False, 40) is None
