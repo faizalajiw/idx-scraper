@@ -82,6 +82,7 @@ ignore = [
 # sengaja supaya nama lama tetap tersedia untuk app.py/services.py/tes.
 "src/idx_scraper/api/analytics/__init__.py" = ["F401"]
 "src/idx_scraper/api/schemas/__init__.py" = ["F401"]
+"src/idx_scraper/smart_money/__init__.py" = ["F401"]
 # CLI loads dotenv before imports on purpose
 "src/idx_scraper/cli.py" = ["E402"]
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
