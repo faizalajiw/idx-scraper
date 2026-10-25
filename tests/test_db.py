@@ -77,11 +77,11 @@ def test_psycopg_connect_hanya_di_db_py() -> None:
     """Satu pintu: pemanggilan ``psycopg.connect(`` tidak boleh muncul di tempat lain."""
     berkas = (*AKAR.joinpath("src").rglob("*.py"), *AKAR.joinpath("scripts").glob("*.py"))
     bermasalah = [
-        str(p.relative_to(AKAR))
+        p.relative_to(AKAR).as_posix()
         for p in berkas
         if "psycopg.connect(" in p.read_text(encoding="utf-8")
     ]
-    assert bermasalah == ["src\\idx_scraper\\db.py"], bermasalah
+    assert bermasalah == ["src/idx_scraper/db.py"], bermasalah
 
 
 def test_database_url_env_hanya_terbaca_di_satu_modul() -> None:
@@ -99,6 +99,6 @@ def test_database_url_env_hanya_terbaca_di_satu_modul() -> None:
             if baris.lstrip().startswith("#"):
                 continue
             if any(pola in baris for pola in POLA_ENV):
-                bermasalah.append(f"{p.relative_to(AKAR)}:{nomor}")
-    tepat = [b for b in bermasalah if b.startswith("scripts\\backfill_raw_eod.py")]
+                bermasalah.append(f"{p.relative_to(AKAR).as_posix()}:{nomor}")
+    tepat = [b for b in bermasalah if b.startswith("scripts/backfill_raw_eod.py")]
     assert bermasalah == [tepat[0]], bermasalah
