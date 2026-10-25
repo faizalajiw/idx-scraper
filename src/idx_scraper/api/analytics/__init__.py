@@ -7,11 +7,11 @@ Nama lama tetap tersedia di sini supaya `app.py`, `dossier.py`, dan
 from __future__ import annotations
 
 from ._common import (
-    WIB,
     _INFLIGHT,
     _INFLIGHT_LOCK,
     _RESEARCH_CACHE,
     _RESEARCH_TTL,
+    WIB,
     _f,
     _latest_eod_date,
     _latest_index,
@@ -23,7 +23,6 @@ from ._common import (
     logger,
     research_cache_once,
 )
-
 from .broker_activity import (
     _BROKER_ACTIVITY_LOOKBACK_DAYS,
     _broker_activity_empty,
@@ -33,27 +32,23 @@ from .broker_activity import (
     get_broker_activity,
     get_stock_broker_activity,
 )
-
 from .broker_flow import (
     get_broker_flow,
     get_broker_summary,
     get_foreign_flow,
     get_stock_foreign_flow,
 )
-
 from .decision import (
     _load_frame_for_decision,
     _market_return,
     get_stock_decision,
     get_stock_ownership,
 )
-
 from .factors import (
     get_factors_overview,
     get_sentiment,
     get_signal_track,
 )
-
 from .market import (
     _frame_from_rows,
     _gate_for,
@@ -63,10 +58,9 @@ from .market import (
     get_sector_analysis,
     get_valuation,
 )
-
 from .recommendation import (
-    RECOMMENDATION_LAYER_NOTE,
     _RECOMMENDATION_HISTORY,
+    RECOMMENDATION_LAYER_NOTE,
     _board_uncached,
     _close_recommendation,
     _freshness_of,
@@ -85,11 +79,10 @@ from .recommendation import (
     get_stock_recommendation,
     recommendation_record_inputs,
 )
-
 from .screener import (
-    _FilterScreener,
     _KRITERIA_SCREENER,
     _event_study_bundle,
+    _FilterScreener,
     _latest_orderbook_factors,
     _lolos_asing_masuk,
     _lolos_broker,
@@ -109,13 +102,11 @@ from .screener import (
     get_stock_events,
     search_stocks,
 )
-
 from .sector import (
     _rotation_delta,
     _sector_peers,
     get_sector_rotation,
 )
-
 from .smart_money import (
     _RADAR_TOP_N,
     _SMART_MONEY_HISTORY,

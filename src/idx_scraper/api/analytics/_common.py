@@ -11,29 +11,14 @@ sector_map.py and is intentionally data, not logic.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
-
-from ... import db
-from ...analysis import (
-    calculate_adx,
-    calculate_indicators,
-    classify_regime,
-    generate_signal,
-    signal_series,
-)
-from ...freshness import expected_session, withhold
-from ...research.regime import gate
-from ..database import get_cursor
-from ..sector_map import FALLBACK_SECTOR, sector_for
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +30,6 @@ _RESEARCH_CACHE: dict[str, tuple[float, Any]] = {}
 _RESEARCH_TTL = 3600.0  # 1 jam
 
 
-
 # Single-flight: key -> event yang dibuka begitu hitungannya selesai. Dipakai
 
 # supaya banyak permintaan yang datang bersamaan untuk cache yang sama tidak
@@ -55,7 +39,6 @@ _RESEARCH_TTL = 3600.0  # 1 jam
 _INFLIGHT: dict[str, threading.Event] = {}
 
 _INFLIGHT_LOCK = threading.Lock()
-
 
 
 def _research_cache_get(key: str) -> Any | None:
