@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 from idx_scraper import cli
+from idx_scraper.cli import serve
 
 HOLDER = (
     "from idx_scraper.cli import _take_single_instance_lock as t\n"
@@ -24,7 +25,7 @@ HOLDER = (
 
 def test_instance_kedua_ditolak_lalu_kunci_lepas_di_akhir(tmp_path, monkeypatch):
     monkeypatch.setenv("IDX_SERVE_LOCK", str(tmp_path / "serve.lock"))
-    monkeypatch.setattr(cli, "_SERVE_LOCK_FD", None)
+    monkeypatch.setattr(serve, "_SERVE_LOCK_FD", None)
 
     # Instance pertama (proses terpisah, seperti kenyataannya) pegang kunci.
     holder = subprocess.Popen([sys.executable, "-c", HOLDER], stdout=subprocess.PIPE, text=True)
@@ -38,7 +39,7 @@ def test_instance_kedua_ditolak_lalu_kunci_lepas_di_akhir(tmp_path, monkeypatch)
         holder.stdout.close()
 
     # Setelah pemegang mati, OS melepas kunci -> boleh diambil lagi.
-    monkeypatch.setattr(cli, "_SERVE_LOCK_FD", None)
+    monkeypatch.setattr(serve, "_SERVE_LOCK_FD", None)
     assert cli._take_single_instance_lock() is True
 
     # Tutup sendiri agar pytest bisa membersihkan direktori temporer (Windows).

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from idx_scraper import cli
+from idx_scraper.cli import jobs
 
 WIB = timezone(timedelta(hours=7))
 
@@ -33,7 +34,7 @@ def test_next_weekday_at_rolls_past_today(monkeypatch):
         def now(cls, tz=None):
             return frozen
 
-    monkeypatch.setattr(cli, "datetime", _FixedDatetime)
+    monkeypatch.setattr(jobs, "datetime", _FixedDatetime)
     nxt = cli._next_weekday_at(0, 6, 45)
     # Senin berikutnya pukul 06:45 (satu minggu setelah Senin ini).
     assert nxt == datetime(2026, 10, 12, 6, 45, tzinfo=WIB)

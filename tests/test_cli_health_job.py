@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from idx_scraper import cli, health
+from idx_scraper.cli import alerts
 
 WIB = timezone(timedelta(hours=7))
 
@@ -74,7 +75,7 @@ def _eod_tertinggal() -> health.EodHealth:
 def test_penjaga_cakupan_melempar_alarm_eod_lama_tetap_terkirim(monkeypatch):
     """I2: exception dari penjaga cakupan tidak boleh mematikan alarm lama."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     monkeypatch.setattr(health, "check_eod_health", _eod_telat)
 
     def _meledak() -> health.FieldCoverage:
@@ -90,7 +91,7 @@ def test_penjaga_cakupan_melempar_alarm_eod_lama_tetap_terkirim(monkeypatch):
 def test_alarm_cakupan_kolom_tetap_terkirim(monkeypatch):
     """Regression pin: jalur penjaga baru tetap berbunyi (jangan mati saat memisah try)."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     monkeypatch.setattr(health, "check_eod_health", _eod_telat)
     timpang = health.FieldCoverage(
         checked=30, troublemakers=["2026-10-15 (900/1000, 90.0%)"], worst_pct=90.0
@@ -157,7 +158,7 @@ def _diamkan_jalur_lama(monkeypatch) -> None:
 
 def test_alarm_sesi_separuh_terkirim(monkeypatch):
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
     monkeypatch.setattr(health, "check_row_counts", lambda **kw: _rows_separuh())
     monkeypatch.setattr(health, "check_session_gaps", lambda **kw: _gaps_ok())
@@ -169,7 +170,7 @@ def test_alarm_sesi_separuh_terkirim(monkeypatch):
 
 def test_alarm_lubang_sesi_terkirim(monkeypatch):
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
     monkeypatch.setattr(health, "check_row_counts", lambda **kw: _rows_ok())
     monkeypatch.setattr(health, "check_session_gaps", lambda **kw: _gaps_lubang())
@@ -182,7 +183,7 @@ def test_alarm_lubang_sesi_terkirim(monkeypatch):
 def test_penjaga_sesi_separuh_melempar_tiga_alarm_lain_tetap_terkirim(monkeypatch):
     """Exception di satu penjaga tak boleh menelan alarm penjaga lain."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     monkeypatch.setattr(health, "check_eod_health", _eod_telat)
     monkeypatch.setattr(health, "check_field_coverage", _cov_ok)
 
@@ -202,7 +203,7 @@ def test_penjaga_sesi_separuh_melempar_tiga_alarm_lain_tetap_terkirim(monkeypatc
 
 def test_penjaga_lubang_melempar_alarm_separuh_tetap_terkirim(monkeypatch):
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
     monkeypatch.setattr(health, "check_row_counts", lambda **kw: _rows_separuh())
 
@@ -219,7 +220,7 @@ def test_penjaga_lubang_melempar_alarm_separuh_tetap_terkirim(monkeypatch):
 def test_job_melewati_sesi_hari_ini(monkeypatch):
     """Job sore jam 16:45: sesi yang mungkin masih ditulis tidak dinilai."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
 
     diterima: dict[str, object] = {}
@@ -259,7 +260,7 @@ def test_alarm_job_berbunyi_kalau_tak_ada_yang_diperiksa(monkeypatch):
     Empat penjaga bisa bisu dari satu akar masalah — Telegram cukup sekali.
     """
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
     monkeypatch.setattr(health, "check_field_coverage", _cov_kosong)
     monkeypatch.setattr(health, "check_row_counts", lambda **kw: _rows_kosong())
@@ -275,7 +276,7 @@ def test_alarm_job_berbunyi_kalau_tak_ada_yang_diperiksa(monkeypatch):
 def test_alarm_job_satu_pesan_bisu_dari_kesegaran(monkeypatch, capsys):
     """Kalau kesegaran yang lebih dulu bisu, pesannya dari jalur itu — bukan dobel."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
     monkeypatch.setattr(health, "check_row_counts", lambda **kw: _rows_kosong())
     monkeypatch.setattr(health, "check_session_gaps", lambda **kw: _gaps_kosong())
@@ -302,7 +303,7 @@ def test_alarm_job_satu_pesan_bisu_dari_kesegaran(monkeypatch, capsys):
 def test_job_penjaga_melempar_pesan_error_tak_menjatuhkan_jalur_lain(monkeypatch):
     """Handler `except` pun harus tahan konsol non-ASCII (pesan exception bebas)."""
     notifier = _Notifier()
-    monkeypatch.setattr(cli, "TelegramNotifier", lambda: notifier)
+    monkeypatch.setattr(alerts, "TelegramNotifier", lambda: notifier)
     _diamkan_jalur_lama(monkeypatch)
 
     def _meledak(**kwargs):

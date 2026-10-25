@@ -22,6 +22,8 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from idx_scraper import cli
+from idx_scraper.cli import backfill as mod_backfill
+from idx_scraper.cli import eod
 
 
 class _Jam(datetime):
@@ -41,7 +43,7 @@ def beku(monkeypatch):
 
     def _pasang(momen: datetime) -> datetime:
         _MOMEN["nilai"] = momen
-        monkeypatch.setattr(cli, "datetime", _Jam)
+        monkeypatch.setattr(mod_backfill, "datetime", _Jam)
         return momen
 
     return _pasang
@@ -77,17 +79,17 @@ def jalur(monkeypatch) -> dict:
     """Ganti tiga tujuan tulis + recompute dengan pencatat."""
     dicatat: dict = {"ingest": [], "segment": [], "pipeline": [], "index": []}
     monkeypatch.setattr(
-        cli, "_ingest_eod_research", lambda rows: dicatat["ingest"].append(len(rows))
+        eod, "_ingest_eod_research", lambda rows: dicatat["ingest"].append(len(rows))
     )
     monkeypatch.setattr(
-        cli, "_upsert_segment_day", lambda rows: dicatat["segment"].append(len(rows))
+        eod, "_upsert_segment_day", lambda rows: dicatat["segment"].append(len(rows))
     )
     monkeypatch.setattr(
-        cli,
+        mod_backfill,
         "_job_pipeline_refresh",
         lambda c, s, *, label, do_eod: dicatat["pipeline"].append((label, do_eod)),
     )
-    monkeypatch.setattr(cli, "_job_index_eod_close", lambda: dicatat["index"].append(1))
+    monkeypatch.setattr(mod_backfill, "_job_index_eod_close", lambda: dicatat["index"].append(1))
     return dicatat
 
 
@@ -97,7 +99,7 @@ def _fresh(monkeypatch, kosong: set[date]) -> None:
     def _cek(day):
         return (day not in kosong, day not in kosong)
 
-    monkeypatch.setattr(cli, "_eod_fresh_for", _cek)
+    monkeypatch.setattr(mod_backfill, "_eod_fresh_for", _cek)
 
 
 # ------------------------------------------------------------------ penanggalan
@@ -194,7 +196,7 @@ def test_jalan_jam_berapa_pun(monkeypatch, beku, jalur):
 def test_bisa_dimatikan_dari_env(monkeypatch, beku, jalur):
     beku(_wib(16, 16, 30))
     monkeypatch.setenv("IDX_HOLIDAYS", "")
-    monkeypatch.setattr(cli, "_BACKFILL_HARI", 0)
+    monkeypatch.setattr(mod_backfill, "_BACKFILL_HARI", 0)
     _fresh(monkeypatch, kosong={date(2026, 10, 15)})
     client = _Client()
 
@@ -222,7 +224,7 @@ def test_laporan_lubang_index_hanya_kalau_diminta(monkeypatch, beku, jalur, caps
     """Close indeks lampau tidak bisa ditarik — startup melaporkannya sekali."""
     beku(_wib(16, 16, 30))
     monkeypatch.setenv("IDX_HOLIDAYS", "")
-    monkeypatch.setattr(cli, "_eod_fresh_for", lambda day: (True, False))
+    monkeypatch.setattr(mod_backfill, "_eod_fresh_for", lambda day: (True, False))
 
     cli._backfill_hari_lampau(object(), object(), label="startup", lapor_lubang_index=True)
     out = capsys.readouterr().out
@@ -254,13 +256,13 @@ def test_jaring_sore_ikut_menutup_lubang_kemarin(monkeypatch, beku, jalur):
 def test_startup_menyalakan_laporan(monkeypatch):
     """Jalur startup meminta laporan lubang indeks, jalur sore tidak."""
     dipanggil: dict = {}
-    monkeypatch.setattr(cli, "_eod_catchup_hari_ini", lambda c, s, *, label: "lengkap")
+    monkeypatch.setattr(mod_backfill, "_eod_catchup_hari_ini", lambda c, s, *, label: "lengkap")
 
-    def backfill(client, storage, *, label, lapor_lubang_index=False):
+    def stub_func(client, storage, *, label, lapor_lubang_index=False):
         dipanggil["lapor"] = lapor_lubang_index
         return 0
 
-    monkeypatch.setattr(cli, "_backfill_hari_lampau", backfill)
+    monkeypatch.setattr(mod_backfill, "_backfill_hari_lampau", stub_func)
 
     assert cli._eod_catchup(object(), object(), label="startup") == "lengkap"
     assert dipanggil["lapor"] is False
@@ -271,10 +273,10 @@ def test_startup_menyalakan_laporan(monkeypatch):
 def test_cmd_eod_dan_job_full_memakai_jalur_yang_sama(monkeypatch):
     """Manual, close harian, dan backfill menulis lewat ``_simpan_eod_hari``."""
     dicatat: list = []
-    monkeypatch.setattr(cli, "_simpan_eod_hari", lambda c, s, day: dicatat.append(day) or 963)
-    monkeypatch.setattr(cli, "IDXClient", lambda: type("C", (), {"close": lambda self: None})())
+    monkeypatch.setattr(eod, "_simpan_eod_hari", lambda c, s, day: dicatat.append(day) or 963)
+    monkeypatch.setattr(eod, "IDXClient", lambda: type("C", (), {"close": lambda self: None})())
     monkeypatch.setattr(
-        cli,
+        eod,
         "get_storage_from_env",
         lambda: type("S", (), {"close": lambda self: None})(),
     )
@@ -311,13 +313,13 @@ def test_job_index_eod_close_menghormati_jam(monkeypatch):
         lambda dsn: panggilan.append(dsn) or (1, 1),
     )
     monkeypatch.setenv("DATABASE_URL", "postgres://palsu")
-    monkeypatch.setattr(cli, "_is_market_hours", lambda: True)
+    monkeypatch.setattr(eod, "_is_market_hours", lambda: True)
 
-    monkeypatch.setattr(cli, "_boleh_tulis_close_index", lambda: False)
+    monkeypatch.setattr(eod, "_boleh_tulis_close_index", lambda: False)
     cli._job_index_eod_close()
     assert panggilan == []
 
-    monkeypatch.setattr(cli, "_boleh_tulis_close_index", lambda: True)
+    monkeypatch.setattr(eod, "_boleh_tulis_close_index", lambda: True)
     cli._job_index_eod_close()
     assert len(panggilan) == 1
 

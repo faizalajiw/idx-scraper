@@ -20,6 +20,7 @@ from datetime import date, datetime
 import pytest
 
 from idx_scraper import cli
+from idx_scraper.cli import backfill
 
 
 class _Jam(datetime):
@@ -43,7 +44,7 @@ def beku(monkeypatch):
 
     def _pasang(momen: datetime) -> datetime:
         _MOMEN["nilai"] = momen
-        monkeypatch.setattr(cli, "datetime", _Jam)
+        monkeypatch.setattr(backfill, "datetime", _Jam)
         return momen
 
     return _pasang
@@ -66,14 +67,14 @@ def _stub_jalur(monkeypatch, dicatat: dict) -> dict:
     def cache() -> None:
         dicatat.setdefault("cache", []).append(1)
 
-    monkeypatch.setattr(cli, "_job_pipeline_refresh", pipeline)
-    monkeypatch.setattr(cli, "_job_index_eod_close", index)
-    monkeypatch.setattr(cli, "_clear_api_cache", cache)
+    monkeypatch.setattr(backfill, "_job_pipeline_refresh", pipeline)
+    monkeypatch.setattr(backfill, "_job_index_eod_close", index)
+    monkeypatch.setattr(backfill, "_clear_api_cache", cache)
     return dicatat
 
 
 def _fresh(monkeypatch, saham: bool, indeks: bool) -> None:
-    monkeypatch.setattr(cli, "_eod_fresh_for", lambda day: (saham, indeks))
+    monkeypatch.setattr(backfill, "_eod_fresh_for", lambda day: (saham, indeks))
 
 
 def _jangan_sentuh_db(monkeypatch, hari_ini: date) -> None:
@@ -89,7 +90,7 @@ def _jangan_sentuh_db(monkeypatch, hari_ini: date) -> None:
             raise AssertionError("_eod_fresh_for tidak boleh dipanggil untuk hari ini")
         return (True, True)  # tidak ada lubang: backfill tidak menarik apa pun
 
-    monkeypatch.setattr(cli, "_eod_fresh_for", _panggil)
+    monkeypatch.setattr(backfill, "_eod_fresh_for", _panggil)
 
 
 def test_lewat_sebelum_pasar_tutup(monkeypatch, beku):
@@ -165,7 +166,7 @@ def test_job_eod_fallback_memakai_catchup(monkeypatch):
         dipanggil["label"] = label
         return "lengkap"
 
-    monkeypatch.setattr(cli, "_eod_catchup", catchup)
+    monkeypatch.setattr(backfill, "_eod_catchup", catchup)
 
     assert cli._job_eod_fallback(object(), object()) is None
     assert dipanggil["label"] == "ulang EOD sore"

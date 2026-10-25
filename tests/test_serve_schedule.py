@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from idx_scraper import cli, health
+from idx_scraper.cli import backfill, serve
 
 
 class _StubScheduler:
@@ -72,16 +73,16 @@ def jobs(monkeypatch) -> list[dict]:
             super().__init__(*args, **kwargs)
             captured.append(self)
 
-    monkeypatch.setattr(cli, "BlockingScheduler", _Recorder)
-    monkeypatch.setattr(cli, "_take_single_instance_lock", lambda: True)
-    monkeypatch.setattr(cli, "IDXClient", _StubClient)
-    monkeypatch.setattr(cli, "get_storage_from_env", lambda: _StubStorage())
-    monkeypatch.setattr(cli, "show_signals", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "LiveCapture", _StubLiveCapture)
-    monkeypatch.setattr(cli, "TelegramNotifier", _StubNotifier)
+    monkeypatch.setattr(serve, "BlockingScheduler", _Recorder)
+    monkeypatch.setattr(serve, "_take_single_instance_lock", lambda: True)
+    monkeypatch.setattr(serve, "IDXClient", _StubClient)
+    monkeypatch.setattr(serve, "get_storage_from_env", lambda: _StubStorage())
+    monkeypatch.setattr(serve, "show_signals", lambda *a, **k: None)
+    monkeypatch.setattr(serve, "LiveCapture", _StubLiveCapture)
+    monkeypatch.setattr(serve, "TelegramNotifier", _StubNotifier)
     # Startup catchup juga jalan di sini: paksa "sudah lengkap" supaya tes tidak
     # pernah menyentuh DB dan tidak tergantung jam berapa suite dijalankan.
-    monkeypatch.setattr(cli, "_eod_fresh_for", lambda day: (True, True))
+    monkeypatch.setattr(backfill, "_eod_fresh_for", lambda day: (True, True))
     monkeypatch.setenv("IDX_WATCHLIST", "BBCA,BBRI")
 
     cli.cmd_serve(None)

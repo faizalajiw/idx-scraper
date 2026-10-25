@@ -15,18 +15,19 @@ import argparse
 from datetime import datetime
 
 from idx_scraper import cli, notify
+from idx_scraper.cli import journal
 from idx_scraper.health import WIB
 
 
 def test_sesi_terakhir_dipakai_saat_lewat_tengah_malam(monkeypatch) -> None:
     """Job jalan 00:10 WIB: sesinya tetap sesi bursa terakhir, bukan tanggal itu."""
-    monkeypatch.setattr(cli, "_now_wib", lambda: datetime(2026, 10, 20, 0, 10, tzinfo=WIB))
-    monkeypatch.setattr(cli, "_last_session_date", lambda dsn: "2026-10-19")
+    monkeypatch.setattr(journal, "_now_wib", lambda: datetime(2026, 10, 20, 0, 10, tzinfo=WIB))
+    monkeypatch.setattr(journal, "_last_session_date", lambda dsn: "2026-10-19")
     assert cli._journal_session(dsn="x") == "2026-10-19"
 
 
 def test_trade_date_menimpa_sesi_terakhir(monkeypatch) -> None:
-    monkeypatch.setattr(cli, "_last_session_date", lambda dsn: "2026-10-19")
+    monkeypatch.setattr(journal, "_last_session_date", lambda dsn: "2026-10-19")
     assert cli._journal_session(dsn="x", trade_date="2026-10-16") == "2026-10-16"
 
 
@@ -72,10 +73,10 @@ def test_tulis_sesi_selalu_lewat_gerbang(monkeypatch) -> None:
         tercatat.update({"trade_date": trade_date, "gate": gate, "konteks": konteks})
         return {"written": 0, "refused": 1, "reason": "data"}
 
-    monkeypatch.setattr(cli, "_journal_dsn", lambda: "dsn")
-    monkeypatch.setattr(cli, "_journal_session", lambda dsn, trade_date=None: "2026-10-16")
+    monkeypatch.setattr(journal, "_journal_dsn", lambda: "dsn")
+    monkeypatch.setattr(journal, "_journal_session", lambda dsn, trade_date=None: "2026-10-16")
     monkeypatch.setattr(
-        cli,
+        journal,
         "_journal_gate_parts",
         lambda dsn: (
             claim_gate(freshness_status="basi"),
@@ -171,9 +172,9 @@ def _pasang_pengingat(monkeypatch, cur, *, enabled: bool = True) -> list[str]:
             terkirim.append(teks)
             return True
 
-    monkeypatch.setattr(cli, "TelegramNotifier", _Notifier)
-    monkeypatch.setattr(cli, "_journal_dsn", lambda: "dsn")
-    monkeypatch.setattr(cli, "_journal_session", lambda dsn=None, trade_date=None: "2026-10-16")
+    monkeypatch.setattr(journal, "TelegramNotifier", _Notifier)
+    monkeypatch.setattr(journal, "_journal_dsn", lambda: "dsn")
+    monkeypatch.setattr(journal, "_journal_session", lambda dsn=None, trade_date=None: "2026-10-16")
     monkeypatch.setattr("psycopg.connect", lambda *a, **k: _ConnPengingat(cur))
     return terkirim
 

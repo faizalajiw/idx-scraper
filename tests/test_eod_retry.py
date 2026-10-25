@@ -14,13 +14,14 @@ from __future__ import annotations
 import pytest
 
 from idx_scraper import cli
+from idx_scraper.cli import eod
 
 
 @pytest.fixture()
 def sleeps(monkeypatch) -> list[int]:
     """Rekam jeda alih-alih benar-benar tidur."""
     direkam: list[int] = []
-    monkeypatch.setattr(cli.time, "sleep", lambda detik: direkam.append(detik))
+    monkeypatch.setattr(eod.time, "sleep", lambda detik: direkam.append(detik))
     return direkam
 
 
@@ -88,8 +89,8 @@ def test_job_eod_full_mengembalikan_jumlah(monkeypatch):
         def fetch_stock_summary(self, tanggal: str) -> list:
             return [object(), object(), object()]
 
-    monkeypatch.setattr(cli, "_ingest_eod_research", lambda rows: None)
-    monkeypatch.setattr(cli, "_upsert_segment_day", lambda rows: None)
+    monkeypatch.setattr(eod, "_ingest_eod_research", lambda rows: None)
+    monkeypatch.setattr(eod, "_upsert_segment_day", lambda rows: None)
 
     assert cli._job_eod_full(_Client(), _Storage()) == 3
 
@@ -97,7 +98,7 @@ def test_job_eod_full_mengembalikan_jumlah(monkeypatch):
 def _stub_pipeline(monkeypatch, panggilan: dict, hasil_eod: int, hasil_broker: int) -> None:
     """Ganti seluruh efek samping ``_job_pipeline_refresh`` dengan pencatat."""
 
-    def eod(client, storage) -> int:
+    def stub_eod(client, storage) -> int:
         panggilan["eod"] = panggilan.get("eod", 0) + 1
         return hasil_eod
 
@@ -105,8 +106,8 @@ def _stub_pipeline(monkeypatch, panggilan: dict, hasil_eod: int, hasil_broker: i
         panggilan["broker"] = panggilan.get("broker", 0) + 1
         return hasil_broker
 
-    monkeypatch.setattr(cli, "_job_eod_full", eod)
-    monkeypatch.setattr(cli, "_job_broker_eod", broker)
+    monkeypatch.setattr(eod, "_job_eod_full", stub_eod)
+    monkeypatch.setattr(eod, "_job_broker_eod", broker)
     for nama in (
         "_job_index_eod_close",
         "_job_regime_daily",
@@ -116,7 +117,7 @@ def _stub_pipeline(monkeypatch, panggilan: dict, hasil_eod: int, hasil_broker: i
         "run_smart_money_alerts",
         "run_recommendation_alerts",
     ):
-        monkeypatch.setattr(cli, nama, lambda *a, **k: 0, raising=False)
+        monkeypatch.setattr(eod, nama, lambda *a, **k: 0, raising=False)
 
 
 def test_pipeline_mengulang_kedua_langkah_idx(monkeypatch, sleeps):
@@ -125,7 +126,7 @@ def test_pipeline_mengulang_kedua_langkah_idx(monkeypatch, sleeps):
     _stub_pipeline(monkeypatch, panggilan, hasil_eod=0, hasil_broker=0)
     # Retry penuh hanya berlaku sesudah close, sedangkan suite bisa dijalankan
     # jam berapa saja -> percobaan dipatok supaya tes tidak tergantung jam.
-    monkeypatch.setattr(cli, "_retry_percobaan", lambda: len(cli._EOD_RETRY_DELAYS) + 1)
+    monkeypatch.setattr(eod, "_retry_percobaan", lambda: len(cli._EOD_RETRY_DELAYS) + 1)
 
     cli._job_pipeline_refresh(object(), object(), label="tes", do_eod=True)
 
@@ -143,7 +144,7 @@ def test_pipeline_sebelum_close_tidak_mengulang(monkeypatch, sleeps):
     """
     panggilan: dict = {}
     _stub_pipeline(monkeypatch, panggilan, hasil_eod=0, hasil_broker=0)
-    monkeypatch.setattr(cli, "_retry_percobaan", lambda: 1)
+    monkeypatch.setattr(eod, "_retry_percobaan", lambda: 1)
 
     cli._job_pipeline_refresh(object(), object(), label="tes", do_eod=True)
 
@@ -194,7 +195,7 @@ def test_pipeline_kedua_dilewati_saat_masih_jalan(monkeypatch, capsys):
         # Simulasi job lain datang saat pipeline ini masih hidup.
         cli._job_pipeline_refresh(client, storage, label="kedua", do_eod=False)
 
-    monkeypatch.setattr(cli, "_pipeline_refresh_body", body)
+    monkeypatch.setattr(eod, "_pipeline_refresh_body", body)
 
     cli._job_pipeline_refresh(object(), object(), label="pertama", do_eod=True)
 
@@ -212,14 +213,14 @@ def test_kunci_dilepas_setelah_pipeline(monkeypatch):
     def body_gagal(client, storage, *, label, do_eod) -> None:
         raise RuntimeError("DB putus")
 
-    monkeypatch.setattr(cli, "_pipeline_refresh_body", body_ok)
+    monkeypatch.setattr(eod, "_pipeline_refresh_body", body_ok)
     cli._job_pipeline_refresh(object(), object(), label="satu", do_eod=False)
 
-    monkeypatch.setattr(cli, "_pipeline_refresh_body", body_gagal)
+    monkeypatch.setattr(eod, "_pipeline_refresh_body", body_gagal)
     with pytest.raises(RuntimeError):
         cli._job_pipeline_refresh(object(), object(), label="dua", do_eod=False)
 
-    monkeypatch.setattr(cli, "_pipeline_refresh_body", body_ok)
+    monkeypatch.setattr(eod, "_pipeline_refresh_body", body_ok)
     cli._job_pipeline_refresh(object(), object(), label="tiga", do_eod=False)
 
     assert cli._PIPELINE_BUSY.locked() is False
@@ -229,7 +230,7 @@ def test_pipeline_tanpa_eod_tidak_menyentuh_idx(monkeypatch, sleeps):
     """Pra-buka & akhir pekan (``do_eod=False``) tidak boleh memicu EOD."""
     panggilan: dict = {}
     _stub_pipeline(monkeypatch, panggilan, hasil_eod=963, hasil_broker=88)
-    monkeypatch.setattr(cli, "_retry_percobaan", lambda: 1)
+    monkeypatch.setattr(eod, "_retry_percobaan", lambda: 1)
 
     cli._job_pipeline_refresh(object(), object(), label="tes", do_eod=False)
 

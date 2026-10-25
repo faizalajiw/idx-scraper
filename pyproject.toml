@@ -86,8 +86,9 @@ ignore = [
 "src/idx_scraper/api/services/__init__.py" = ["F401"]
 "src/idx_scraper/research/score_eval/__init__.py" = ["F401"]
 "src/idx_scraper/research/recommend/__init__.py" = ["F401"]
+"src/idx_scraper/cli/__init__.py" = ["F401"]
 # CLI loads dotenv before imports on purpose
-"src/idx_scraper/cli.py" = ["E402"]
+"src/idx_scraper/cli/*.py" = ["E402"]
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
 # bisa diimpor saat dijalankan langsung (`python scripts/check_eod_gaps.py`).
 "scripts/check_eod_gaps.py" = ["E402"]
