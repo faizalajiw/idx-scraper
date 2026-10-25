@@ -22,7 +22,9 @@ data/
 # Scratch/debug
 _*.txt
 _*.json
-_*.py
+# Di-jangkar ke akar repo: pola `_*.py` tanpa jangkar menelan
+# _*.py di subpaket, mis. api/analytics/_common.py & __init__.py
+/_*.py
 scripts/_*.py
 
 # Project meta
