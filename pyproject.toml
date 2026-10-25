@@ -84,6 +84,7 @@ ignore = [
 "src/idx_scraper/api/schemas/__init__.py" = ["F401"]
 "src/idx_scraper/smart_money/__init__.py" = ["F401"]
 "src/idx_scraper/api/services/__init__.py" = ["F401"]
+"src/idx_scraper/research/score_eval/__init__.py" = ["F401"]
 # CLI loads dotenv before imports on purpose
 "src/idx_scraper/cli.py" = ["E402"]
 # Same pattern in this script: `sys.path` disisipi dulu supaya `idx_scraper`
